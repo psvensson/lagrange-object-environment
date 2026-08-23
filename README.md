@@ -2,7 +2,7 @@
 
 A live object computing environment for Lagrange Images.
 
-The environment is not an IDE wrapped around an image and not a desktop full of applications which happen to use image objects. The image **is** the persistent workspace/world. This project provides the human interaction layer through which that world is organized, presented, manipulated, programmed and shared.
+The environment is not an IDE wrapped around an image and not a desktop full of applications which happen to use image objects. The image **is** the persistent workspace/world. This project provides the human interaction layer through which that world is presented, manipulated, programmed and shared.
 
 The core inversion is:
 
@@ -25,26 +25,27 @@ Lagrange / trusted control plane
         |
 Lagrange Images
   persistent language-neutral object world
-  object identity, history and execution-time authority enforcement
+  Project/history/artifact/language semantics
+  object identity and execution-time authority enforcement
         |
 Lagrange Object Environment
-  projects, presentations, commands, perspectives
-  generic tools, collaboration UX and composition
+  presentations, commands, perspectives
+  Project/history/collaboration UX, generic tools and composition
         |
 Client/rendering substrate
   graphics, text, input, accessibility and transient session state
 ```
 
-`lagrange-images` deliberately has no durable grant object. Authority travels beside an activation as transient execution context; references and durable image objects never become authority tokens. The environment consumes the public authorized APIs and drives control-plane sharing flows without inventing a second ACL model.
+`lagrange-images` deliberately has no durable grant object. Authority travels beside an activation as transient execution context; references and durable image objects never become authority tokens. The environment consumes public authorized APIs and drives sharing flows without inventing a second ACL model.
 
 This repository should remain an ordinary consumer of public `lagrange-images` APIs. If the environment needs to reach into image internals, that is evidence of a missing image-level abstraction rather than permission to couple the projects.
 
 ## Vocabulary
 
 - **Image** — the complete persistent world and workspace. There is deliberately no second Workspace container.
-- **Project** — an object-environment convention for semantic organization inside an image. It is represented by ordinary image objects and relationships, not a new core `lagrange-images` record kind.
+- **Project** — language-neutral semantic organization inside an image. The durable Project model belongs to Lagrange Images and should use ordinary image objects/relationships rather than a special backend container; this environment owns how Projects are navigated and worked with.
 - **Presentation** — a semantic view of an object in a context. Presentation does not own the object and does not confer authority.
-- **Command** — an inspectable operation applicable to semantic subjects. Invocation eventually crosses an authorized image/control-plane boundary.
+- **Command** — an inspectable operation applicable to semantic subjects. Invocation eventually crosses an authorized lower-level boundary.
 - **Perspective** — a durable arrangement/intention for viewing and working with part of an image. It can itself be represented by ordinary image objects.
 - **Session** — ephemeral interaction state for one connected client: focus, pointer state, open menus, drags, carets and other UI churn.
 - **Compositor** — arranges presentations. Overlapping windows are one possible policy, not the primitive model.
@@ -55,18 +56,18 @@ A separate workspace abstraction would duplicate the image's persistence and obj
 
 ```text
 per-user arrangement       -> Perspective
-semantic organization      -> Project
+semantic organization      -> Image-level Project
 subset / current focus     -> Perspective subject/query
 purpose-specific layout    -> multiple Perspectives
 access to only part        -> authority below the environment
 current UI mechanics       -> Session
 ```
 
-This keeps one ontology: the objects being worked on and durable objects describing projects/perspectives can live in the same persistent world without pretending that a second container owns them.
+This keeps one ontology: Projects, Perspectives and the objects they refer to can all live in the same persistent world without pretending that a second container owns them.
 
 ## Identity and sharing
 
-Authentication and root authorization policy live below the environment. The environment should receive an authenticated principal/session and authorized image APIs; it should not need to understand passwords or make authorization decisions from email addresses.
+Authentication and root authorization policy live below the environment. The environment should receive an authenticated principal/session and authorized APIs; it should not need to understand passwords or make authorization decisions from email addresses.
 
 The inherited invariant is important:
 
@@ -76,7 +77,7 @@ reference != authority
 
 Seeing or carrying an `ObjectRef` must not by itself authorize dereferencing or mutating the target. A Perspective or Project reference likewise grants nothing by itself.
 
-The current `lagrange-images` authority algebra is exact-match and object access does not recursively follow refs. A future "share this whole Project" operation therefore cannot be implemented by pretending project containment already implies transitive capability. The environment owns that user intent; the trusted authority layer and image contracts must define how it becomes enforceable rights.
+The current `lagrange-images` authority algebra is exact-match and object access does not recursively follow refs. A future "share this whole Project" operation therefore needs an explicit lower authority contract; Project membership must not silently become transitive capability.
 
 ## Initial shape
 

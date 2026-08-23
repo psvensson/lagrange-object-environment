@@ -2,7 +2,7 @@
 
 The early roadmap is ordered to prove the semantic interaction model before investing in polish.
 
-This repository now also owns the Project/collaboration and graphical-environment work that previously lived in the `lagrange-images` roadmap. `lagrange-images` remains responsible for generic graph/history/execution primitives that are useful without this environment.
+This repository owns the graphical environment plus the human-facing Project/history/collaboration work that previously sat mixed into the `lagrange-images` roadmap. The durable Project model and generic history/versioning semantics remain in `lagrange-images`.
 
 ## Phase 0 — boundary and vocabulary
 
@@ -11,13 +11,12 @@ This repository now also owns the Project/collaboration and graphical-environmen
 - [x] establish `reference != authority` as an inherited security rule
 - [x] establish environment as a public `lagrange-images` consumer
 - [x] create headless Presentation, Command, Perspective and Session models
-- [x] separate Project/collaboration/UI responsibility from `lagrange-images`
-- [ ] decide the first ordinary-image-object representation/protocol for Project
+- [x] split image-level Project/history semantics from environment-level Project/history UX
 - [ ] decide the minimal ordinary-image-object representation/protocol for durable Perspective
 - [ ] identify the public image observation/change-feed seam needed by live presentations
 - [ ] identify command invocation/transaction semantics without adding UI concerns to images
 
-Success: the environment can represent its semantic state without inventing storage, identity or authorization machinery.
+Success: the environment can represent its semantic state without inventing storage, Project, history or authorization machinery.
 
 ## Phase 1 — first live object loop
 
@@ -68,7 +67,7 @@ Success: inspector/browser tools can be arranged and restored through a Perspect
 
 ## Phase 3 — generic live tools
 
-- [ ] image/project browser
+- [ ] image/Project browser
 - [ ] object inspector/editor
 - [ ] history browser
 - [ ] search/query presentations
@@ -79,22 +78,19 @@ Success: inspector/browser tools can be arranged and restored through a Perspect
 
 Success: built-in development feels like inhabiting the image rather than using an external IDE.
 
-## Phase 4 — Projects and collaborative work
+## Phase 4 — Project and collaborative-work interaction
 
-This absorbs the user-facing half of the old `lagrange-images` "Projects and collaborative history" roadmap.
+The underlying Project model/history remains in Lagrange Images. This phase makes it pleasant to inhabit.
 
-- [ ] Project objects/relationships as an environment convention over ordinary image data
-- [ ] code + notes + tests + data + work items
-- [ ] package/binary/component/runtime artifacts as Project relationships/members
-- [ ] Projects mixing image-native and OpenSmalltalkVM-backed code through explicit interfaces
-- [ ] working-view and object/project-diff presentations over image history
-- [ ] merge/conflict commands over generic lower-level revision primitives
-- [ ] Git import/export as projection rather than canonical storage
+- [ ] Project navigation and relationship presentations
+- [ ] creation/editing commands over image-level Project APIs
+- [ ] mixed native/OpenSmalltalk Project browser
+- [ ] working-view and object/Project-diff presentations
+- [ ] merge/conflict commands and resolution UX over lower conflict data
+- [ ] Git/file projection commands and progress UX
 - [ ] multi-author conflict and activity UX
 
-Lower-level prerequisites stay in `lagrange-images`: revision-aware reads, logical revision/snapshot frontiers, version-aware mutation, and any generic diff/branch/merge primitive useful to non-UI clients.
-
-Success: a Project is a durable organization of real image objects and artifacts, not a folder tree or shadow database.
+Success: Project work manipulates one durable image-level model rather than an IDE-side shadow project.
 
 ## Phase 5 — language personality integration
 
@@ -116,7 +112,7 @@ After the live interaction loop and lower authority APIs are stable:
 
 - [ ] principal/group picker backed by cluster identity APIs
 - [ ] define the lower authority contract needed to express "share this Project" without transitive-ref assumptions
-- [ ] share object/project flow through trusted authorization APIs
+- [ ] share object/Project flow through trusted authorization APIs
 - [ ] share/publish Perspective independently of referenced-object authority
 - [ ] pending invitation handoff for principals who do not yet exist
 - [ ] collaborative Perspective semantics

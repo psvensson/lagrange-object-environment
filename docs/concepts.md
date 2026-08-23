@@ -8,13 +8,13 @@ The environment does not own image storage or image identity. It observes and in
 
 ## Project
 
-A Project is semantic organization inside an image: a useful root or relationship structure for code, notes, tasks, data, artifacts and other projects.
+A Project is language-neutral semantic organization inside an image: a useful root or relationship structure for code, notes, tasks, data, artifacts and other Projects.
 
-Project is an **object-environment concept represented using ordinary image objects**, not a new durable record kind in `lagrange-images`.
+The **durable Project model belongs to Lagrange Images**, because Projects should be usable by headless agents, compilers/tooling, import/export services and alternate frontends. It should still be represented with ordinary image objects and refs rather than by turning Project into a storage/backend primitive.
 
-Projects should not recreate filesystem assumptions. An object may participate in several projects or relationships, and project composition need not imply exclusive ownership. Language personalities may contribute package/project adapters, but the generic image substrate does not need to understand their meaning.
+This environment owns Project presentations and interaction: browsing, navigation, editing workflows, working views, history/diff/merge UX, collaboration and sharing commands.
 
-A useful test is: if a feature only needs stable refs, ordinary objects, artifacts and history to represent a Project, it belongs here. If it needs a new generic revision/reference/storage primitive useful without Project semantics, that primitive belongs in `lagrange-images`.
+Projects should not recreate filesystem assumptions. An object may participate in several projects or relationships, and project composition need not imply exclusive ownership.
 
 ## Presentation
 

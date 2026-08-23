@@ -20,14 +20,14 @@ Lagrange
         v
 Lagrange Images
   object/value/reference model
-  persistence, revisions and history
-  code/artifact/language execution substrate
+  Project/history/artifact/language semantics
+  persistence, revisions and execution
   transient per-call authority + authorization checks
         |
         v
 Lagrange Object Environment
-  Project conventions and collaborative-work semantics
   presentation discovery and semantic commands
+  Project/history/collaboration interaction
   Perspectives and generic object tools
   compositor/layout policy and sharing UX
         |
@@ -42,7 +42,7 @@ local Session state
 
 Dependencies point downward. The environment consumes public image/control-plane contracts and must not become a backdoor around authorization.
 
-`lagrange-images` does not need to know what a Project, Perspective, pane or window is in order to persist the ordinary objects that represent them.
+The split is semantic rather than based on durability: Lagrange Images can define a Project model using ordinary image objects; this repository defines how a person sees, edits, compares, shares and collaborates around those Projects.
 
 ## Layer ownership
 
@@ -82,7 +82,7 @@ ServiceRef
 
 All are views of the same underlying subject. Presentation identity must not replace image object identity.
 
-Presentation discovery should eventually be extensible by environment packages and language personalities. A Smalltalk personality can add source/senders/implementors presentations without creating a separate Smalltalk IDE.
+Presentation discovery should eventually be extensible by environment packages and language personalities. A Smalltalk personality can expose semantic/source services that this environment turns into source/senders/implementors presentations without creating a separate Smalltalk IDE.
 
 ### 4. Commands
 
@@ -99,27 +99,28 @@ This is preferred over arbitrary widget callbacks because the same command can s
 
 Command applicability is not authorization. Every protected read/write/invocation is authorized below the environment at use time.
 
-### 5. Project and collaborative-work semantics
+### 5. Project and collaborative-work interaction
 
-Project is a higher-level organization convention over ordinary image objects and artifacts. It can relate code, notes, tests, data, work items, package/binary/component/runtime artifacts and other projects without turning those relationships into a new storage model.
+The durable Project model belongs below this repository in Lagrange Images: relationships among code, notes, tests, data, work items, package/binary/component/runtime artifacts and other Projects should remain useful to headless clients and agents.
 
-The split with Lagrange Images is:
+The Object Environment owns the human interaction over that model:
 
 ```text
 Lagrange Images
-  identity / refs / history / pinned revisions
-  atomic version-aware mutation
-  future generic revision/diff/branch primitives
+  Project objects / relationships / namespaces
+  history / revisions / working-frontier semantics
+  generic diff / merge / conflict data
+  Git/file projection services where headless use matters
 
 Object Environment
-  Project meaning and navigation
+  Project browser and navigation
   working-view and history presentations
-  merge/conflict interaction
-  Git import/export as a projection
-  multi-author collaboration UX
+  diff / merge / conflict interaction
+  Git projection commands and UX
+  multi-author activity and collaboration UX
 ```
 
-If a branch/merge primitive is useful for arbitrary image clients, it belongs below this repository. How a human sees and resolves that history belongs here.
+If a semantic primitive is useful without this UI, it belongs below this repository. How a human sees and manipulates it belongs here.
 
 ### 6. Generic tools
 
@@ -129,9 +130,9 @@ They are not privileged applications. Domain-specific tools should use the same 
 
 ### 7. Language personalities
 
-Language support supplies presentations and commands for language-owned image structures. Examples include source/AST/bytecode presentations, senders/implementors, macro expansion or language-specific debugging views.
+Language semantics, source structures, lookup/compiler/runtime adapters and debugging metadata stay in Lagrange Images language personalities. This environment supplies presentations and commands over those public semantic structures.
 
-Language semantics and compiler/runtime adapters stay in their lower language personality; the environment owns editing/presentation/interaction integrations over those semantics.
+The environment should therefore host several languages without becoming a collection of unrelated IDEs.
 
 ### 8. Perspective
 
@@ -155,13 +156,13 @@ There is no semantic `Workspace` layer between Image and Perspective.
 Image
   persistent world/workspace
   |
-  +-- arbitrary domain/program objects
-  +-- ordinary objects representing Projects
+  +-- domain/program objects
+  +-- image-level Projects
   +-- ordinary objects representing Perspectives
   `-- durable history/revisions
 
 Project
-  environment-defined semantic organization in the Image
+  durable semantic organization within the Image
 
 Perspective
   durable way to inhabit some of that world
@@ -178,14 +179,14 @@ The environment does not own grants and should not persist authorization tokens 
 
 `lagrange-images` ADR 0037 makes authority execution context rather than program data. A trusted host/control plane issues and revokes root authority; image execution receives only a checkable per-call context and enforces concrete operations. The environment drives user-facing sharing intent through those lower APIs.
 
-This matters because current v0 authority is exact-match. There is no implied rule that "read Project A" recursively authorizes every object reachable from A. Project-wide sharing needs an explicit future authority contract rather than UI convention masquerading as security semantics.
+Current v0 authority is exact-match. There is no implied rule that "read Project A" recursively authorizes every object in A. Project-wide sharing needs an explicit future authority contract rather than UI convention masquerading as security semantics.
 
 ## Non-goals for the first phase
 
 - choosing a final visual language
 - choosing a final windowing model
 - building an application framework
-- duplicating image storage or history
+- duplicating Project, image storage or history semantics
 - defining a second authorization/grant model
 - remote eval as a generic UI escape hatch
-- teaching `lagrange-images` about Projects, Perspectives, buttons, panes, windows or pixels
+- teaching `lagrange-images` about Perspectives, presentations, panes, windows or pixels
