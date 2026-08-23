@@ -37,7 +37,7 @@ The endpoint owners do not jointly own an interaction. Each boundary has one own
 | Interaction | Single interaction owner | Status | Responsibility |
 | --- | --- | --- | --- |
 | External caller -> Object Environment package | Public API module | current: `src/index.js` | Defines the package-facing entry surface and composition points. |
-| Object Environment -> Lagrange Images | `ImageClientAdapter` | planned | Sole environment-side adapter for public image APIs, observation, authorized operations and durable Perspective projection. Lagrange Images still owns its own public semantics. |
+| Object Environment -> Lagrange Images | `ImageClientAdapter` | planned | Sole environment-side adapter for public image APIs, observation, authorized operations and durable Perspective projection. Lagrange Images still owns its own public semantics. Observation core: `src/image-observation.js` (ADR 0009); Perspective projection core: `src/perspective-projection.js` (ADR 0008). |
 | Perspective -> durable image representation | `ImageClientAdapter` (`src/perspective-projection.js`) | current: projection core; adapter planned | Owns the Perspective <-> ordinary-image-object encode/decode contract of ADR 0008. `Perspective` owns semantics; Lagrange Images owns storage. The pure projection is implemented; the image-writing adapter is still planned. |
 | Presentation -> renderer | `RendererAdapter` | planned | Converts semantic presentation output into renderer-specific view operations without moving semantics into the renderer. |
 | Input/gesture/key/menu -> semantic command | `CommandRouter` | planned | Resolves UI invocation policy to one command + semantic subject; does not authorize the command. |

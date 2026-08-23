@@ -13,7 +13,7 @@ This repository owns the graphical environment plus the human-facing Project/his
 - [x] create headless Presentation, Command, Perspective and Session models
 - [x] split image-level Project/history semantics from environment-level Project/history UX
 - [x] decide the minimal ordinary-image-object representation/protocol for durable Perspective (ADR 0008; `src/perspective-projection.js`)
-- [ ] identify the public image observation/change-feed seam needed by live presentations
+- [x] identify the public image observation/change-feed seam needed by live presentations (ADR 0009; `src/image-observation.js`)
 - [ ] identify command invocation/transaction semantics without adding UI concerns to images
 
 Success: the environment can represent its semantic state without inventing storage, Project, history or authorization machinery.
