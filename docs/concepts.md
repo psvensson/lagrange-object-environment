@@ -4,15 +4,17 @@
 
 The Image is the persistent computational world and therefore the workspace.
 
-The environment does not own image objects. It observes and invokes them through Lagrange Images contracts.
+The environment does not own image storage or image identity. It observes and invokes objects through public Lagrange Images contracts.
 
 ## Project
 
-A Project is semantic organization inside an image: a useful root for code, notes, tasks, data and relationships.
+A Project is language-neutral semantic organization inside an image: a useful root or relationship structure for code, notes, tasks, data, artifacts and other Projects.
+
+The **durable Project model belongs to Lagrange Images**, because Projects should be usable by headless agents, compilers/tooling, import/export services and alternate frontends. It should still be represented with ordinary image objects and refs rather than by turning Project into a storage/backend primitive.
+
+This environment owns Project presentations and interaction: browsing, navigation, editing workflows, working views, history/diff/merge UX, collaboration and sharing commands.
 
 Projects should not recreate filesystem assumptions. An object may participate in several projects or relationships, and project composition need not imply exclusive ownership.
-
-Project semantics belong at the image layer when they become durable object semantics. The object environment should present and manipulate them rather than define a competing project store.
 
 ## Presentation
 
@@ -41,7 +43,7 @@ Useful properties to explore later include:
 - key/gesture bindings as separate policy
 - command composition/macros
 
-Authorization is deliberately not on this list. A command may be visible/applicable while invocation is denied by Lagrange Images.
+Authorization is deliberately not on this list. A command may be visible/applicable while the protected operation is denied below the environment.
 
 ## Perspective
 
@@ -63,12 +65,14 @@ Perspectives can support several modes without changing the object model:
 ```text
 personal development perspective
 shared incident perspective
-published read-only dashboard
+published dashboard
 language-learning perspective
 operations perspective
 notebook-like investigation
 spatial/diagram perspective
 ```
+
+A Perspective can be persisted as ordinary image data, but neither the Perspective nor its refs confer authority.
 
 ## Session
 
@@ -85,7 +89,7 @@ Examples:
 - renderer cache
 - temporary focus
 
-Sessions may know the authenticated Principal and active Perspective, but they do not own either.
+Sessions may know the authenticated user-facing principal and active Perspective, but they should not turn a lower-level authority context into storable program data.
 
 ## Compositor
 
