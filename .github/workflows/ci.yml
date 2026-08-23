@@ -29,3 +29,9 @@ jobs:
           npx bd version
           npm run beads:prime >/dev/null
           npm run beads:ready >/dev/null
+      - name: Capture Beads bootstrap metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: beads-bootstrap
+          path: .beads
+          include-hidden-files: true
