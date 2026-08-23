@@ -12,7 +12,7 @@ This repository owns the graphical environment plus the human-facing Project/his
 - [x] establish environment as a public `lagrange-images` consumer
 - [x] create headless Presentation, Command, Perspective and Session models
 - [x] split image-level Project/history semantics from environment-level Project/history UX
-- [ ] decide the minimal ordinary-image-object representation/protocol for durable Perspective
+- [x] decide the minimal ordinary-image-object representation/protocol for durable Perspective (ADR 0008; `src/perspective-projection.js`)
 - [ ] identify the public image observation/change-feed seam needed by live presentations
 - [ ] identify command invocation/transaction semantics without adding UI concerns to images
 
