@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "lagrange_object_environment",
+  "project_id": "b4d1f0c7-7fa5-4b88-a77a-98da354caebf"
+}

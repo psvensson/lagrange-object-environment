@@ -9,7 +9,14 @@
     ".": "./src/index.js"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "beads:init": "bd init --quiet --skip-agents",
+    "beads:prime": "bd prime",
+    "beads:ready": "bd ready --json",
+    "beads:doctor": "bd doctor"
+  },
+  "devDependencies": {
+    "@beads/bd": "1.2.2"
   },
   "engines": {
     "node": ">=22"
