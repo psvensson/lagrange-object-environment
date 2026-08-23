@@ -16,4 +16,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - run: npm install
       - run: npm test
+      - name: Verify provider-independent Beads bootstrap
+        shell: bash
+        run: |
+          set -euo pipefail
+          before="$(sha256sum AGENTS.md)"
+          npm run beads:init
+          after="$(sha256sum AGENTS.md)"
+          test "$before" = "$after"
+          npx bd version
+          npm run beads:prime >/dev/null
+          npm run beads:ready >/dev/null
