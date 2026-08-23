@@ -10,3 +10,9 @@ export {
   decodePerspective,
   encodePerspective,
 } from './perspective-projection.js';
+
+export {
+  CHANGE_TYPE,
+  normalizeChange,
+  observeChanges,
+} from './image-observation.js';
