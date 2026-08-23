@@ -20,7 +20,7 @@ A planned owner reserves responsibility but does not claim implementation exists
 | Headless environment model bootstrap | Environment model | `src/model.js` | Current bootstrap owner until concrete subsystems are split by pressure. |
 | Presentation semantics | `Presentation` | `src/model.js` | Semantic subject + presentation context; never image identity or authority. |
 | Command semantics | `Command` | `src/model.js` | Command description/applicability; authorization remains below the environment. |
-| Perspective semantics | `Perspective` | `src/model.js` | Durable environment intention; image persistence is reached through the image interaction owner. |
+| Perspective semantics | `Perspective` | `src/model.js` | Durable environment intention; image persistence is reached through the image interaction owner. Durable representation is defined by ADR 0008. |
 | Session semantics | `Session` | `src/model.js` | Ephemeral client interaction state. |
 | Durable image/object/project semantics | Lagrange Images | external: `psvensson/lagrange-images` | This repository is a public consumer; no shadow object/project/history store here. |
 | Image authorization enforcement | Lagrange Images execution boundary | external: `psvensson/lagrange-images` | Authority is transient execution context; references/presentations/commands confer none. |
@@ -38,6 +38,7 @@ The endpoint owners do not jointly own an interaction. Each boundary has one own
 | --- | --- | --- | --- |
 | External caller -> Object Environment package | Public API module | current: `src/index.js` | Defines the package-facing entry surface and composition points. |
 | Object Environment -> Lagrange Images | `ImageClientAdapter` | planned | Sole environment-side adapter for public image APIs, observation, authorized operations and durable Perspective projection. Lagrange Images still owns its own public semantics. |
+| Perspective -> durable image representation | `ImageClientAdapter` (`src/perspective-projection.js`) | current: projection core; adapter planned | Owns the Perspective <-> ordinary-image-object encode/decode contract of ADR 0008. `Perspective` owns semantics; Lagrange Images owns storage. The pure projection is implemented; the image-writing adapter is still planned. |
 | Presentation -> renderer | `RendererAdapter` | planned | Converts semantic presentation output into renderer-specific view operations without moving semantics into the renderer. |
 | Input/gesture/key/menu -> semantic command | `CommandRouter` | planned | Resolves UI invocation policy to one command + semantic subject; does not authorize the command. |
 | Command -> image operation | `CommandDispatcher` | planned | Owns command invocation sequencing/result/error mapping and delegates image calls through `ImageClientAdapter`. |

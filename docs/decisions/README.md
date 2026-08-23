@@ -9,3 +9,4 @@ The first decisions intentionally constrain semantics while leaving visual desig
 5. [0005 — Identity is external; authority is transient and enforced below the environment](0005-identity-and-authority.md)
 6. [0006 — Project semantics stay image-level; Project interaction and graphical work belong here](0006-project-and-environment-boundary.md)
 7. [0007 — Provider-independent agent governance uses repository truth, Beads and single ownership](0007-provider-independent-agent-governance.md)
+8. [0008 — A Perspective is an ordinary image object of one well-known Shape](0008-perspective-as-image-object.md)
