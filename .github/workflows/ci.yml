@@ -16,7 +16,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install
+      - name: Install dependencies including Beads native binary
+        run: CI= npm install
       - run: npm test
       - name: Verify provider-independent Beads bootstrap
         shell: bash
