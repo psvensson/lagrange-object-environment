@@ -8,3 +8,4 @@ The first decisions intentionally constrain semantics while leaving visual desig
 4. [0004 — Presentations and commands operate on semantic subjects](0004-presentations-and-commands.md)
 5. [0005 — Identity is external; authority is transient and enforced below the environment](0005-identity-and-authority.md)
 6. [0006 — Project semantics stay image-level; Project interaction and graphical work belong here](0006-project-and-environment-boundary.md)
+7. [0007 — Provider-independent agent governance uses repository truth, Beads and single ownership](0007-provider-independent-agent-governance.md)
