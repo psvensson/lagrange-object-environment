@@ -1,4 +1,4 @@
-# ADR 0005: Identity is external; image authorization is authoritative
+# ADR 0005: Identity is external; authority is transient and enforced below the environment
 
 ## Status
 
@@ -6,20 +6,26 @@ Accepted
 
 ## Context
 
-The environment needs users, groups, sharing and invitations, but authentication and object authority already belong below the UI. Reimplementing either here would create inconsistent security semantics.
+The environment needs users, groups, sharing and invitations, but authentication and authority already belong below the UI. Reimplementing either here would create inconsistent security semantics.
 
-The image model also deliberately separates reference from authority. Partial sharing depends on preserving that distinction through the UI.
+`lagrange-images` ADR 0037 is stronger than a conventional object ACL model: authority is execution context, not program data. A ref identifies; it never grants. Root authority issuance/revocation is trusted host/control-plane work, while concrete image reads/writes/calls re-authorize at use time.
+
+The original scaffold incorrectly summarized this as "Lagrange Images owns durable grants." There are deliberately no durable image grant objects.
 
 ## Decision
 
-Authentication and principal/group identity belong to the Lagrange cluster/control-plane identity layer. The object environment consumes authenticated principal identities and may resolve human-friendly profile/contact information for UX.
+Authentication and principal/group identity belong to the cluster/control-plane identity layer.
 
-Lagrange Images owns durable object capability/grant semantics and performs authorization enforcement.
+Trusted authority-root APIs own issuance, revocation and policy. `lagrange-images` defines/enforces the per-call authority semantics used by image execution, including the check-only `require` seam and the invariant that authority never becomes a canonical Value or durable graph state.
 
-The environment owns sharing UX and orchestration only. A successful share operation results in an authorized image grant (and optionally a shared Perspective), not a UI-local ACL.
+The object environment owns sharing **intent, UX and orchestration** only. It may request an authority-policy change through a trusted API, but it does not mint authority or persist a UI-local ACL.
 
-An ObjectRef, Presentation, Command or Perspective never grants authority by its mere existence.
+An ObjectRef, Project, Presentation, Command or Perspective never grants authority by its mere existence.
+
+Current exact-match grants do not make Project relationships into a capability hierarchy. "Share this Project" therefore needs an explicit future authority contract below the environment.
 
 ## Consequences
 
-External SSO, Keycloak-like providers and installation-local identity can share one environment contract. Users can inhabit overlapping subsets of one image. References into inaccessible regions can remain opaque rather than leaking transitive access.
+External SSO, installation-local identity and future group providers can share one environment contract. Users can inhabit overlapping subsets of one image. References into inaccessible regions can remain opaque rather than leaking transitive access.
+
+Project/Perspective models remain clean durable data because they do not need to embed principals, grants or authorization tokens.

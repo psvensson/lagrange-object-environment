@@ -2,30 +2,50 @@
 
 ## Split the concerns
 
-Three layers answer different questions:
+Four responsibilities answer different questions:
 
 ```text
-cluster / identity service
-  Who are you?
+identity service / control plane
+  Who are you? Which groups exist?
 
-Lagrange Images
-  What may this principal do to this image object?
+trusted authority root
+  Which rights may this principal/session receive?
+  issue / revoke / policy
+
+Lagrange Images execution
+  Is this concrete operation authorized right now?
+  transient context + require(operation, resource)
 
 Object Environment
-  How should those permitted objects and operations be exposed to a human?
+  How should permitted objects and sharing intent be exposed to a human?
 ```
 
-This repository should not implement passwords, OIDC, Keycloak semantics or a second object ACL system.
+These may be deployed together, but they should not collapse into one semantic layer.
+
+This repository should not implement passwords, OIDC, Keycloak semantics, authority-token minting or a second object ACL system.
 
 ## Principal identity
 
-The environment works with an authenticated principal identity supplied by the lower system. Human-friendly names, contacts and account discovery may be resolved for UI purposes, but durable image semantics should depend on stable principal identities rather than an email address or identity-provider detail.
+The environment works with an authenticated principal identity supplied by the lower system. Human-friendly names, contacts and account discovery may be resolved for UI purposes, but authorization must not be re-derived from an email address or display name.
 
-External SSO and an installation-provided identity service can therefore converge on the same environment/image contracts.
+External SSO and an installation-provided identity service can therefore converge on the same environment contracts.
 
-## Authority
+## Authority is transient
 
-Lagrange Images owns capability/grant semantics and enforcement.
+`lagrange-images` ADR 0037 deliberately makes authority execution context rather than program data.
+
+```text
+principal != capability
+reference != authority
+Perspective != authority
+Project != authority
+```
+
+A trusted host/control-plane API may issue, attenuate and revoke authority contexts. Image execution receives only the context needed for the call and exposes a check-only `require` seam to protected operations. Authority never becomes a canonical Value, object slot, lexical capture or durable image grant.
+
+The environment should normally not receive or store the authority context itself. It uses authenticated/authorized APIs; the server side associates requests with the appropriate authority.
+
+## References do not carry access
 
 Environment concepts do not confer authority:
 
@@ -34,7 +54,7 @@ ObjectRef      != permission to dereference
 Presentation   != permission to read subject
 Command        != permission to invoke
 Perspective    != permission to access everything it mentions
-Project member != ambient authority over arbitrary referenced objects
+Project edge   != permission to follow the edge
 ```
 
 This is essential for partial sharing. If an accessible object refers to an inaccessible object, the UI may render an opaque/unavailable reference rather than accidentally traversing it.
@@ -43,50 +63,40 @@ This is essential for partial sharing. If an accessible object refers to an inac
 
 User-facing language may say "owner", but the architecture should distinguish:
 
-- **administration** — who may invite/remove principals, delegate authority, archive/delete or change image policy
+- **administration** — who may change sharing/policy or lifecycle at the trusted control-plane layer
 - **authorship/provenance** — who created or changed something and when
-- **authority** — what a principal may currently do to an object
+- **authority** — what the current authenticated execution may actually do
 
-Do not collapse all three into an `owner` field on every object.
+Do not collapse all three into an `owner` field on every image object.
 
 ## Sharing part of an image
 
 A user can inhabit a strict subset of the same Image. There is no need to manufacture a smaller workspace/image merely to express access.
 
-```text
-Image
-  Project A       <- Alice can read/write
-    A1
-    A2 -> B1      <- B1 may remain an opaque unavailable ref
+But Project hierarchy is not currently an authority hierarchy. `lagrange-images` v0 grants are exact-match operation/resource pairs and authorized object projection never follows refs. A future flow such as:
 
-  Project B       <- Alice has no authority
-    B1
-    B2
+```text
+Share Project A with Alice as editor
 ```
 
-A Perspective can make the permitted subset pleasant to inhabit, but capability enforcement remains below it.
+must therefore ask a trusted lower authority API to create whatever explicit rights the eventual authority model defines. The environment must not simulate this by assuming reachable objects are authorized.
 
 ## Perspectives and sharing
 
-Because a Perspective is intended to become an image object, ordinary image authority can express:
+A Perspective may be stored as ordinary image data, and the UI may offer private/shared/published modes. Those modes are **sharing intent and policy UX**, not authority encoded in the Perspective itself.
 
-- private perspective: author read/write only
-- shared perspective: several principals may update layout/content
-- published perspective: broad read, narrow write
-- group perspective: authority granted to a principal group
-
-Sharing a Perspective and sharing everything referenced by it are separate operations.
+Sharing a Perspective and sharing everything referenced by it are always separate operations.
 
 ## Invitations
 
-Invitation is primarily orchestration/UX, not a new security model.
+Invitation is orchestration/UX, not a new security model.
 
 A future flow may look like:
 
 ```text
 Share Project -> choose person/group -> choose intended rights
              -> resolve/create principal
-             -> create image grant through authorized API
+             -> request authority-policy change through trusted API
              -> optionally share a Perspective or entry point
 ```
 
@@ -94,4 +104,4 @@ If the invitee is not yet a principal, a cluster/account service can hold a pend
 
 ## Security design rule
 
-Every environment operation that reads or changes image semantics must be possible to describe through public authorized image APIs. If the UI requires a privileged bypass, fix the underlying contract rather than bless the bypass.
+Every environment operation that reads or changes protected image semantics must go through a public authorized API. If the UI requires a privileged bypass, fix the underlying contract rather than bless the bypass.
