@@ -1,0 +1,17 @@
+{
+  "name": "lagrange-object-environment",
+  "version": "0.0.0",
+  "description": "Live object computing environment for Lagrange Images",
+  "private": true,
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
