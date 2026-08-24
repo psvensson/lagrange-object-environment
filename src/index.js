@@ -16,3 +16,12 @@ export {
   normalizeChange,
   observeChanges,
 } from './image-observation.js';
+
+export {
+  CommandAuthorizationError,
+  CommandConflictError,
+  CommandExecutionError,
+  CommandNotApplicableError,
+  classifyInvocationError,
+  createCommandDispatcher,
+} from './command-dispatcher.js';
