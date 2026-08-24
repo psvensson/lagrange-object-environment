@@ -79,7 +79,9 @@ Do not implement a nontrivial change until the current Bead contains or links en
 - **Alternatives checked** — especially previously rejected or tempting approaches.
 - **Completion proof** — exact tests/CI/evidence needed before closing.
 
-For architecture changes or changes spanning major subsystem boundaries, perform a distinct plan-review pass before implementation. Prefer a different model/provider when economical; otherwise use a separate adversarial review pass with fresh context. Record the outcome in the Bead.
+Every nontrivial Bead must have its plan verified by an independent subagent before implementation begins. This is mandatory, not only for architecture changes: delegate an adversarial plan review to a fresh-context subagent that reads the current HEAD, the relevant ADRs/tests/docs and the Bead, and reports gaps, wrong assumptions and falsification weaknesses. Prefer a different model/provider when economical because disagreement is useful evidence. Record the outcome in the Bead. Do not implement against an unverified plan.
+
+Treat a change as nontrivial whenever it touches anything beyond comments, documentation wording or typo fixes — when in doubt, treat it as nontrivial: an unnecessary review is cheaper than an unreviewed regression.
 
 ## Before proposing a design
 
@@ -106,6 +108,9 @@ For each slice:
 4. run the narrow proof
 5. run affected regression tests
 6. inspect the diff for boundary/ownership drift before continuing
+7. verify the completed slice with an independent subagent before moving on
+
+Every implementation step must be verified by an independent subagent. After a slice is implemented and its proofs pass, delegate a fresh-context adversarial review of the actual diff and tests — not just the plan — and resolve its findings before the slice counts as done, or record each unresolved finding with the reason it is not being addressed. Self-review by the implementing agent is not a substitute: the point is that a second, independent reader can catch what the first rationalized.
 
 Do not fix unrelated discovered problems opportunistically. Record them as `discovered-from` Beads unless they block the current change.
 
