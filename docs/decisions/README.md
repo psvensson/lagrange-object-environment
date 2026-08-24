@@ -11,3 +11,4 @@ The first decisions intentionally constrain semantics while leaving visual desig
 7. [0007 — Provider-independent agent governance uses repository truth, Beads and single ownership](0007-provider-independent-agent-governance.md)
 8. [0008 — A Perspective is an ordinary image object of one well-known Shape](0008-perspective-as-image-object.md)
 9. [0009 — Live observation is a pull-based change feed owned by the image adapter](0009-image-observation-change-feed.md)
+10. [0010 — Command invocation passes authority through; the environment never holds it](0010-command-invocation-authority-passthrough.md)

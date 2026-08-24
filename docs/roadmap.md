@@ -14,7 +14,7 @@ This repository owns the graphical environment plus the human-facing Project/his
 - [x] split image-level Project/history semantics from environment-level Project/history UX
 - [x] decide the minimal ordinary-image-object representation/protocol for durable Perspective (ADR 0008; `src/perspective-projection.js`)
 - [x] identify the public image observation/change-feed seam needed by live presentations (ADR 0009; `src/image-observation.js`)
-- [ ] identify command invocation/transaction semantics without adding UI concerns to images
+- [x] identify command invocation/transaction semantics without adding UI concerns to images (ADR 0010; `src/command-dispatcher.js`)
 
 Success: the environment can represent its semantic state without inventing storage, Project, history or authorization machinery.
 
