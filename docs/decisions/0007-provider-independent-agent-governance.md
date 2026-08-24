@@ -44,6 +44,8 @@ A nontrivial change must establish current behavior, owners, relevant invariants
 
 Implementation proceeds in independently verifiable semantic slices. Completion requires exact-head CI plus reconciliation of durable project knowledge.
 
+Both gates are verified by an independent subagent: every nontrivial plan is reviewed adversarially before implementation, and every implementation slice is reviewed against its actual diff and tests before it counts as done. Self-review by the implementing agent does not satisfy either gate. A change is nontrivial whenever it touches anything beyond comments, documentation wording or typo fixes. *(Amended: the independent-subagent mandate was made explicit after initial acceptance.)*
+
 ### 4. Every major subsystem has exactly one owner
 
 A subsystem owner is one architectural locus authoritative for the concern's semantic decisions, state/public contract and primary proof.

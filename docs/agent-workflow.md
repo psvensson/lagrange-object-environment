@@ -80,7 +80,7 @@ Completion proof
 
 A plan is not verified merely because it sounds coherent. Verification means it is checked against current code/tests, ownership is unambiguous, and there is a falsification/counterexample that could prove the plan wrong.
 
-For architectural or major cross-subsystem work, perform a separate plan-review pass before implementation. Using a different provider/model is preferred when credits permit because disagreement is useful evidence. A fresh-context adversarial pass is the fallback.
+Every nontrivial Bead must have its plan verified by an independent subagent before implementation begins — not only architectural or cross-subsystem work. Delegate an adversarial plan review to a fresh-context subagent that reads the current HEAD, the relevant ADRs/tests/docs and the Bead, and reports gaps, wrong assumptions and falsification weaknesses. Using a different provider/model is preferred when credits permit because disagreement is useful evidence; a fresh-context adversarial pass is the fallback. Record the outcome in the Bead and do not implement against an unverified plan. Treat a change as nontrivial whenever it touches anything beyond comments, documentation wording or typo fixes — when in doubt, treat it as nontrivial: an unnecessary review is cheaper than an unreviewed regression.
 
 ### 4. Implement and prove slice by slice
 
@@ -92,7 +92,10 @@ For each semantic slice:
 4. run targeted proof
 5. run affected regression proof
 6. inspect the diff for owner/boundary drift
-7. continue only after the slice is coherent
+7. verify the completed slice with an independent subagent
+8. continue only after the slice is coherent
+
+Every implementation step must be verified by an independent subagent. After a slice is implemented and its proofs pass, delegate a fresh-context adversarial review of the actual diff and tests — not just the plan — and resolve its findings before the slice counts as done, or record each unresolved finding with the reason it is not being addressed. Self-review by the implementing agent is not a substitute: the point is that a second, independent reader can catch what the first rationalized.
 
 Prefer tests that fail for the attractive wrong implementation, not only tests that happen to pass for the intended one.
 
