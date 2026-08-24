@@ -10,5 +10,6 @@ The documents here define the object-environment boundary before they define a v
 - [Provider-independent agent workflow](agent-workflow.md) — Beads, planning/falsification/verification/reconciliation and handoffs
 - [Roadmap](roadmap.md) — staged implementation plan
 - [Decisions](decisions/README.md) — architectural decisions intended to stay stable while UI experiments change
+- [Proposals](proposals/) — downward proposals to Lagrange Images for missing image-level contracts (per ADR 0002)
 
 Agents should start at the repository-root [`AGENTS.md`](../AGENTS.md), then use the ownership registry and Beads state to locate the authoritative context for a task.
