@@ -12,3 +12,4 @@ The first decisions intentionally constrain semantics while leaving visual desig
 8. [0008 — A Perspective is an ordinary image object of one well-known Shape](0008-perspective-as-image-object.md)
 9. [0009 — Live observation is a pull-based change feed owned by the image adapter](0009-image-observation-change-feed.md)
 10. [0010 — Command invocation passes authority through; the environment never holds it](0010-command-invocation-authority-passthrough.md)
+11. [0011 — Component-backed graphics are presentations, not applications](0011-component-backed-graphics-presentations.md)

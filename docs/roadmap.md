@@ -15,8 +15,9 @@ This repository owns the graphical environment plus the human-facing Project/his
 - [x] decide the minimal ordinary-image-object representation/protocol for durable Perspective (ADR 0008; `src/perspective-projection.js`)
 - [x] identify the public image observation/change-feed seam needed by live presentations (ADR 0009; `src/image-observation.js`)
 - [x] identify command invocation/transaction semantics without adding UI concerns to images (ADR 0010; `src/command-dispatcher.js`)
+- [x] establish Component-backed 2D/3D graphics as ordinary Presentations, with concrete GPU/surface/WIT hosting owned by `RendererAdapter` (ADR 0011; paired with `lagrange-images` ADR 0062)
 
-Success: the environment can represent its semantic state without inventing storage, Project, history or authorization machinery.
+Success: the environment can represent its semantic state without inventing storage, Project, history, authorization or graphics-object machinery.
 
 ## Phase 1 — first live object loop
 
@@ -51,9 +52,10 @@ Success: manipulating an object through the environment demonstrably manipulates
 
 Use a browser renderer first unless experiments show a strong reason not to. Keep semantic layers renderer-independent.
 
-This absorbs the old `lagrange-images` "Graphical environment" roadmap without inheriting its assumption that windows/widgets are fundamental.
+This absorbs the old `lagrange-images` "Graphical environment" roadmap without inheriting its assumption that windows/widgets are fundamental. ADR 0011 also makes portable Component-backed graphics part of this phase rather than a later separate 3D subsystem.
 
 - [ ] drawing/input/rendering adapter contract
+- [ ] `RendererAdapter` host-resource boundary for concrete browser/native surfaces and GPU/device/queue/frame lifecycle
 - [ ] text/input/accessibility baseline
 - [ ] retained presentation/view state where useful
 - [ ] compositor with nested split/stack/scroll primitives
@@ -62,8 +64,15 @@ This absorbs the old `lagrange-images` "Graphical environment" roadmap without i
 - [ ] selection/focus model linked to semantic subjects
 - [ ] command palette/context menu/key binding policy
 - [ ] Perspective composition persisted independently of Session mechanics
+- [ ] exact-version `wasi:webgpu` plus `wasi-gfx`-style surface interface experiment behind `RendererAdapter`
+- [ ] first Component-backed Presentation renders a minimal triangle without a Lagrange-specific GPU/scene ABI
+- [ ] extend that proof to one small GLB/glTF-style asset or similarly meaningful 3D example
+- [ ] tear down and recreate the Session, proving GPU/device/surface handles are recreated rather than persisted
+- [ ] route one semantic interaction from the Component-backed view through the ordinary Command -> authorized image-operation path
 
-Success: inspector/browser tools can be arranged and restored through a Perspective without becoming applications.
+Success: inspector/browser tools and Component-backed 2D/3D presentations can be arranged and restored through a Perspective without becoming applications, while concrete graphics resources remain transient renderer/session machinery.
+
+Do not design a common scene graph before the low-level Component boundary is proven with existing ecosystem interfaces and examples.
 
 ## Phase 3 — generic live tools
 
@@ -131,5 +140,6 @@ Success: two users can inhabit overlapping parts of one image with different aut
 - remote/multi-image presentations
 - collaborative debugging and operational views
 - alternate native renderers
+- shared higher-level scene/plotting/CAD libraries only where repeated Component presentations demonstrate common pressure
 
-These should remain experiments until the core Presentation -> Command -> Image loop is proven.
+These should remain experiments until the core Presentation -> Command -> Image loop and the low-level renderer/Component boundary are proven.
