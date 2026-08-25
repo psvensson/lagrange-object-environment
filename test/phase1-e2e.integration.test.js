@@ -13,6 +13,7 @@ import {createObjectNavigator} from '../src/object-navigator.js';
 import {
   createObjectInspectorProvider,
   createUnavailableRefProvider,
+  createUnauthorizedRefProvider,
 } from '../src/object-presentation-providers.js';
 
 // The Phase 1 end-to-end proof (Bead kmu): manipulating an object through the
@@ -42,6 +43,9 @@ const IDS = Object.freeze({
   mutationInterfaceId: 'probe-mutate-interface',
   mutationBindingId: 'probe-mutate-binding',
   mutationBlockId: 'probe-mutate-block',
+  readInterfaceId: 'object-read-interface',
+  readBindingId: 'object-read-binding',
+  readBlockId: 'object-read-block',
 });
 
 test('Phase 1 end-to-end: open -> present -> navigate -> command -> authorized mutation -> observe -> presentation updates', {skip: !available && 'lagrange-images sibling runtime not available'}, async () => {
@@ -57,6 +61,7 @@ test('Phase 1 end-to-end: open -> present -> navigate -> command -> authorized m
     installCallableInterfaceV2: imagesApi.installCallableInterfaceV2,
     installImageCreationBinding: imagesApi.installImageCreationBinding,
     installImageMutationBinding: imagesApi.installImageMutationBinding,
+    installImageObjectReadBinding: imagesApi.installImageObjectReadBinding,
     findSmalltalkKernel: imagesApi.findSmalltalkKernel,
     objectRef: imagesApi.objectRef,
     objectResource: imagesApi.objectResource,
@@ -64,6 +69,7 @@ test('Phase 1 end-to-end: open -> present -> navigate -> command -> authorized m
     objectVersionToken: imagesApi.objectVersionToken,
     textValue: imagesApi.textValue,
     packCompositeValue: imagesApi.packCompositeValue,
+    unpackCompositeValue: imagesApi.unpackCompositeValue,
     normalizeTypeDeclarations: imagesApi.normalizeTypeDeclarations,
   });
   await adapter.ensureSchema(IMAGE, IDS);
@@ -73,13 +79,19 @@ test('Phase 1 end-to-end: open -> present -> navigate -> command -> authorized m
   const presentationRegistry = createPresentationRegistry();
   presentationRegistry.register(createObjectInspectorProvider());
   presentationRegistry.register(createUnavailableRefProvider());
+  presentationRegistry.register(createUnauthorizedRefProvider());
   const commandRegistry = createCommandRegistry();
   const navigator = createObjectNavigator({
-    adapter, presentationRegistry, commandRegistry, referencesOfRecord: imagesApi.referencesOfRecord,
+    adapter, presentationRegistry, commandRegistry, referencesOfValue: imagesApi.referencesOfValue,
   });
 
   const classId = classIdFor(IDS.className);
   const ref = (objectId) => ({kind: 'ref', imageId: IMAGE, objectId});
+  // A control-plane read authority: authorizes object/read on exactly one object.
+  const readAuthority = (objectId) => runtime.authority.issue({
+    principal: 'alice',
+    grants: [{operation: 'object/read', resource: imagesApi.objectResource(IMAGE, objectId)}],
+  });
 
   // --- setup: two durable objects, A references B (through the authorized
   // creation lane, staged authority). B points at smalltalk/nil (createObject
@@ -101,16 +113,23 @@ test('Phase 1 end-to-end: open -> present -> navigate -> command -> authorized m
   });
 
   // --- 1. open object -> presentation discovered (via the registry) ---------
-  const openA = await navigator.navigate(ref(createdA.objectId));
+  const openA = await navigator.navigate(ref(createdA.objectId), {authority: readAuthority(createdA.objectId), readBlockId: IDS.readBlockId});
   assert.equal(openA.presentations.length, 1, 'exactly one inspector presentation for a ref subject');
   assert.equal(openA.presentations[0].kind, 'inspector');
   assert.equal(openA.presentations[0].context.fields['probe-title'].value, 'A-original');
+
+  // Reference discovery runs over the read lane's slots + indexed (the ONLY
+  // structures the lane returns) via the REAL substrate referencesOfValue —
+  // it finds the followable subject ref stored in A's slots, proving the
+  // slots+indexed-only walk still surfaces graph edges.
+  const refIdsA = openA.presentations[0].context.references.map((r) => r.objectId);
+  assert.ok(refIdsA.includes(createdB.objectId), 'slots+indexed reference walk must surface the subject ref');
 
   // --- 2. inspect -> select referenced subject (follow the ref from context,
   // not a hard-coded B) -------------------------------------------------------
   const refToB = openA.presentations[0].context.references.find((r) => r.objectId === createdB.objectId);
   assert.ok(refToB, 'A must reference B through its stored edge');
-  const openB = await navigator.navigate(refToB);
+  const openB = await navigator.navigate(refToB, {authority: readAuthority(refToB.objectId), readBlockId: IDS.readBlockId});
   assert.equal(openB.presentations[0].kind, 'inspector');
   assert.equal(openB.presentations[0].context.fields['probe-title'].value, 'B');
 
@@ -128,7 +147,7 @@ test('Phase 1 end-to-end: open -> present -> navigate -> command -> authorized m
       });
     },
   }));
-  const discovered = await navigator.navigate(ref(createdA.objectId));
+  const discovered = await navigator.navigate(ref(createdA.objectId), {authority: readAuthority(createdA.objectId), readBlockId: IDS.readBlockId});
   const setTitle = discovered.commands.find((c) => c.id === 'set-title');
   assert.ok(setTitle, 'the set-title command is discovered (applicability-only)');
 
@@ -159,7 +178,7 @@ test('Phase 1 end-to-end: open -> present -> navigate -> command -> authorized m
   assert.ok(observedChange, 'observation must see the authorized mutation on the change feed');
 
   // --- 6. presentation model updates (fresh read from the image, not a shadow)
-  const reopened = await navigator.navigate(ref(createdA.objectId));
+  const reopened = await navigator.navigate(ref(createdA.objectId), {authority: readAuthority(createdA.objectId), readBlockId: IDS.readBlockId});
   assert.equal(
     reopened.presentations[0].context.fields['probe-title'].value,
     'A-changed',
@@ -176,8 +195,16 @@ test('Phase 1 end-to-end: open -> present -> navigate -> command -> authorized m
     }),
     (error) => error instanceof CommandAuthorizationError || /object\/write|not authorized/i.test(error?.message ?? ''),
   );
-  const afterDeny = await navigator.navigate(ref(createdA.objectId));
+  const afterDeny = await navigator.navigate(ref(createdA.objectId), {authority: readAuthority(createdA.objectId), readBlockId: IDS.readBlockId});
   assert.equal(afterDeny.presentations[0].context.fields['probe-title'].value, 'A-changed', 'a denied dispatch mutates nothing');
+
+  // --- the authorized read lane: a denied navigate is UNAUTHORIZED, distinct
+  // from unavailable, and never crashes the loop --------------------------
+  const deniedRead = await navigator.navigate(ref(createdA.objectId), {
+    authority: runtime.authority.issue({principal: 'mallory', grants: []}),
+    readBlockId: IDS.readBlockId,
+  });
+  assert.equal(deniedRead.presentations[0].kind, 'unauthorized-reference', 'a denied read is presented as unauthorized, not unavailable');
 
   await runtime.close();
 });

@@ -65,6 +65,47 @@ const PROBE_MUTATION_FIELDS = Object.freeze([
   Object.freeze({name: 'title', slot: 'probe-title'}),
 ]);
 
+// --- The authorized whole-record object-read lane (image-object-read-binding/v1,
+// substrate ADR 0068) --------------------------------------------------------
+//
+// The environment's SINGLE user-facing "read an object" seam. Unlike the
+// creation/mutation lanes it maps nothing: the lane returns the COMPLETE
+// generic object (every named slot + the indexed part verbatim) plus an opaque
+// version token, under require({operation: 'object/read', resource}). The
+// composite codec is ref-free, so the record crosses as a record of lists; each
+// slot-entry/slot-value carries the canonical JSON of a stored Value as a
+// string, so refs/pinned-refs survive as identity (never followed).
+//
+// `object-record` keys slots by durable slot id; `object-read-result` couples
+// the token to the same read the value came from.
+const OBJECT_READ_TYPE_DECLARATIONS = Object.freeze({
+  'slot-value': Object.freeze({
+    kind: 'record',
+    fields: Object.freeze([Object.freeze({name: 'value', type: 'string'})]),
+  }),
+  'slot-entry': Object.freeze({
+    kind: 'record',
+    fields: Object.freeze([
+      Object.freeze({name: 'name', type: 'string'}),
+      Object.freeze({name: 'value', type: 'slot-value'}),
+    ]),
+  }),
+  'object-record': Object.freeze({
+    kind: 'record',
+    fields: Object.freeze([
+      Object.freeze({name: 'slots', type: Object.freeze({kind: 'list', element: 'slot-entry'})}),
+      Object.freeze({name: 'indexed', type: Object.freeze({kind: 'list', element: 'slot-value'})}),
+    ]),
+  }),
+  'object-read-result': Object.freeze({
+    kind: 'record',
+    fields: Object.freeze([
+      Object.freeze({name: 'version-token', type: 'string'}),
+      Object.freeze({name: 'value', type: 'object-record'}),
+    ]),
+  }),
+});
+
 // --- Perspective schema (ADR 0012 indexed form, formatVersion 3) -------------
 //
 // The Perspective object: leaf slots for scalars, plus an ordered INDEXED part
@@ -175,6 +216,7 @@ function createImageClientAdapter(client) {
     installCallableInterfaceV2,
     installImageCreationBinding,
     installImageMutationBinding,
+    installImageObjectReadBinding,
     findSmalltalkKernel,
     objectRef,
     objectResource,
@@ -182,10 +224,11 @@ function createImageClientAdapter(client) {
     objectVersionToken,
     textValue,
     packCompositeValue,
+    unpackCompositeValue,
     normalizeTypeDeclarations,
   } = client;
 
-  for (const [name, fn] of Object.entries({defineClass, installCallableInterfaceV2, installImageCreationBinding, installImageMutationBinding, findSmalltalkKernel, objectRef, objectResource, parseObjectResource, objectVersionToken, textValue, packCompositeValue, normalizeTypeDeclarations})) {
+  for (const [name, fn] of Object.entries({defineClass, installCallableInterfaceV2, installImageCreationBinding, installImageMutationBinding, installImageObjectReadBinding, findSmalltalkKernel, objectRef, objectResource, parseObjectResource, objectVersionToken, textValue, packCompositeValue, unpackCompositeValue, normalizeTypeDeclarations})) {
     if (typeof fn !== 'function') {
       throw new TypeError(`lagrange-images client is missing required helper: ${name}`);
     }
@@ -204,11 +247,11 @@ function createImageClientAdapter(client) {
    * is a PRECONDITION: it is checked and reported, never silently installed on
    * a foreign image.
    */
-  async function ensureSchema(imageId, {shapeId, className, interfaceId, bindingId, blockId, mutationInterfaceId, mutationBindingId, mutationBlockId} = {}) {
+  async function ensureSchema(imageId, {shapeId, className, interfaceId, bindingId, blockId, mutationInterfaceId, mutationBindingId, mutationBlockId, readInterfaceId, readBindingId, readBlockId} = {}) {
     // Validate ids eagerly: a missing id would otherwise flow into the
     // substrate as undefined (or, for putShape, mint a random id and silently
     // break idempotence), surfacing a confusing error far from the cause.
-    for (const [key, value] of Object.entries({shapeId, className, interfaceId, bindingId, blockId, mutationInterfaceId, mutationBindingId, mutationBlockId})) {
+    for (const [key, value] of Object.entries({shapeId, className, interfaceId, bindingId, blockId, mutationInterfaceId, mutationBindingId, mutationBlockId, readInterfaceId, readBindingId, readBlockId})) {
       if (typeof value !== 'string' || value.length === 0) {
         throw new TypeError(`ensureSchema requires a non-empty ids.${key}`);
       }
@@ -223,6 +266,7 @@ function createImageClientAdapter(client) {
       shape = await images.putShape(imageId, {id: shapeId, slots: PROBE_SHAPE_SLOTS});
     }
 
+    // Control-plane/schema read (trusted host), not a user-facing object read.
     let classRecord = await images.getObject(imageId, classIdFor(className));
     if (!classRecord) {
       await defineClass({
@@ -231,6 +275,7 @@ function createImageClientAdapter(client) {
         name: className,
         instanceShapeRef: objectRef(imageId, shapeId),
       });
+      // Control-plane/schema read (trusted host), not a user-facing object read.
       classRecord = await images.getObject(imageId, classIdFor(className));
     }
 
@@ -286,9 +331,34 @@ function createImageClientAdapter(client) {
       });
     }
 
+    // The authorized whole-record read lane (image-object-read-binding/v1,
+    // substrate ADR 0068): the environment's single user-facing read seam.
+    const readInterfaceRef = objectRef(imageId, readInterfaceId);
+    if (!(await images.getCodeArtifact(imageId, readInterfaceId))) {
+      await installCallableInterfaceV2({
+        images,
+        imageId,
+        functionName: 'read-object',
+        parameters: ['string'],
+        result: 'object-read-result',
+        types: OBJECT_READ_TYPE_DECLARATIONS,
+        interfaceId: readInterfaceId,
+      });
+    }
+    if (!(await images.getBlock(imageId, readBlockId))) {
+      await installImageObjectReadBinding({
+        images,
+        callableInterface: readInterfaceRef,
+        imageId,
+        bindingId: readBindingId,
+        blockId: readBlockId,
+      });
+    }
+
     return Object.freeze({
       shape, classRecord, interfaceRef, blockRef: objectRef(imageId, blockId),
       mutationBlockRef: objectRef(imageId, mutationBlockId),
+      readBlockRef: objectRef(imageId, readBlockId),
     });
   }
 
@@ -324,6 +394,8 @@ function createImageClientAdapter(client) {
    * Returns {objectId, versionToken} (the new object-scoped token).
    */
   async function mutateObject({imageId, objectId, value, authority, blockId, versionToken = null}) {
+    // Control-plane/schema read (trusted host), not a user-facing object read:
+    // the optimistic-concurrency version-token fetch for the mutation lane.
     const token = versionToken ?? objectVersionToken(imageId, objectId, (await images.getObject(imageId, objectId))?._version);
     const normalized = normalizeTypeDeclarations(PROBE_MUTATION_TYPE_DECLARATIONS);
     const activation = await invocations.invokeBlock(objectRef(imageId, blockId), [
@@ -335,10 +407,48 @@ function createImageClientAdapter(client) {
     return Object.freeze({objectId, versionToken: result?.value});
   }
 
-  // Reads return the substrate's stored record; slot Values are already in the
-  // ADR 0008 ref/pinned-ref form, so no adapter transform is applied here.
-  async function readObject(imageId, objectId) {
-    return await images.getObject(imageId, objectId);
+  /**
+   * The authorized whole-record object read (image-object-read-binding/v1,
+   * substrate ADR 0068): the environment's SINGLE user-facing "read an object"
+   * seam. Invokes the read block and executes it under the caller's authority;
+   * the substrate enforces require({operation: 'object/read', resource}) BEFORE
+   * any existence check, so a denied read surfaces AuthorityError whether or not
+   * the object exists (no existence oracle). An authorized read of a nonexistent
+   * object surfaces a distinct not-found TypeError; backend failure propagates.
+   *
+   * Returns ONLY what the lane discloses across the ref-free codec —
+   * {slots: {slotId: Value}, indexed: [Value], versionToken} — NOT the
+   * substrate's stored record: there is no kind/shape/behavior here (ADR 0068
+   * carries slots + indexed only). Each slot-entry/slot-value string is
+   * JSON.parsed back into the canonical ADR 0008 Value (leaf OR ref/pinned-ref
+   * identity, never followed). Downstream consumers that need references must
+   * walk slots + indexed only (see ObjectNavigator's referencesOfLaneRecord);
+   * shape/behavior are unavailable from this seam by design.
+   *
+   * AuthorityError and the not-found TypeError are deliberately NOT caught or
+   * collapsed here: the distinction is the point of the lane, and collapsing it
+   * would discard substrate PR #127's benefit.
+   */
+  async function authorizedReadObject({imageId, objectId, authority, blockId}) {
+    const types = normalizeTypeDeclarations(OBJECT_READ_TYPE_DECLARATIONS);
+    const activation = await invocations.invokeBlock(objectRef(imageId, blockId), [textValue(objectId)]);
+    const packed = await executor.execute(activation, {authority});
+    const result = unpackCompositeValue(packed, 'object-read-result', types);
+    const slots = Object.fromEntries(
+      (result.value.slots ?? []).map(({name, value}) => [name, JSON.parse(value.value)]),
+    );
+    const indexed = (result.value.indexed ?? []).map((entry) => JSON.parse(entry.value));
+    return Object.freeze({slots, indexed, versionToken: result['version-token']});
+  }
+
+  /**
+   * readObject is the environment's single runtime read abstraction: it routes
+   * through the authorized whole-record read lane (never the privileged
+   * images.getObject) so every user-facing object read crosses the object/read
+   * authority boundary. ObjectNavigator and loadPerspective both consume it.
+   */
+  async function readObject({imageId, objectId, authority, blockId}) {
+    return await authorizedReadObject({imageId, objectId, authority, blockId});
   }
 
   // --- Perspective save/load (ADR 0012 indexed form) --------------------------
@@ -386,9 +496,11 @@ function createImageClientAdapter(client) {
         id: perspectiveShapeId, slots: PERSPECTIVE_SHAPE_SLOTS, indexed: 'values',
       });
     }
+    // Control-plane/schema read (trusted host), not a user-facing object read.
     let perspectiveClass = await images.getObject(imageId, classIdFor(perspectiveClassName));
     if (!perspectiveClass) {
       await defineClass({images, imageId, name: perspectiveClassName, instanceShapeRef: objectRef(imageId, perspectiveShapeId)});
+      // Control-plane/schema read (trusted host), not a user-facing object read.
       perspectiveClass = await images.getObject(imageId, classIdFor(perspectiveClassName));
     }
 
@@ -396,9 +508,11 @@ function createImageClientAdapter(client) {
     if (!presentationShape) {
       presentationShape = await images.putShape(imageId, {id: presentationShapeId, slots: PRESENTATION_SHAPE_SLOTS});
     }
+    // Control-plane/schema read (trusted host), not a user-facing object read.
     let presentationClass = await images.getObject(imageId, classIdFor(presentationClassName));
     if (!presentationClass) {
       await defineClass({images, imageId, name: presentationClassName, instanceShapeRef: objectRef(imageId, presentationShapeId)});
+      // Control-plane/schema read (trusted host), not a user-facing object read.
       presentationClass = await images.getObject(imageId, classIdFor(presentationClassName));
     }
 
@@ -552,19 +666,44 @@ function createImageClientAdapter(client) {
     };
   }
 
-  async function loadPerspective({imageId, perspectiveId}) {
-    const record = await images.getObject(imageId, perspectiveId);
-    if (!record) {
-      throw new TypeError(`no durable Perspective ${perspectiveId} in image ${imageId}`);
+  /**
+   * Load a durable Perspective through the authorized whole-record read lane.
+   * Every read — the Perspective record and each presentation child — is a
+   * SEPARATE authorized read (image-object-read-binding/v1), never the
+   * privileged host getObject.
+   *
+   * ref != authority: reading Perspective P authorizes P only; each child read
+   * is authorized independently. `authorityProvider` is the connection/control-
+   * plane seam (mirroring savePerspective): an async function the adapter calls
+   * with a request describing the read —
+   *   authorityProvider({kind: 'read-perspective', imageId, perspectiveId})
+   *   authorityProvider({kind: 'read-presentation', imageId, perspectiveId, objectId})
+   * and which must return an opaque authority context authorizing exactly that
+   * read. The adapter neither issues nor inspects the returned contexts; it
+   * passes them through (ADR 0010). "Can read P" is NOT treated as "can read
+   * P's children": a child the provider does not authorize surfaces AuthorityError.
+   *
+   * A denied read (AuthorityError) and a missing object (not-found TypeError)
+   * propagate distinctly, never collapsed.
+   */
+  async function loadPerspective({imageId, perspectiveId, authorityProvider, readBlockId}) {
+    if (typeof authorityProvider !== 'function') {
+      throw new TypeError('loadPerspective requires an authorityProvider function');
     }
+    const perspectiveAuthority = await authorityProvider({kind: 'read-perspective', imageId, perspectiveId});
+    const record = await readObject({
+      imageId, objectId: perspectiveId, authority: perspectiveAuthority, blockId: readBlockId,
+    });
     return decodePerspective({
       id: perspectiveId,
       perspectiveRecord: {slots: perspectiveSlotsForProjection(record.slots), indexed: record.indexed ?? []},
       resolveChild: async (childRef) => {
-        const child = await images.getObject(imageId, childRef.objectId);
-        if (!child) {
-          throw new TypeError(`Perspective ${perspectiveId} references missing presentation ${childRef.objectId}`);
-        }
+        const childAuthority = await authorityProvider({
+          kind: 'read-presentation', imageId, perspectiveId, objectId: childRef.objectId,
+        });
+        const child = await readObject({
+          imageId, objectId: childRef.objectId, authority: childAuthority, blockId: readBlockId,
+        });
         return {slots: presentationSlotsForProjection(child.slots)};
       },
     });
@@ -589,6 +728,7 @@ function createImageClientAdapter(client) {
     savePerspective,
     loadPerspective,
     readObject,
+    authorizedReadObject,
     observe,
     dispatch,
     refToEdgeString: (ref, imageId) => refToEdgeString(ref, imageId),

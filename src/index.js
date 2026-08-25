@@ -31,11 +31,12 @@ export {createPresentationRegistry} from './presentation-registry.js';
 
 export {createCommandRegistry} from './command-registry.js';
 
-export {UNAVAILABLE_REF_KIND, createObjectNavigator} from './object-navigator.js';
+export {UNAVAILABLE_REF_KIND, UNAUTHORIZED_REF_KIND, createObjectNavigator} from './object-navigator.js';
 
 export {
   createObjectInspectorProvider,
   createUnavailableRefProvider,
+  createUnauthorizedRefProvider,
 } from './object-presentation-providers.js';
 
 export {RendererError, RendererResourceLostError} from './renderer-errors.js';
