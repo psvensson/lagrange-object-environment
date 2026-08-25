@@ -1,183 +1,193 @@
-import assert from 'node:assert/strict';
 import test from 'node:test';
+import assert from 'node:assert/strict';
 
-import {Perspective} from '../src/index.js';
+import {Perspective} from '../src/model.js';
 import {
   PERSPECTIVE_FORMAT_VERSION,
   decodePerspective,
-  encodePerspective,
+  encodePerspectiveRecord,
+  encodePresentations,
 } from '../src/perspective-projection.js';
 
-const ref = (objectId) => ({kind: 'ref', imageId: 'image:world', objectId});
-const pinned = (objectId, revision) => ({
-  kind: 'pinned-ref',
-  imageId: 'image:world',
-  objectId,
-  revision: String(revision),
-});
+const subjectRef = {kind: 'ref', imageId: 'img', objectId: 'subj-1'};
+const pinnedRef = {kind: 'pinned-ref', imageId: 'img', objectId: 'subj-2', revision: 'rev-9'};
 
 function sample() {
   return new Perspective({
-    id: 'perspective:dev',
-    subject: ref('project:alpha'),
-    title: 'Development',
+    id: 'p:1',
+    subject: subjectRef,
+    title: 'Main',
+    layout: {split: 'horizontal', ratio: 0.5},
     presentations: [
-      {id: 'p:insp', kind: 'object/inspector', subject: ref('object:42'), context: {pane: 'left'}, state: {open: true}},
-      {id: 'p:graph', kind: 'graph/node', subject: pinned('object:7', 3)},
+      {id: 'a', kind: 'editor', subject: subjectRef, context: {line: 12}, state: {cursor: [1, 2]}},
+      {id: 'b', kind: 'inspector', subject: pinnedRef, context: {}, state: {}},
+      {id: 'c', kind: 'browser', subject: subjectRef, context: {pkg: 'core'}, state: {}},
     ],
-    layout: {kind: 'split', ratio: 0.5},
   });
 }
 
-test('a perspective encodes into a small object graph', () => {
-  const {perspectiveRecord, presentationRecords} = encodePerspective(sample());
-
-  // The Perspective record: subject is a ref slot; scalars are leaf slots.
-  assert.deepEqual(perspectiveRecord.slots.subject, ref('project:alpha'));
-  assert.equal(perspectiveRecord.slots.title.value, 'Development');
-  assert.equal(perspectiveRecord.slots.formatVersion.value, String(PERSPECTIVE_FORMAT_VERSION));
-
-  // One child record per presentation, ordered by ordinal.
-  assert.equal(presentationRecords.length, 2);
-  assert.equal(presentationRecords[0].slots.ordinal.value, '0');
-  assert.equal(presentationRecords[1].slots.ordinal.value, '1');
-  assert.deepEqual(presentationRecords[1].slots.subject, pinned('object:7', 3));
-});
-
-test('edges live in ref slots and scalars in leaf text/integer slots', () => {
-  const {perspectiveRecord, presentationRecords} = encodePerspective(sample());
-
-  // No metadata object anywhere in the encoded form.
-  assert.equal('metadata' in perspectiveRecord, false);
-  // The subject edge is a real ref Value in a slot.
-  assert.equal(perspectiveRecord.slots.subject.kind, 'ref');
-  // Scalars are leaf slots; none is a ref.
-  for (const name of ['title', 'layout', 'formatVersion']) {
-    assert.notEqual(perspectiveRecord.slots[name].kind, 'ref');
-  }
-  // context/state serialize to ref-free text.
-  assert.equal(typeof presentationRecords[0].slots.context.value, 'string');
-  assert.equal(presentationRecords[0].slots.context.value.includes('"kind":"ref"'), false);
-});
-
-test('the graph round-trips with order and pinned/unpinned preserved', () => {
-  const source = sample();
-  const {perspectiveRecord, presentationRecords} = encodePerspective(source);
-
-  // Simulate durable storage as JSON and back.
-  const stored = JSON.parse(JSON.stringify({perspectiveRecord, presentationRecords}));
-  // Shuffle to prove decode restores ordinal order.
-  const shuffled = [stored.presentationRecords[1], stored.presentationRecords[0]];
-
-  const decoded = decodePerspective({
-    id: source.id,
-    perspectiveRecord: stored.perspectiveRecord,
-    presentationRecords: shuffled,
-  });
-
-  assert.equal(decoded.id, source.id);
-  assert.deepEqual(decoded.subject, source.subject);
-  assert.equal(decoded.title, 'Development');
-  assert.deepEqual(decoded.layout, {kind: 'split', ratio: 0.5});
-  assert.deepEqual(decoded.presentations.map((p) => p.id), ['p:insp', 'p:graph']);
-  // Pinned stays pinned, unpinned stays unpinned.
-  assert.equal(decoded.presentations[0].subject.kind, 'ref');
-  assert.equal(decoded.presentations[1].subject.kind, 'pinned-ref');
-  assert.equal(decoded.presentations[1].subject.revision, '3');
-});
-
-test('a pinned subject on the Perspective itself stays pinned', () => {
-  const source = new Perspective({id: 'p:pinned', subject: pinned('image:root', 9)});
-  const {perspectiveRecord, presentationRecords} = encodePerspective(source);
-  const decoded = decodePerspective({id: 'p:pinned', perspectiveRecord, presentationRecords});
-
-  assert.equal(decoded.subject.kind, 'pinned-ref');
-  assert.equal(decoded.subject.revision, '9');
-});
-
-test('duplicate ordinals keep supply order (stable sort)', () => {
-  const {perspectiveRecord, presentationRecords} = encodePerspective(sample());
-  // Force both children to ordinal 0; Node's sort is stable, so supply order wins.
-  const colliding = presentationRecords.map((record) => ({
-    slots: {...record.slots, ordinal: {kind: 'integer', value: '0'}},
+// Encode a Perspective the way the adapter would: phase 1 (children), then
+// phase 3 (Perspective with the child refs). Returns the records plus the
+// child refs (simulating the ids the creation step would mint).
+function encodeGraph(perspective, childRefs) {
+  const presentationRecords = encodePresentations(perspective);
+  const refs = childRefs ?? presentationRecords.map((_, i) => ({
+    kind: 'ref', imageId: 'img', objectId: `child-${i}`,
   }));
-  const decoded = decodePerspective({id: 'p', perspectiveRecord, presentationRecords: colliding});
+  const perspectiveRecord = encodePerspectiveRecord(perspective, refs);
+  return {perspectiveRecord, presentationRecords, childRefs: refs};
+}
 
-  assert.deepEqual(decoded.presentations.map((p) => p.id), ['p:insp', 'p:graph']);
-});
+// A resolveChild that serves records by ref, simulating the adapter's getObject.
+function resolverFor(presentationRecords, childRefs) {
+  const byRef = new Map(presentationRecords.map((rec, i) => [childRefs[i].objectId, rec]));
+  return async (childRef) => {
+    const rec = byRef.get(childRef.objectId);
+    if (!rec) throw new Error(`no such child ${childRef.objectId}`);
+    return rec;
+  };
+}
 
-test('an empty perspective is a valid, round-trippable state', () => {
-  const empty = new Perspective({id: 'p:empty', subject: ref('image:root')});
-  const {perspectiveRecord, presentationRecords} = encodePerspective(empty);
-
-  assert.equal(presentationRecords.length, 0);
-  const decoded = decodePerspective({id: 'p:empty', perspectiveRecord, presentationRecords});
-  assert.deepEqual(decoded.presentations, []);
-  assert.equal(decoded.title, null);
-});
-
-test('a non-ref subject is rejected rather than silently dropped', () => {
-  const bad = new Perspective({id: 'bad', subject: {objectRef: 'object:1'}});
-  assert.throws(() => encodePerspective(bad), /must be an image ref/);
-});
-
-test('a ref hidden in context/state/layout is rejected before it reaches a text slot', () => {
-  const withRefContext = new Perspective({
-    id: 'p',
-    subject: ref('o'),
-    presentations: [{id: 'x', kind: 'k', subject: ref('o'), context: {see: ref('leak')}}],
-  });
-  assert.throws(() => encodePerspective(withRefContext), /must not contain a ref/);
-
-  const withRefLayout = new Perspective({id: 'p', subject: ref('o'), layout: {target: pinned('o', 1)}});
-  assert.throws(() => encodePerspective(withRefLayout), /must not contain a ref/);
-});
-
-test('formatVersion is an integer slot with a decimal-string payload', () => {
-  const {perspectiveRecord} = encodePerspective(sample());
-  assert.deepEqual(perspectiveRecord.slots.formatVersion, {kind: 'integer', value: '2'});
-});
-
-test('an unknown formatVersion is rejected, including abandoned v1', () => {
-  const {perspectiveRecord, presentationRecords} = encodePerspective(sample());
-
-  const v3 = JSON.parse(JSON.stringify(perspectiveRecord));
-  v3.slots.formatVersion = {kind: 'integer', value: '3'};
-  assert.throws(
-    () => decodePerspective({id: 'p', perspectiveRecord: v3, presentationRecords}),
-    /unsupported perspective formatVersion/,
-  );
-
-  // v1 (nested-array form) is abandoned: rejected, not migrated.
-  const v1 = JSON.parse(JSON.stringify(perspectiveRecord));
-  v1.slots.formatVersion = {kind: 'integer', value: '1'};
-  assert.throws(
-    () => decodePerspective({id: 'p', perspectiveRecord: v1, presentationRecords}),
-    /unsupported perspective formatVersion/,
-  );
-});
-
-test('decoding never produces authority from a ref', () => {
-  const {perspectiveRecord, presentationRecords} = encodePerspective(sample());
-  const decoded = decodePerspective({id: 'p', perspectiveRecord, presentationRecords});
-
-  assert.deepEqual(Object.keys(decoded.subject).sort(), ['imageId', 'kind', 'objectId']);
-  for (const key of Object.keys(decoded)) {
-    assert.doesNotMatch(key, /author|grant|token|capab|permission/i);
+test('encodePerspectiveRecord holds scalars in leaf slots and the ordered child refs in the indexed part', () => {
+  const {perspectiveRecord, presentationRecords, childRefs} = encodeGraph(sample());
+  assert.equal(perspectiveRecord.slots.title.value, 'Main');
+  assert.equal(perspectiveRecord.slots.layout.value, JSON.stringify({split: 'horizontal', ratio: 0.5}));
+  assert.equal(perspectiveRecord.slots.formatVersion.value, String(PERSPECTIVE_FORMAT_VERSION));
+  assert.equal(perspectiveRecord.slots.subject, subjectRef);
+  // The indexed part carries the ordered refs, in presentation order.
+  assert.deepEqual(perspectiveRecord.indexed, childRefs);
+  // No ordinal or perspective back-edge on the children (single owner of order/membership).
+  for (const rec of presentationRecords) {
+    assert.ok(!('ordinal' in rec.slots));
+    assert.ok(!('perspective' in rec.slots));
   }
 });
 
-test('no session or behavior leaks into the durable form', () => {
+test('presentation children carry scalars as leaf slots and subjects as refs', () => {
+  const {presentationRecords} = encodeGraph(sample());
+  assert.equal(presentationRecords.length, 3);
+  const [a, b] = presentationRecords;
+  assert.equal(a.slots.subject, subjectRef);
+  assert.equal(b.slots.subject, pinnedRef);
+  assert.equal(a.slots.id.value, 'a');
+  assert.equal(a.slots.kind.value, 'editor');
+  assert.equal(a.slots.context.value, JSON.stringify({line: 12}));
+  assert.equal(a.slots.state.value, JSON.stringify({cursor: [1, 2]}));
+  assert.equal(b.slots.context.value, '{}');
+});
+
+test('round trip preserves identity, order, refs and JSON payloads', async () => {
   const source = sample();
-  const {perspectiveRecord, presentationRecords} = encodePerspective(source);
-  const blob = JSON.stringify({perspectiveRecord, presentationRecords});
+  const {perspectiveRecord, presentationRecords, childRefs} = encodeGraph(source);
+  const decoded = await decodePerspective({
+    id: 'p:1',
+    perspectiveRecord,
+    resolveChild: resolverFor(presentationRecords, childRefs),
+  });
+  assert.ok(decoded instanceof Perspective);
+  assert.equal(decoded.id, 'p:1');
+  assert.equal(decoded.subject, subjectRef);
+  assert.equal(decoded.title, 'Main');
+  assert.deepEqual(decoded.layout, {split: 'horizontal', ratio: 0.5});
+  assert.deepEqual(
+    decoded.presentations.map((p) => p.id),
+    ['a', 'b', 'c'],
+    'presentation order follows the indexed part',
+  );
+  assert.equal(decoded.presentations[1].subject, pinnedRef);
+  assert.deepEqual(decoded.presentations[0].context, {line: 12});
+  assert.deepEqual(decoded.presentations[0].state, {cursor: [1, 2]});
+});
 
-  assert.equal(blob.includes('function'), false);
-  for (const record of presentationRecords) {
-    // Only the data slots exist; no callbacks, renderers or sessions.
-    assert.deepEqual(
-      Object.keys(record.slots).sort(),
-      ['context', 'id', 'kind', 'ordinal', 'state', 'subject'],
-    );
-  }
+test('decode enumerates children from the indexed part (forward enumeration, no supplied list)', async () => {
+  // Non-trivial order: the indexed part is [c, a, b].
+  const source = new Perspective({
+    id: 'p:x', subject: subjectRef, title: null, layout: {},
+    presentations: [
+      {id: 'c', kind: 'browser', subject: subjectRef, context: {}, state: {}},
+      {id: 'a', kind: 'editor', subject: subjectRef, context: {}, state: {}},
+      {id: 'b', kind: 'inspector', subject: subjectRef, context: {}, state: {}},
+    ],
+  });
+  const {perspectiveRecord, presentationRecords, childRefs} = encodeGraph(source);
+  const decoded = await decodePerspective({
+    id: 'p:x',
+    perspectiveRecord,
+    resolveChild: resolverFor(presentationRecords, childRefs),
+  });
+  assert.deepEqual(decoded.presentations.map((p) => p.id), ['c', 'a', 'b']);
+});
+
+test('an empty Perspective (zero presentations) round-trips', async () => {
+  const empty = new Perspective({id: 'p:e', subject: subjectRef, title: null, layout: {}, presentations: []});
+  const {perspectiveRecord} = encodeGraph(empty, []);
+  assert.deepEqual(perspectiveRecord.indexed, []);
+  const decoded = await decodePerspective({
+    id: 'p:e',
+    perspectiveRecord,
+    resolveChild: async () => { throw new Error('should not resolve any child'); },
+  });
+  assert.deepEqual(decoded.presentations, []);
+});
+
+test('a non-durable (non-ref) subject is rejected at encode', () => {
+  const bad = new Perspective({
+    id: 'p:bad', subject: {name: 'in-memory'}, title: null, layout: {},
+    presentations: [{id: 'x', kind: 'editor', subject: subjectRef, context: {}, state: {}}],
+  });
+  assert.throws(() => encodePerspectiveRecord(bad, [{kind: 'ref', imageId: 'img', objectId: 'c0'}]), /must be an image ref/);
+});
+
+test('refs hidden in context, state or layout are rejected', () => {
+  const hidden = {kind: 'ref', imageId: 'img', objectId: 'sneaky'};
+  const withRefContext = new Perspective({
+    id: 'p', subject: subjectRef, title: null, layout: {},
+    presentations: [{id: 'x', kind: 'editor', subject: subjectRef, context: {inner: hidden}, state: {}}],
+  });
+  assert.throws(() => encodePresentations(withRefContext), /must not contain a ref/);
+
+  const withRefLayout = new Perspective({id: 'p', subject: subjectRef, title: null, layout: {bad: hidden}, presentations: []});
+  assert.throws(() => encodePerspectiveRecord(withRefLayout, []), /must not contain a ref/);
+});
+
+test('formatVersion is 3; versions 1 and 2 are rejected at decode', async () => {
+  const {perspectiveRecord} = encodeGraph(sample());
+  assert.equal(perspectiveRecord.slots.formatVersion.value, '3');
+
+  const v2 = {...perspectiveRecord, slots: {...perspectiveRecord.slots, formatVersion: {kind: 'integer', value: '2'}}};
+  await assert.rejects(
+    () => decodePerspective({id: 'p', perspectiveRecord: v2, resolveChild: async () => ({})}),
+    /unsupported perspective formatVersion/,
+  );
+
+  const v1 = {...perspectiveRecord, slots: {...perspectiveRecord.slots, formatVersion: {kind: 'integer', value: '1'}}};
+  await assert.rejects(
+    () => decodePerspective({id: 'p', perspectiveRecord: v1, resolveChild: async () => ({})}),
+    /unsupported perspective formatVersion/,
+  );
+});
+
+test('decode yields a Perspective and nothing else (no authority, no extra surface)', async () => {
+  const {perspectiveRecord, presentationRecords, childRefs} = encodeGraph(sample());
+  const decoded = await decodePerspective({
+    id: 'p', perspectiveRecord, resolveChild: resolverFor(presentationRecords, childRefs),
+  });
+  assert.deepEqual(Object.keys(decoded).sort(), ['id', 'layout', 'presentations', 'subject', 'title']);
+});
+
+test('childRefs length must match the presentation count at encode', () => {
+  const source = sample();
+  assert.throws(
+    () => encodePerspectiveRecord(source, [{kind: 'ref', imageId: 'img', objectId: 'c0'}]),
+    /does not match/,
+  );
+});
+
+test('a non-decimal formatVersion is rejected', async () => {
+  const {perspectiveRecord} = encodeGraph(sample());
+  const bad = {...perspectiveRecord, slots: {...perspectiveRecord.slots, formatVersion: {kind: 'integer', value: '0x3'}}};
+  await assert.rejects(
+    () => decodePerspective({id: 'p', perspectiveRecord: bad, resolveChild: async () => ({})}),
+    /decimal-string integer/,
+  );
 });
