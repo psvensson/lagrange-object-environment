@@ -19,7 +19,9 @@ This repository owns the graphical environment plus the human-facing Project/his
 
 Success: the environment can represent its semantic state without inventing storage, Project, history, authorization or graphics-object machinery.
 
-## Phase 1 — first live object loop
+## Phase 1 — first live object loop ✅ **COMPLETE**
+
+_All deliverables landed; the success criterion is proven by `test/phase1-e2e.integration.test.js` (PR #19). Phase 2 begins on a proven semantic core._
 
 Build the smallest end-to-end experience against a real/mock Lagrange Image:
 
@@ -39,14 +41,14 @@ Deliverables:
 
 - [x] image client adapter using only public `lagrange-images` exports (`src/image-client-adapter.js`)
 - [x] observation/subscription abstraction (ADR 0009; `src/image-observation.js`)
-- [ ] presentation registry/discovery
-- [ ] command registry/discovery
-- [ ] generic object inspector
-- [ ] generic object/reference navigation
-- [ ] explicit unavailable/unauthorized reference presentation
+- [x] presentation registry/discovery (`src/presentation-registry.js`)
+- [x] command registry/discovery (`src/command-registry.js`)
+- [x] generic object inspector (`src/object-navigator.js` + `src/object-presentation-providers.js`)
+- [x] generic object/reference navigation (`src/object-navigator.js`)
+- [x] explicit unavailable/unauthorized reference presentation (`src/object-presentation-providers.js`)
 - [x] first Perspective load/save round trip as ordinary image data (ADR 0012; `src/image-client-adapter.js`)
 
-Success: manipulating an object through the environment demonstrably manipulates the image rather than a shadow UI model.
+Success: manipulating an object through the environment demonstrably manipulates the image rather than a shadow UI model. **Proven by the Phase 1 end-to-end proof (`test/phase1-e2e.integration.test.js`, PR #19): the full loop — open → present (discovered) → inspect → navigate a stored ref → command (discovered) → invoke through `CommandDispatcher` → authorized in-place mutation → observe → presentation updates — runs against the real runtime, and a shadow model cannot satisfy it.**
 
 ## Phase 2 — composition and first renderer
 
