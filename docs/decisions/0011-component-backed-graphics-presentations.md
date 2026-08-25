@@ -8,7 +8,7 @@ Accepted — architectural direction; no renderer implementation is claimed.
 
 The environment needs to grow from text/object tooling into diagrams, spatial views, visualization and real 3D without becoming a collection of embedded applications or choosing one engine as the architecture.
 
-The WebAssembly Component Model now has a credible portable graphics direction: `wasi:webgpu` expresses low-level GPU access through WIT, while the `wasi-gfx` ecosystem is developing independently versioned surface/frame-buffer interfaces plus native and browser hosts. Lagrange Images ADR 0062 adopts those interface families as the preferred low-level direction without making graphics part of the durable image model.
+The WebAssembly Component Model now has a credible portable graphics direction: `wasi:webgpu` expresses low-level GPU access through WIT, while the `wasi-gfx` ecosystem is developing independently versioned surface/frame-buffer interfaces plus native and browser hosts. Lagrange Images ADR 0063 adopts those interface families as the preferred low-level direction without making graphics part of the durable image model.
 
 That lets this repository make a stronger decision than “the renderer may eventually use WebGPU.” A 3D view can be an ordinary Presentation whose renderer happens to be a portable Component.
 

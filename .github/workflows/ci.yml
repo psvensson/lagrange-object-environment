@@ -28,6 +28,19 @@ jobs:
         run: CI= npm install
       - working-directory: lagrange-object-environment
         run: npm test
+      - name: Browser WebGPU proof (software SwiftShader, no hardware GPU, no display compositor)
+        working-directory: lagrange-object-environment
+        # Runs the GATING proof under Xvfb: the real triangle Component renders
+        # through its exact WIT imports into a host-owned TextureRenderTarget,
+        # with deterministic pixel read-back (copyTextureToBuffer) that does
+        # not depend on the on-screen compositor. The on-screen canvas PIXEL
+        # proof is a manual real-display test (test:browser:canvas), not CI.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+          xvfb-run -a -s "-screen 0 1280x1024x24" npm run test:browser
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
       - name: Verify provider-independent Beads bootstrap
         shell: bash
         working-directory: lagrange-object-environment
