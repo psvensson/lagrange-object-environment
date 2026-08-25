@@ -34,6 +34,9 @@ const IDS = Object.freeze({
   interfaceId: 'probe-create-interface',
   bindingId: 'probe-create-binding',
   blockId: 'probe-create-block',
+  mutationInterfaceId: 'probe-mutate-interface',
+  mutationBindingId: 'probe-mutate-binding',
+  mutationBlockId: 'probe-mutate-block',
 });
 
 // Ids for the Perspective schema (ADR 0012). Distinct image ids from the probe.
@@ -64,10 +67,12 @@ async function setup() {
     defineClass: imagesApi.defineClass,
     installCallableInterfaceV2: imagesApi.installCallableInterfaceV2,
     installImageCreationBinding: imagesApi.installImageCreationBinding,
+    installImageMutationBinding: imagesApi.installImageMutationBinding,
     findSmalltalkKernel: imagesApi.findSmalltalkKernel,
     objectRef: imagesApi.objectRef,
     objectResource: imagesApi.objectResource,
     parseObjectResource: imagesApi.parseObjectResource,
+    objectVersionToken: imagesApi.objectVersionToken,
     textValue: imagesApi.textValue,
     packCompositeValue: imagesApi.packCompositeValue,
     normalizeTypeDeclarations: imagesApi.normalizeTypeDeclarations,
@@ -97,10 +102,12 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
         defineClass: imagesApi.defineClass,
         installCallableInterfaceV2: imagesApi.installCallableInterfaceV2,
         installImageCreationBinding: imagesApi.installImageCreationBinding,
+        installImageMutationBinding: imagesApi.installImageMutationBinding,
         findSmalltalkKernel: imagesApi.findSmalltalkKernel,
         objectRef: imagesApi.objectRef,
         objectResource: imagesApi.objectResource,
         parseObjectResource: imagesApi.parseObjectResource,
+        objectVersionToken: imagesApi.objectVersionToken,
         textValue: imagesApi.textValue,
         packCompositeValue: imagesApi.packCompositeValue,
         normalizeTypeDeclarations: imagesApi.normalizeTypeDeclarations,
@@ -344,8 +351,8 @@ test('createImageClientAdapter validates services and helpers (unit, no runtime)
   const good = {
     images: {}, invocations: {}, executor: {},
     defineClass: () => {}, installCallableInterfaceV2: () => {}, installImageCreationBinding: () => {},
-    findSmalltalkKernel: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
-    textValue: () => {}, packCompositeValue: () => {}, normalizeTypeDeclarations: () => {},
+    installImageMutationBinding: () => {}, findSmalltalkKernel: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
+    objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, normalizeTypeDeclarations: () => {},
   };
   assert.ok(createImageClientAdapter(good));
   const missing = {...good};
@@ -357,8 +364,8 @@ test('ensureSchema validates its ids eagerly (unit)', async () => {
   const good = {
     images: {}, invocations: {}, executor: {},
     defineClass: () => {}, installCallableInterfaceV2: () => {}, installImageCreationBinding: () => {},
-    findSmalltalkKernel: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
-    textValue: () => {}, packCompositeValue: () => {}, normalizeTypeDeclarations: () => {},
+    installImageMutationBinding: () => {}, findSmalltalkKernel: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
+    objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, normalizeTypeDeclarations: () => {},
   };
   const adapter = createImageClientAdapter(good);
   await assert.rejects(adapter.ensureSchema('img', {}), /ids\.shapeId/);

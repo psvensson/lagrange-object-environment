@@ -48,6 +48,23 @@ const PROBE_TYPE_DECLARATIONS = Object.freeze({
   }),
 });
 
+// The probe mutation lane (image-mutation-binding/v1, ADR 0042/0010): writes a
+// leaf slot on an EXISTING object under object/write + an optimistic-concurrency
+// version token. Only the leaf title is mutable here (v1 slot writes are
+// leaf-only); the type carries just the mutable field.
+const PROBE_MUTATION_TYPE_NAME = 'probe-mutation';
+const PROBE_MUTATION_TYPE_DECLARATIONS = Object.freeze({
+  [PROBE_MUTATION_TYPE_NAME]: Object.freeze({
+    kind: 'record',
+    fields: Object.freeze([
+      Object.freeze({name: 'title', type: 'string'}),
+    ]),
+  }),
+});
+const PROBE_MUTATION_FIELDS = Object.freeze([
+  Object.freeze({name: 'title', slot: 'probe-title'}),
+]);
+
 // --- Perspective schema (ADR 0012 indexed form, formatVersion 3) -------------
 //
 // The Perspective object: leaf slots for scalars, plus an ordered INDEXED part
@@ -157,16 +174,18 @@ function createImageClientAdapter(client) {
     defineClass,
     installCallableInterfaceV2,
     installImageCreationBinding,
+    installImageMutationBinding,
     findSmalltalkKernel,
     objectRef,
     objectResource,
     parseObjectResource,
+    objectVersionToken,
     textValue,
     packCompositeValue,
     normalizeTypeDeclarations,
   } = client;
 
-  for (const [name, fn] of Object.entries({defineClass, installCallableInterfaceV2, installImageCreationBinding, findSmalltalkKernel, objectRef, objectResource, parseObjectResource, textValue, packCompositeValue, normalizeTypeDeclarations})) {
+  for (const [name, fn] of Object.entries({defineClass, installCallableInterfaceV2, installImageCreationBinding, installImageMutationBinding, findSmalltalkKernel, objectRef, objectResource, parseObjectResource, objectVersionToken, textValue, packCompositeValue, normalizeTypeDeclarations})) {
     if (typeof fn !== 'function') {
       throw new TypeError(`lagrange-images client is missing required helper: ${name}`);
     }
@@ -185,11 +204,11 @@ function createImageClientAdapter(client) {
    * is a PRECONDITION: it is checked and reported, never silently installed on
    * a foreign image.
    */
-  async function ensureSchema(imageId, {shapeId, className, interfaceId, bindingId, blockId} = {}) {
+  async function ensureSchema(imageId, {shapeId, className, interfaceId, bindingId, blockId, mutationInterfaceId, mutationBindingId, mutationBlockId} = {}) {
     // Validate ids eagerly: a missing id would otherwise flow into the
     // substrate as undefined (or, for putShape, mint a random id and silently
     // break idempotence), surfacing a confusing error far from the cause.
-    for (const [key, value] of Object.entries({shapeId, className, interfaceId, bindingId, blockId})) {
+    for (const [key, value] of Object.entries({shapeId, className, interfaceId, bindingId, blockId, mutationInterfaceId, mutationBindingId, mutationBlockId})) {
       if (typeof value !== 'string' || value.length === 0) {
         throw new TypeError(`ensureSchema requires a non-empty ids.${key}`);
       }
@@ -242,7 +261,35 @@ function createImageClientAdapter(client) {
       });
     }
 
-    return Object.freeze({shape, classRecord, interfaceRef, blockRef: objectRef(imageId, blockId)});
+    // The mutation lane (image-mutation-binding/v1): writes a leaf slot on an
+    // existing object under object/write + a version token.
+    const mutationInterfaceRef = objectRef(imageId, mutationInterfaceId);
+    if (!(await images.getCodeArtifact(imageId, mutationInterfaceId))) {
+      await installCallableInterfaceV2({
+        images,
+        imageId,
+        functionName: 'mutate',
+        parameters: ['string', 'string', PROBE_MUTATION_TYPE_NAME],
+        result: 'string',
+        types: PROBE_MUTATION_TYPE_DECLARATIONS,
+        interfaceId: mutationInterfaceId,
+      });
+    }
+    if (!(await images.getBlock(imageId, mutationBlockId))) {
+      await installImageMutationBinding({
+        images,
+        callableInterface: mutationInterfaceRef,
+        imageId,
+        fields: PROBE_MUTATION_FIELDS,
+        bindingId: mutationBindingId,
+        blockId: mutationBlockId,
+      });
+    }
+
+    return Object.freeze({
+      shape, classRecord, interfaceRef, blockRef: objectRef(imageId, blockId),
+      mutationBlockRef: objectRef(imageId, mutationBlockId),
+    });
   }
 
   /**
@@ -265,6 +312,27 @@ function createImageClientAdapter(client) {
     // token itself remains the concurrency proof (ADR 0062 §6).
     const objectId = objectIdFromVersionToken(token, imageId);
     return Object.freeze({objectId, versionToken: token});
+  }
+
+  /**
+   * Mutate a leaf slot on an EXISTING object through the authorized mutation
+   * lane (image-mutation-binding/v1, ADR 0042/0010). Requires object/write on
+   * the target plus the current version token (optimistic concurrency). The
+   * token is read fresh here; the caller may pass a versionToken to surface a
+   * CommandConflictError on a stale write.
+   *
+   * Returns {objectId, versionToken} (the new object-scoped token).
+   */
+  async function mutateObject({imageId, objectId, value, authority, blockId, versionToken = null}) {
+    const token = versionToken ?? objectVersionToken(imageId, objectId, (await images.getObject(imageId, objectId))?._version);
+    const normalized = normalizeTypeDeclarations(PROBE_MUTATION_TYPE_DECLARATIONS);
+    const activation = await invocations.invokeBlock(objectRef(imageId, blockId), [
+      textValue(objectId),
+      textValue(token),
+      packCompositeValue(value, PROBE_MUTATION_TYPE_NAME, normalized),
+    ]);
+    const result = await executor.execute(activation, {authority});
+    return Object.freeze({objectId, versionToken: result?.value});
   }
 
   // Reads return the substrate's stored record; slot Values are already in the
@@ -516,6 +584,7 @@ function createImageClientAdapter(client) {
   const api = Object.freeze({
     ensureSchema,
     createObject,
+    mutateObject,
     ensurePerspectiveSchema,
     savePerspective,
     loadPerspective,
