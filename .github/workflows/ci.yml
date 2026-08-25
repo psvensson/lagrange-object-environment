@@ -13,14 +13,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: lagrange-object-environment
+      - name: Check out lagrange-images (sibling, for the real-runtime integration tests)
+        uses: actions/checkout@v4
+        with:
+          repository: psvensson/lagrange-images
+          path: lagrange-images
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - name: Install dependencies including Beads native binary
+        working-directory: lagrange-object-environment
         run: CI= npm install
-      - run: npm test
+      - working-directory: lagrange-object-environment
+        run: npm test
       - name: Verify provider-independent Beads bootstrap
         shell: bash
+        working-directory: lagrange-object-environment
         run: |
           set -euo pipefail
           before="$(sha256sum AGENTS.md)"
