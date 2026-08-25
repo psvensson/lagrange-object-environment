@@ -27,6 +27,10 @@ export {
   createCommandDispatcher,
 } from './command-dispatcher.js';
 
+export {createPresentationRegistry} from './presentation-registry.js';
+
+export {createCommandRegistry} from './command-registry.js';
+
 export {
   PROBE_SHAPE_SLOTS,
   PROBE_TYPE_DECLARATIONS,
