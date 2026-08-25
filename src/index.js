@@ -8,7 +8,8 @@ export {
 export {
   PERSPECTIVE_FORMAT_VERSION,
   decodePerspective,
-  encodePerspective,
+  encodePerspectiveRecord,
+  encodePresentations,
 } from './perspective-projection.js';
 
 export {

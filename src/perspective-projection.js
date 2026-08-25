@@ -2,24 +2,33 @@ import {Perspective} from './model.js';
 
 /**
  * Projection between the in-memory `Perspective` and its durable image
- * representation, per ADR 0012 (which supersedes the representation half of
- * ADR 0008).
+ * representation, per ADR 0012 (indexed form, formatVersion 3).
  *
  * A durable Perspective is a small OBJECT GRAPH: one Perspective object plus
  * one child object per presentation. All scalar data lives in leaf slots
- * (text/integer); all graph edges are ref slot Values; nothing is stored in
- * metadata.
+ * (text/integer); every graph edge is a ref slot Value or an indexed ref
+ * element; nothing is stored in metadata. Membership and ordering have exactly
+ * one owner: the Perspective's ordered indexed part.
  *
- * This module is the semantic core of the `ImageClientAdapter`'s
- * Perspective -> durable-image interaction. It is pure and renderer-independent:
- * it knows the Lagrange Images *Value contract* (tagged ref/pinned-ref/integer/
- * text records) but has no dependency on a running image, backend or session.
- * The adapter sequences the actual creates (Perspective first, then children)
- * and gathers children for decode.
+ * This module is pure and renderer-independent: it knows the Lagrange Images
+ * *Value contract* (tagged ref/pinned-ref/integer/text records) but has no
+ * dependency on a running image, backend or session.
+ *
+ * The encode is TWO-PHASE because the Perspective's indexed ref-list needs the
+ * child ids, which exist only after the children are created (substrate ADR
+ * 0064 §6: presentations first, the Perspective last — the Perspective is the
+ * commit point):
+ *   1. encodePresentations(perspective) -> presentationRecords[]
+ *   2. (adapter creates each child, collecting refs)
+ *   3. encodePerspectiveRecord(perspective, childRefs) -> perspectiveRecord
+ *
+ * Decode is indexed-driven: decodePerspective({id, perspectiveRecord,
+ * resolveChild}) reads the Perspective's indexed part to enumerate its
+ * children (forward enumeration restored) and assembles them in order.
  *
  * Invariants enforced here:
- *  - every edge is a ref slot Value; a ref never hides in a text slot (the
- *    serializer asserts context/state/layout are ref-free);
+ *  - every edge is a ref slot Value or indexed element; a ref never hides in a
+ *    text slot (the serializer asserts context/state/layout are ref-free);
  *  - a Perspective's durable subject is always a ref;
  *  - pinned refs keep their revision and unpinned refs stay unpinned;
  *  - decoding yields a Perspective and nothing else: no authority is created.
@@ -30,9 +39,9 @@ const VALUE_KIND = Object.freeze({
   PINNED_REF: 'pinned-ref',
 });
 
-// formatVersion 1 (ADR 0008 nested-array) was never durably written; it is
-// abandoned, not migrated. Readers reject anything but 2.
-const PERSPECTIVE_FORMAT_VERSION = 2;
+// Versions 1 and 2 were designed but never durably persisted; readers accept
+// only 3.
+const PERSPECTIVE_FORMAT_VERSION = 3;
 
 function isObjectRef(value) {
   return Boolean(
@@ -80,8 +89,7 @@ function requirePlainObject(value, label) {
 
 // A ref must never hide inside a value about to be serialized into a text slot
 // (the substrate's flat-walker rule: an edge in a leaf is invisible). Reject
-// anything ref-SHAPED (kind 'ref'/'pinned-ref'), not only well-formed refs, so
-// an imposter cannot smuggle a would-be edge past the guard.
+// anything ref-SHAPED (kind 'ref'/'pinned-ref'), not only well-formed refs.
 function assertRefFree(value, label) {
   if (value && typeof value === 'object' && (value.kind === VALUE_KIND.REF || value.kind === VALUE_KIND.PINNED_REF)) {
     throw new TypeError(`${label} must not contain a ref; graph edges belong in slots, not text`);
@@ -96,7 +104,6 @@ function assertRefFree(value, label) {
   return value;
 }
 
-// Serialize a ref-free JSON value to text for a leaf slot, and parse it back.
 function toTextSlot(value, label) {
   if (value === null || value === undefined) return '';
   requirePlainObject(value, label);
@@ -114,7 +121,6 @@ function fromTextSlot(text, label) {
 }
 
 function textValueOf(slot) {
-  // A text slot Value is {kind:'text', value}; tolerate a bare string too.
   if (typeof slot === 'string') return slot;
   if (slot && typeof slot === 'object' && slot.kind === 'text' && typeof slot.value === 'string') {
     return slot.value;
@@ -123,10 +129,8 @@ function textValueOf(slot) {
 }
 
 function integerOf(slot, label) {
-  // An integer Value is {kind:'integer', value:'<decimal>'}; parse, don't
-  // expect a JS number. Match the substrate's canonical form exactly
-  // (/^-?\d+$/, value/scalars.js): BigInt alone would accept hex, whitespace,
-  // signs and the empty string.
+  // An integer Value is {kind:'integer', value:'<decimal>'}; match the
+  // substrate's canonical form (/^-?\d+$/) rather than BigInt's leniency.
   if (slot && typeof slot === 'object' && slot.kind === 'integer' && typeof slot.value === 'string') {
     if (!/^-?\d+$/.test(slot.value)) {
       throw new TypeError(`${label} must be a decimal-string integer Value`);
@@ -141,88 +145,105 @@ function integerSlot(n) {
   return {kind: 'integer', value: BigInt(n).toString(10)};
 }
 
-function encodePresentation(presentation, index) {
-  requirePlainObject(presentation, `presentations[${index}]`);
-  const {id, kind, subject, context = {}, state = {}} = presentation;
-  requireNonEmptyString(id, `presentations[${index}].id`);
-  requireNonEmptyString(kind, `presentations[${index}].kind`);
-  requireRefSubject(subject, `presentations[${index}].subject`);
-  requirePlainObject(context, `presentations[${index}].context`);
-  requirePlainObject(state, `presentations[${index}].state`);
-  return Object.freeze({
-    slots: Object.freeze({
-      subject,
-      id: {kind: 'text', value: id},
-      kind: {kind: 'text', value: kind},
-      context: {kind: 'text', value: toTextSlot(context, `presentations[${index}].context`)},
-      state: {kind: 'text', value: toTextSlot(state, `presentations[${index}].state`)},
-      ordinal: integerSlot(index),
-    }),
-  });
+function textSlot(s) {
+  return {kind: 'text', value: s};
 }
 
 /**
- * Encode an in-memory Perspective into the small object graph of ADR 0012.
+ * Phase 1: encode each presentation into its child record (slots only; the
+ * record carries no membership or order — those live on the Perspective).
  *
- * Returns { perspectiveRecord, presentationRecords } where perspectiveRecord is
- * { slots: { subject, title, layout, formatVersion } } and each
- * presentationRecord is { slots: { subject, id, kind, context, state, ordinal } }.
- * The child's `perspective` membership edge is filled by the adapter once the
- * Perspective object exists (the Perspective is created first, empty-but-valid).
+ * Returns presentationRecords[] in the Perspective's presentation order.
  */
-function encodePerspective(perspective) {
+function encodePresentations(perspective) {
   if (!(perspective instanceof Perspective)) {
-    throw new TypeError('encodePerspective expects a Perspective');
+    throw new TypeError('encodePresentations expects a Perspective');
   }
+  return Object.freeze(perspective.presentations.map((presentation, index) => {
+    requirePlainObject(presentation, `presentations[${index}]`);
+    const {id, kind, subject, context = {}, state = {}} = presentation;
+    requireNonEmptyString(id, `presentations[${index}].id`);
+    requireNonEmptyString(kind, `presentations[${index}].kind`);
+    requireRefSubject(subject, `presentations[${index}].subject`);
+    requirePlainObject(context, `presentations[${index}].context`);
+    requirePlainObject(state, `presentations[${index}].state`);
+    return Object.freeze({
+      slots: Object.freeze({
+        subject,
+        id: textSlot(id),
+        kind: textSlot(kind),
+        context: textSlot(toTextSlot(context, `presentations[${index}].context`)),
+        state: textSlot(toTextSlot(state, `presentations[${index}].state`)),
+      }),
+    });
+  }));
+}
+
+/**
+ * Phase 3: encode the Perspective record, given the refs of its (already
+ * created) children in presentation order.
+ *
+ * childRefs: an array of ref/pinned-ref Values, one per presentation, in the
+ * same order encodePresentations produced them. Returns
+ * { slots: {subject, title, layout, formatVersion}, indexed: childRefs }.
+ */
+function encodePerspectiveRecord(perspective, childRefs) {
+  if (!(perspective instanceof Perspective)) {
+    throw new TypeError('encodePerspectiveRecord expects a Perspective');
+  }
+  if (!Array.isArray(childRefs)) {
+    throw new TypeError('childRefs must be an array of ref Values');
+  }
+  if (childRefs.length !== perspective.presentations.length) {
+    throw new TypeError(
+      `childRefs length ${childRefs.length} does not match ${perspective.presentations.length} presentations`,
+    );
+  }
+  childRefs.forEach((childRef, index) => requireRefSubject(childRef, `childRefs[${index}]`));
+
   const subject = requireRefSubject(perspective.subject, 'subject');
 
-  const perspectiveRecord = Object.freeze({
+  return Object.freeze({
     slots: Object.freeze({
       subject,
-      title: {kind: 'text', value: perspective.title ?? ''},
-      layout: {kind: 'text', value: toTextSlot(perspective.layout ?? {}, 'layout')},
+      title: textSlot(perspective.title ?? ''),
+      layout: textSlot(toTextSlot(perspective.layout ?? {}, 'layout')),
       formatVersion: integerSlot(PERSPECTIVE_FORMAT_VERSION),
     }),
-  });
-
-  const presentationRecords = perspective.presentations.map((p, index) => encodePresentation(p, index));
-
-  return Object.freeze({
-    perspectiveRecord,
-    presentationRecords: Object.freeze(presentationRecords),
+    indexed: Object.freeze([...childRefs]),
   });
 }
 
-function decodePresentation(record, index) {
-  requirePlainObject(record, `presentationRecords[${index}]`);
-  const slots = requirePlainObject(record.slots, `presentationRecords[${index}].slots`);
-  const subject = requireRefSubject(slots.subject, `presentationRecords[${index}].slots.subject`);
+function decodePresentation(record, label) {
+  const slots = requirePlainObject(record?.slots, `${label}.slots`);
+  const subject = requireRefSubject(slots.subject, `${label}.slots.subject`);
   return Object.freeze({
     id: textValueOf(slots.id),
     kind: textValueOf(slots.kind),
     subject,
-    context: Object.freeze(fromTextSlot(textValueOf(slots.context), `presentationRecords[${index}].context`)),
-    state: Object.freeze(fromTextSlot(textValueOf(slots.state), `presentationRecords[${index}].state`)),
-    ordinal: integerOf(slots.ordinal, `presentationRecords[${index}].ordinal`),
+    context: Object.freeze(fromTextSlot(textValueOf(slots.context), `${label}.context`)),
+    state: Object.freeze(fromTextSlot(textValueOf(slots.state), `${label}.state`)),
   });
 }
 
 /**
- * Reassemble a Perspective from its durable object graph.
+ * Reassemble a Perspective from its durable object graph, driven by the
+ * Perspective's indexed part.
  *
- * { id, perspectiveRecord, presentationRecords } -> Perspective. The adapter
- * gathers the child records (there is no authorized forward enumeration until
- * lagrange-images#119) and supplies them here; they are sorted by ordinal.
- * Decoding is data-only: no authority, no live refs, no session state.
+ * { id, perspectiveRecord, resolveChild } -> Promise<Perspective>
+ *   perspectiveRecord: the Perspective's stored record (slots + indexed).
+ *   resolveChild: async (childRef) => childRecord. The adapter supplies it
+ *     (e.g. images.getObject); it is how the children are read.
  *
- * The child's `perspective` membership edge is written by the adapter (it is
- * what makes the child belong to this Perspective) but is intentionally NOT
- * read here: decode receives the children already gathered, so it does not
- * need to re-derive membership. decodePresentation therefore ignores any
- * `perspective` slot on a stored child record.
+ * Children are enumerated from perspectiveRecord.indexed in order (forward
+ * enumeration), each resolved and decoded. Decoding is data-only: no
+ * authority, no live refs, no session state.
  */
-function decodePerspective({id, perspectiveRecord, presentationRecords = []} = {}) {
+async function decodePerspective({id, perspectiveRecord, resolveChild} = {}) {
   requireNonEmptyString(id, 'durable perspective id');
+  if (typeof resolveChild !== 'function') {
+    throw new TypeError('decodePerspective requires a resolveChild function');
+  }
   const slots = requirePlainObject(perspectiveRecord?.slots, 'perspectiveRecord.slots');
 
   const version = integerOf(slots.formatVersion, 'slots.formatVersion');
@@ -232,15 +253,16 @@ function decodePerspective({id, perspectiveRecord, presentationRecords = []} = {
 
   const subject = requireRefSubject(slots.subject, 'slots.subject');
 
-  if (!Array.isArray(presentationRecords)) {
-    throw new TypeError('presentationRecords must be an array');
+  const childRefs = perspectiveRecord.indexed ?? [];
+  if (!Array.isArray(childRefs)) {
+    throw new TypeError('perspectiveRecord.indexed must be an array of ref Values');
   }
-  const presentations = presentationRecords
-    .map((record, index) => decodePresentation(record, index))
-    // Compare ordinals as BigInt: a position field must not round-trip through
-    // Number, which would collapse ordinals beyond MAX_SAFE_INTEGER.
-    .sort((a, b) => (a.ordinal < b.ordinal ? -1 : a.ordinal > b.ordinal ? 1 : 0))
-    .map(({ordinal, ...presentation}) => Object.freeze(presentation));
+  const presentations = [];
+  for (const [index, childRef] of childRefs.entries()) {
+    requireRefSubject(childRef, `perspectiveRecord.indexed[${index}]`);
+    const childRecord = await resolveChild(childRef);
+    presentations.push(decodePresentation(childRecord, `indexed[${index}]`));
+  }
 
   return new Perspective({
     id,
@@ -254,6 +276,7 @@ function decodePerspective({id, perspectiveRecord, presentationRecords = []} = {
 export {
   PERSPECTIVE_FORMAT_VERSION,
   decodePerspective,
-  encodePerspective,
+  encodePerspectiveRecord,
+  encodePresentations,
   isRef,
 };
