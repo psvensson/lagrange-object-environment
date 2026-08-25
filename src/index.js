@@ -38,6 +38,12 @@ export {
   createUnavailableRefProvider,
 } from './object-presentation-providers.js';
 
+export {RendererError, RendererResourceLostError} from './renderer-errors.js';
+
+export {RENDERER_ADAPTER_METHODS, createCompositor} from './compositor.js';
+
+export {createFakeRendererAdapter} from './fake-renderer-adapter.js';
+
 export {
   PROBE_SHAPE_SLOTS,
   PROBE_TYPE_DECLARATIONS,
