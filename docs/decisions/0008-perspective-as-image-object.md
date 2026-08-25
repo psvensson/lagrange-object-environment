@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted
+**Amended** — the *representation* half of this ADR is superseded by [ADR 0012](0012-perspective-as-object-graph.md). ADR 0008's boundary and ownership decisions stand unchanged: the `ImageClientAdapter` owns the projection, the projection is pure/renderer-independent, and no authority is persisted.
+
+The single-object representation chosen here proved unimplementable through any authorized image lane (nested values and writable metadata are excluded by decided substrate invariants). ADR 0012 records the child-object-graph representation that replaced it. This document is retained for the decision history.
 
 ## Context
 

@@ -7,7 +7,7 @@ import {createCommandDispatcher} from './command-dispatcher.js';
  *
  * This module composes the three verified pure cores against a REAL
  * lagrange-images runtime:
- *   - perspective-projection.js  (ADR 0008)  [blocked on substrate gap 6tm]
+ *   - perspective-projection.js  (ADR 0012)  [child-object form; save/load planned]
  *   - image-observation.js       (ADR 0009)  -> observe()
  *   - command-dispatcher.js      (ADR 0010)  -> dispatch()
  *
@@ -17,10 +17,11 @@ import {createCommandDispatcher} from './command-dispatcher.js';
  * lives in an integration test that resolves the sibling repo.
  *
  * Scope honesty: this slice proves the live loop with a leaf/edge-shaped
- * object. It does NOT save/load Perspectives — ADR 0008's nested presentations
- * and JSON metadata cannot cross image-creation-binding/v1 (leaf fields, slots
- * only, metadata hardcoded {}). That is the downward-proposal gap tracked
- * separately; see the Bead graph.
+ * object. The ADR 0012 Perspective representation (a Perspective plus child
+ * presentation objects, using only leaf text/integer slots and ref edges) IS
+ * expressible through the current creation lane, but this adapter does NOT yet
+ * implement Perspective save/load — that wiring is future work, and the indexed
+ * ordering half awaits lagrange-images#119.
  */
 
 // A Perspective-class / probe record uses the ADR 0008 shape vocabulary, but
