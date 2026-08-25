@@ -1,0 +1,17 @@
+package lagrange:assets@0.1.0;
+
+/// The host provides durable asset bytes to the renderer Component at runtime.
+/// The renderer requests an asset by name; the host returns its bytes or an
+/// error. This is the asset-transfer seam: upstream wasi-gfx examples bake
+/// assets in at build time (include_bytes!); Lagrange loads them at runtime so
+/// a GLB chosen at Session time can reach the running Component.
+///
+/// Ownership: the host realization is BrowserRendererAdapter host wiring
+/// (src/browser-renderer/assets.js) — an injected byte source, NOT an asset
+/// store. The asset-bytes authority (which subsystem owns the durable bytes)
+/// is a separate concern (Bead lagrange-object-environment-0dm).
+interface provider {
+    /// Load an asset's bytes by name. Returns the bytes, or an error string
+    /// when the name is unknown / the bytes are unavailable.
+    load-glb: func(name: string) -> result<list<u8>, string>;
+}
