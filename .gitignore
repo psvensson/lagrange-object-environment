@@ -2,3 +2,6 @@ node_modules/
 coverage/
 .DS_Store
 *.log
+
+# Rust build cache for the renderer Component
+renderer-component/target/

@@ -1,5 +1,6 @@
 import {RendererResourceLostError} from '../renderer-errors.js';
 import {pushPendingRenderTarget} from './surface.js';
+import {registerAssetSource, clearAssetSource} from './assets.js';
 
 /**
  * BrowserRendererAdapter: a realization of the RendererAdapter contract
@@ -29,7 +30,7 @@ import {pushPendingRenderTarget} from './surface.js';
  * single-surface demo host violates.)
  */
 
-function createBrowserRendererAdapter({loadComponent, mount = null, createRenderTarget = null} = {}) {
+function createBrowserRendererAdapter({loadComponent, mount = null, createRenderTarget = null, resolveAssets = null} = {}) {
   if (typeof loadComponent !== 'function') {
     throw new TypeError('createBrowserRendererAdapter requires a loadComponent() factory that imports the transpiled renderer Component module');
   }
@@ -39,6 +40,11 @@ function createBrowserRendererAdapter({loadComponent, mount = null, createRender
   // null, each Surface defaults to a CanvasRenderTarget over its own canvas.
   // The Compositor and Presentation never know which realization is used.
   const makeRenderTarget = typeof createRenderTarget === 'function' ? createRenderTarget : null;
+  // Host wiring (optional): resolve a presentationDescriptor to the asset byte
+  // source (a Map<name, Uint8Array>) for THIS attach. Called per-attach so the
+  // durable bytes cross the host -> Component boundary at runtime; the source
+  // is injected wiring, NOT an ambient store (cleared on destroyAll).
+  const getAssets = typeof resolveAssets === 'function' ? resolveAssets : null;
 
   const surfaces = new Map(); // handle -> {surface|null, component, running, width, height}
   let nextHandle = 0;
@@ -99,6 +105,10 @@ function createBrowserRendererAdapter({loadComponent, mount = null, createRender
     if (entry.running) {
       throw new RendererResourceLostError('browser renderer: a presentation is already attached to this surface');
     }
+    // Host wiring: inject the asset byte source for THIS attach, before the
+    // Component starts (it calls load-glb inside start()). Per-attach, so a
+    // cold Component re-receives its durable bytes; cleared on destroyAll.
+    registerAssetSource(getAssets ? getAssets(presentationDescriptor) : null);
     // Host wiring: push the RenderTarget for the Surface the Component is
     // about to construct, so it is in place BEFORE the Component builds its
     // Context inside start() (the Context reads surface.renderTarget at
@@ -140,11 +150,12 @@ function createBrowserRendererAdapter({loadComponent, mount = null, createRender
   }
 
   // Host-side inspection (data-only upward): when the surface renders into a
-  // TextureRenderTarget, read its current frame back via copyTextureToBuffer
-  // and return red-pixel statistics. Deterministic under software/headless
-  // WebGPU. Returns null when the surface is not a readable texture target
-  // (e.g. a plain on-screen canvas) — that path is not pixel-verifiable in
-  // every environment.
+  // TextureRenderTarget, read its current frame back via copyTextureToBuffer.
+  // Returns the raw frame {data, width, height, bytesPerRow} so the caller can
+  // apply its own pixel predicate (red-triangle, shaded-mesh, ...), plus a
+  // convenience `red` count for the triangle proof. Deterministic under
+  // software/headless WebGPU. Returns null when the surface is not a readable
+  // texture target (e.g. a plain on-screen canvas).
   async function readRenderedPixels(surfaceHandle) {
     requireAlive();
     const entry = requireLive(surfaceHandle, 'readRenderedPixels');
@@ -160,7 +171,7 @@ function createBrowserRendererAdapter({loadComponent, mount = null, createRender
         if (data[i] > 120 && data[i + 1] < 100 && data[i + 2] < 100) red += 1;
       }
     }
-    return {red, width, height};
+    return {red, width, height, data, bytesPerRow};
   }
 
   async function resize(surfaceHandle, size) {
@@ -189,6 +200,9 @@ function createBrowserRendererAdapter({loadComponent, mount = null, createRender
       unmountCanvas(entry);
     }
     surfaces.clear();
+    // Session teardown: drop the asset byte source so a cold Component provably
+    // re-receives its bytes on the next attach (no ambient asset store).
+    clearAssetSource();
   }
 
   return Object.freeze({
