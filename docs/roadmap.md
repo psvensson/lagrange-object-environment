@@ -15,7 +15,7 @@ This repository owns the graphical environment plus the human-facing Project/his
 - [x] decide the minimal ordinary-image-object representation/protocol for durable Perspective (ADR 0008; `src/perspective-projection.js`)
 - [x] identify the public image observation/change-feed seam needed by live presentations (ADR 0009; `src/image-observation.js`)
 - [x] identify command invocation/transaction semantics without adding UI concerns to images (ADR 0010; `src/command-dispatcher.js`)
-- [x] establish Component-backed 2D/3D graphics as ordinary Presentations, with concrete GPU/surface/WIT hosting owned by `RendererAdapter` (ADR 0011; paired with `lagrange-images` ADR 0062)
+- [x] establish Component-backed 2D/3D graphics as ordinary Presentations, with concrete GPU/surface/WIT hosting owned by `RendererAdapter` (ADR 0011; paired with `lagrange-images` ADR 0063)
 
 Success: the environment can represent its semantic state without inventing storage, Project, history, authorization or graphics-object machinery.
 
@@ -66,10 +66,10 @@ This absorbs the old `lagrange-images` "Graphical environment" roadmap without i
 - [ ] selection/focus model linked to semantic subjects
 - [ ] command palette/context menu/key binding policy
 - [ ] Perspective composition persisted independently of Session mechanics
-- [ ] exact-version `wasi:webgpu` plus `wasi-gfx`-style surface interface experiment behind `RendererAdapter`
-- [ ] first Component-backed Presentation renders a minimal triangle without a Lagrange-specific GPU/scene ABI
+- [x] exact-version `wasi:webgpu` plus `wasi-gfx`-style surface interface experiment behind `RendererAdapter` — the real triangle Component (`wasi:webgpu/webgpu@0.3.0-rc.2` + `wasi-gfx:surface/*@0.2.0`, jco-transpiled) runs behind `BrowserRendererAdapter` (`src/browser-renderer/`), consuming ONLY the public `@wasi-gfx/wasi-gfx-shim/webgpu` host provider (pinned `0.1.0`); Lagrange owns the surface/multi-view/lifecycle. The renderer renders to a host-side **RenderTarget** realization the Component never sees (`src/browser-renderer/render-target.js`): `CanvasRenderTarget` (on-screen browser presentation) or `TextureRenderTarget` (headless/test/export, deterministic read-back) — the seam a future remote renderer plugs into.
+- [x] first Component-backed Presentation renders a minimal triangle without a Lagrange-specific GPU/scene ABI — pixel proof is split by environment: **CI (gating, Xvfb/headless SwiftShader)** verifies real Component → WIT → shim → `TextureRenderTarget` → triangle pixels, plus the `CanvasRenderTarget` two-surface/resize/teardown/recreate lifecycle, without canvas pixels (`test/browser/browser-proof.test.js`); the **full on-screen canvas pixel proof** is a manual real-display test (`npm run test:browser:canvas`), because reading back an on-screen canvas's WebGPU texture crashes Chrome+SwiftShader under Xvfb/headless (an environment limitation, not an implementation bug).
 - [ ] extend that proof to one small GLB/glTF-style asset or similarly meaningful 3D example
-- [ ] tear down and recreate the Session, proving GPU/device/surface handles are recreated rather than persisted
+- [x] tear down and recreate the Session, proving GPU/device/surface handles are recreated rather than persisted — proven in both the texture-target CI proof and the canvas lifecycle proof (fresh Session recreates the render view from durable intent).
 - [ ] route one semantic interaction from the Component-backed view through the ordinary Command -> authorized image-operation path
 
 Success: inspector/browser tools and Component-backed 2D/3D presentations can be arranged and restored through a Perspective without becoming applications, while concrete graphics resources remain transient renderer/session machinery.

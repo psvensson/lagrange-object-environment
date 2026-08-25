@@ -9,16 +9,22 @@
     ".": "./src/index.js"
   },
   "scripts": {
-    "test": "node --test",
+    "test": "node --test test/*.test.js",
+    "test:browser": "node --test test/browser/browser-proof.test.js",
+    "test:browser:canvas": "node --test test/browser/browser-proof.canvas.manual.test.js",
     "beads:init": "bd init --quiet --skip-agents",
     "beads:prime": "bd prime",
     "beads:ready": "bd ready --json",
     "beads:doctor": "bd doctor"
   },
   "devDependencies": {
-    "@beads/bd": "1.2.2"
+    "@beads/bd": "1.2.2",
+    "puppeteer-core": "25.9.0"
   },
   "engines": {
     "node": ">=22"
+  },
+  "dependencies": {
+    "@wasi-gfx/wasi-gfx-shim": "0.1.0"
   }
 }
