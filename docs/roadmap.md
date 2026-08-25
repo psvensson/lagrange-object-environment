@@ -37,14 +37,14 @@ connect as principal
 
 Deliverables:
 
-- [ ] image client adapter using only public `lagrange-images` exports
-- [ ] observation/subscription abstraction
+- [x] image client adapter using only public `lagrange-images` exports (`src/image-client-adapter.js`)
+- [x] observation/subscription abstraction (ADR 0009; `src/image-observation.js`)
 - [ ] presentation registry/discovery
 - [ ] command registry/discovery
 - [ ] generic object inspector
 - [ ] generic object/reference navigation
 - [ ] explicit unavailable/unauthorized reference presentation
-- [ ] first Perspective load/save round trip as ordinary image data
+- [x] first Perspective load/save round trip as ordinary image data (ADR 0012; `src/image-client-adapter.js`)
 
 Success: manipulating an object through the environment demonstrably manipulates the image rather than a shadow UI model.
 
