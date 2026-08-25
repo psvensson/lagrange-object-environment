@@ -25,3 +25,11 @@ export {
   classifyInvocationError,
   createCommandDispatcher,
 } from './command-dispatcher.js';
+
+export {
+  PROBE_SHAPE_SLOTS,
+  PROBE_TYPE_DECLARATIONS,
+  classIdFor,
+  createImageClientAdapter,
+  refToEdgeString,
+} from './image-client-adapter.js';
