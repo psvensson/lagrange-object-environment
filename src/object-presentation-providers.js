@@ -1,5 +1,5 @@
 import {Presentation} from './model.js';
-import {UNAVAILABLE_REF_KIND} from './object-navigator.js';
+import {UNAVAILABLE_REF_KIND, UNAUTHORIZED_REF_KIND} from './object-navigator.js';
 
 /**
  * The generic-object presentation providers: the first real consumers of
@@ -12,7 +12,9 @@ import {UNAVAILABLE_REF_KIND} from './object-navigator.js';
  * between them never races:
  *  - object-inspector presents a normal object subject (a ref with its record
  *    in context) as an inspector;
- *  - unavailable-ref presents a {kind: 'unavailable-ref'} subject explicitly.
+ *  - unavailable-ref presents a {kind: 'unavailable-ref'} subject explicitly;
+ *  - unauthorized-ref presents a {kind: 'unauthorized-ref'} subject explicitly,
+ *    distinctly from unavailable (a denied read is not "missing").
  *
  * Register them with a PresentationRegistry (fallbacks last, per the
  * registry's ordering contract). The Presentation remains the semantic result;
@@ -54,10 +56,10 @@ function createObjectInspectorProvider() {
 /**
  * The explicit unavailable-reference presentation. Presents a
  * {kind: 'unavailable-ref'} subject so a reference that cannot be read still
- * gets an explicit presentation rather than vanishing. (Today reads are the
- * unguarded host path, so only 'unavailable' is representable; an authorized
- * read lane — substrate follow-up — would let `reason` also distinguish
- * 'unauthorized'.)
+ * gets an explicit presentation rather than vanishing. With the authorized
+ * object/read lane (substrate ADR 0068) 'unavailable' now means exactly that —
+ * the object is missing or the read failed at the backend — and is distinct
+ * from 'unauthorized' (see the unauthorized-ref provider).
  */
 function createUnavailableRefProvider() {
   return Object.freeze({
@@ -75,4 +77,28 @@ function createUnavailableRefProvider() {
   });
 }
 
-export {createObjectInspectorProvider, createUnavailableRefProvider};
+/**
+ * The explicit unauthorized-reference presentation. Presents a
+ * {kind: 'unauthorized-ref'} subject so a reference whose read was DENIED is
+ * presented as "you may not read this", distinctly from "unavailable". The
+ * substrate enforces object/read before any existence check, so a denied read
+ * is unauthorized whether or not the object exists — this presentation never
+ * claims the object is missing.
+ */
+function createUnauthorizedRefProvider() {
+  return Object.freeze({
+    id: 'unauthorized-ref',
+    present(subject) {
+      if (!subject || subject.kind !== UNAUTHORIZED_REF_KIND) return null;
+      return new Presentation({
+        id: `unauthorized:${subject.objectId}`,
+        subject,
+        kind: 'unauthorized-reference',
+        context: {reason: subject.reason ?? 'unauthorized'},
+        state: {},
+      });
+    },
+  });
+}
+
+export {createObjectInspectorProvider, createUnavailableRefProvider, createUnauthorizedRefProvider};

@@ -18,22 +18,28 @@ import {Presentation} from './model.js';
  *
  * Invariants preserved:
  *  - A ref is never authority. `navigate` treats the ref as a mere locator and
- *    re-reads the object fresh; it never trusts the ref's existence. (Reads
- *    are the unguarded host path per substrate ADR 0064 §4, so a missing
- *    object reads as `null` — there is no authorized read lane to signal
- *    "unauthorized" today; see the substrate follow-up Bead.) A pinned-ref's
- *    revision is currently ignored on read: the read seam reads current state
- *    and has no revision parameter (substrate follow-up Bead), so navigation
- *    always shows current state, not the pinned revision.
+ *    re-reads the object fresh under EXPLICIT authority (the authorized
+ *    whole-record object/read lane, substrate ADR 0068) threaded per call; it
+ *    never trusts the ref's existence and never stores authority. The read is
+ *    authorized BEFORE any existence check, so a denied read is an
+ *    `unauthorized-ref` whether or not the object exists (no existence
+ *    oracle); an authorized read of a missing object is an `unavailable-ref`.
+ *    A pinned-ref's revision is currently ignored on read: the read seam reads
+ *    current state and has no revision parameter (substrate follow-up Bead), so
+ *    navigation always shows current state, not the pinned revision.
  *  - discoverable/applicable != authorized (ADR 0004). Commands are
  *    discovered by applicability only; authorization happens at dispatch,
  *    not here.
  */
 
 // The subject kinds the navigator materializes. A normal object subject is a
-// ref Value; an unavailable subject is a distinct kind so the unavailable-ref
-// provider never races the inspector (they are disjoint by subject kind).
+// ref Value; an unavailable or unauthorized subject is a distinct kind so the
+// fallback providers never race the inspector (they are disjoint by subject
+// kind). `unauthorized-ref` (denied read) and `unavailable-ref` (missing or
+// backend failure) are kept distinct so a renderer can present "you may not
+// read this" separately from "this is not there / the read failed".
 const UNAVAILABLE_REF_KIND = 'unavailable-ref';
+const UNAUTHORIZED_REF_KIND = 'unauthorized-ref';
 
 function isRef(value) {
   return Boolean(
@@ -43,7 +49,7 @@ function isRef(value) {
   );
 }
 
-function createObjectNavigator({adapter, presentationRegistry, commandRegistry, referencesOfRecord}) {
+function createObjectNavigator({adapter, presentationRegistry, commandRegistry, referencesOfValue}) {
   if (!adapter || typeof adapter.readObject !== 'function') {
     throw new TypeError('createObjectNavigator requires an adapter with readObject');
   }
@@ -53,11 +59,28 @@ function createObjectNavigator({adapter, presentationRegistry, commandRegistry, 
   if (!commandRegistry || typeof commandRegistry.discover !== 'function') {
     throw new TypeError('createObjectNavigator requires a commandRegistry');
   }
-  // The graph walker is INJECTED (not imported from the substrate) to preserve
+  // The Value walker is INJECTED (not imported from the substrate) to preserve
   // renderer/environment independence (ADR 0002) — the same rule the adapter
-  // follows. In production it is lagrange-images' referencesOfRecord.
-  if (typeof referencesOfRecord !== 'function') {
-    throw new TypeError('createObjectNavigator requires an injected referencesOfRecord function');
+  // follows. In production it is lagrange-images' referencesOfValue (a single
+  // canonical Value -> its followable ref/pinned-ref, or none).
+  if (typeof referencesOfValue !== 'function') {
+    throw new TypeError('createObjectNavigator requires an injected referencesOfValue function');
+  }
+
+  // Reference discovery over the authorized read lane's result. The lane
+  // (image-object-read-binding/v1, substrate ADR 0068) deliberately carries
+  // ONLY slots + indexed across the ref-free codec — it returns no
+  // kind/shape/behavior — so a record walker (referencesOfRecord) cannot run
+  // on it. The navigator walks references ONLY from what the lane actually
+  // discloses: the slot Values and the indexed Values (each a canonical ADR
+  // 0008 Value; a ref/pinned-ref is followable identity, anything else is
+  // not). shape/behavior are NOT followed here because the lane does not
+  // return them.
+  function referencesOfLaneRecord(record) {
+    const refs = [];
+    for (const value of Object.values(record?.slots ?? {})) refs.push(...referencesOfValue(value));
+    for (const value of record?.indexed ?? []) refs.push(...referencesOfValue(value));
+    return refs;
   }
 
   /**
@@ -78,46 +101,97 @@ function createObjectNavigator({adapter, presentationRegistry, commandRegistry, 
     });
   }
 
+  // Classify a read failure into a materialized subject kind. The substrate
+  // read lane enforces object/read BEFORE any existence check, so a denied
+  // read is AuthorityError whether or not the object exists; an authorized
+  // read of a missing object is a distinct not-found TypeError; any other
+  // error is a backend/operational failure. The navigator does NOT catch-all
+  // into "unavailable": that would collapse PR #127's unauthorized-vs-missing
+  // distinction back into one bucket.
+  function readFailureSubject(subject, error) {
+    if (error?.name === 'AuthorityError') {
+      // Denied: unauthorized-existing and unauthorized-nonexistent are
+      // INDISTINGUISHABLE (the lane is no existence oracle), both map here.
+      return Object.freeze({
+        kind: UNAUTHORIZED_REF_KIND,
+        imageId: subject.imageId,
+        objectId: subject.objectId,
+        reason: error?.message ?? 'unauthorized',
+      });
+    }
+    if (error instanceof TypeError && /^object not found: /.test(error?.message ?? '')) {
+      // Authorized but missing. The discriminator is the lane's EXACT
+      // single-owned not-found prefix (`object not found: <imageId>/<objectId>`,
+      // image-object-read-binding.js), never a bare /not found/i: an
+      // operational TypeError whose message merely CONTAINS "not found" (e.g.
+      // `activation block not found: ...` from a wrong readBlockId, `...
+      // interface not found: ...`) is NOT a missing object and must fall
+      // through to the operational branch below with its original message.
+      return Object.freeze({
+        kind: UNAVAILABLE_REF_KIND,
+        imageId: subject.imageId,
+        objectId: subject.objectId,
+        reason: error?.message ?? 'unavailable',
+      });
+    }
+    // Backend/operational failure: surface as unavailable, never as
+    // "unauthorized" and never a crash.
+    return Object.freeze({
+      kind: UNAVAILABLE_REF_KIND,
+      imageId: subject.imageId,
+      objectId: subject.objectId,
+      reason: error?.message ?? 'read failed',
+    });
+  }
+
   /**
-   * navigate(subject) -> Promise<{presentations, commands, failures}>
+   * navigate(subject, {authority, readBlockId}) -> Promise<{presentations, commands, failures}>
    *
-   * The async entry point. Reads the referenced object fresh (a ref is never
-   * authority), then returns the discovered result directly:
+   * The async entry point. Reads the referenced object fresh under explicit
+   * authority (a ref is never authority), then returns the discovered result
+   * directly. `authority` is threaded to the read seam per call and is NEVER
+   * stored on the navigator; `readBlockId` names the authorized read block.
    *  - read succeeds: the subject is the ref; context carries the record's
    *    leaf slots (Values keyed by slot id) and its references (raw ref Values
-   *    walked from slots, indexed, shape and behavior — followable graph
-   *    edges, revision preserved, never string-split).
-   *  - read fails (unavailable): the subject is materialized as
+   *    walked from slots + indexed — the only structures the read lane
+   *    discloses — revision preserved, never string-split; shape/behavior are
+   *    not followed because the lane does not return them).
+   *  - read denied: the subject is materialized as {kind: 'unauthorized-ref'}
+   *    so the unauthorized-ref provider presents it explicitly (denied-existing
+   *    and denied-nonexistent are indistinguishable).
+   *  - read fails (missing/backend): the subject is materialized as
    *    {kind: 'unavailable-ref', ...} so the unavailable-ref provider presents
    *    it explicitly rather than the reference vanishing.
    */
-  async function navigate(subject) {
+  async function navigate(subject, {authority = null, readBlockId} = {}) {
     if (!isRef(subject)) {
       throw new TypeError('navigate requires a ref subject {kind: "ref"|"pinned-ref", objectId}');
     }
     let record = null;
-    let unavailableReason = null;
+    let readError = null;
     try {
-      record = await adapter.readObject(subject.imageId, subject.objectId);
+      record = await adapter.readObject({
+        imageId: subject.imageId, objectId: subject.objectId, authority, blockId: readBlockId,
+      });
     } catch (error) {
-      // A non-authority read failure (backend unavailable etc.). Reads are
-      // unguarded, so this is never an authorization denial — see module note.
-      unavailableReason = error?.message ?? 'read failed';
+      readError = error;
     }
 
     if (record === null || record === undefined) {
-      const unavailableSubject = Object.freeze({
-        kind: UNAVAILABLE_REF_KIND,
-        imageId: subject.imageId,
-        objectId: subject.objectId,
-        reason: unavailableReason ?? 'unavailable',
-      });
-      return inspect(unavailableSubject, {});
+      const failureSubject = readError
+        ? readFailureSubject(subject, readError)
+        : Object.freeze({
+          kind: UNAVAILABLE_REF_KIND,
+          imageId: subject.imageId,
+          objectId: subject.objectId,
+          reason: 'unavailable',
+        });
+      return inspect(failureSubject, {});
     }
 
     const context = Object.freeze({
       fields: Object.freeze({...(record.slots ?? {})}),
-      references: Object.freeze([...referencesOfRecord(record)]),
+      references: Object.freeze(referencesOfLaneRecord(record)),
     });
     return inspect(subject, context);
   }
@@ -125,4 +199,4 @@ function createObjectNavigator({adapter, presentationRegistry, commandRegistry, 
   return Object.freeze({inspect, navigate});
 }
 
-export {UNAVAILABLE_REF_KIND, createObjectNavigator};
+export {UNAVAILABLE_REF_KIND, UNAUTHORIZED_REF_KIND, createObjectNavigator};
