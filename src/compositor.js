@@ -264,8 +264,23 @@ function createCompositor({rendererAdapter} = {}) {
     return views.get(viewId)?.status ?? null;
   }
 
+  // Resolve a renderer surface handle to the durable intent the Compositor
+  // holds for that view — {viewId, presentationDescriptor} — or null when the
+  // handle is unknown/torn down. This is the CommandRouter's subject source
+  // (ADR 0011 §6): the renderer emits 'an interaction happened on this view';
+  // the semantic subject comes from the presentationDescriptor, never from the
+  // renderer. Read-only; returns a frozen snapshot.
+  function viewForSurfaceHandle(surfaceHandle) {
+    for (const [viewId, view] of views.entries()) {
+      if (view.surfaceHandle === surfaceHandle && view.status === 'live') {
+        return Object.freeze({viewId, presentationDescriptor: view.presentationDescriptor});
+      }
+    }
+    return null;
+  }
+
   return Object.freeze({
-    openView, resizeView, presentOn, closeView, destroy, durableIntent, viewStatus,
+    openView, resizeView, presentOn, closeView, destroy, durableIntent, viewStatus, viewForSurfaceHandle,
   });
 }
 

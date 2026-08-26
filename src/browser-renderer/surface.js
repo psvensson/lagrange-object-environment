@@ -60,6 +60,10 @@ class Surface {
   // for exactly this view.
   context = null;
 
+  // Whether DOM pointer listeners have been attached to the canvas.
+  #domInputAttached = false;
+  #domListeners = [];
+
   // Optional host-supplied RenderTarget (render-target.js). When null, the
   // Context defaults to a CanvasRenderTarget over this Surface's own canvas.
   // The owning adapter sets a TextureRenderTarget for headless/test rendering.
@@ -168,10 +172,114 @@ class Surface {
     };
   }
 
-  // PR B: pointer/key streams are provided but not driven (empty).
-  onPointerUp() { return emptyStream(); }
-  onPointerDown() { return emptyStream(); }
-  onPointerMove() { return emptyStream(); }
+  // PR D: real pointer streams. A per-Surface event queue feeds each stream;
+  // DOM listeners push into it WHEN the canvas is mounted (canvas realization),
+  // and the host synthetic-injection seam (injectPointer) pushes into the SAME
+  // queue — so the downstream path (stream consumption + intent resolution) is
+  // identical for a real pointer event and a synthetic one. The renderer
+  // Component consumes these via on_pointer_*; the host also reads them to
+  // resolve a semantic intent.
+  #inputListeners = new Set();
+  #rawInputObservers = new Set();
+
+  #emitInput(event) {
+    for (const listener of this.#inputListeners) listener(event);
+    for (const observer of this.#rawInputObservers) observer(event);
+  }
+
+  // Host-side raw input observation (the adapter uses this to resolve a
+  // semantic intent) — SEPARATE from the WIT stream the Component consumes, so
+  // observing intent never steals stream events from the renderer.
+  observeRawInput(observer) {
+    this.#rawInputObservers.add(observer);
+    return () => this.#rawInputObservers.delete(observer);
+  }
+
+  // Attach DOM pointer listeners to the canvas (idempotent). Called by the
+  // adapter when the canvas is mounted (canvas realization only — a
+  // TextureRenderTarget Surface's canvas is never mounted, so DOM events can
+  // only come from the synthetic-injection seam there).
+  attachDomInput() {
+    if (this.#domInputAttached || !this.#canvas) return;
+    this.#domInputAttached = true;
+    const emit = (type) => (e) => this.#emitInput({type, x: e.offsetX ?? 0, y: e.offsetY ?? 0, button: e.button ?? 0});
+    this.#domListeners = [
+      ['pointerdown', emit('pointer-down')],
+      ['pointerup', emit('pointer-up')],
+      ['pointermove', emit('pointer-move')],
+    ];
+    for (const [name, fn] of this.#domListeners) this.#canvas.addEventListener(name, fn);
+  }
+
+  // Host-side SYNTHETIC-INJECTION seam (input capture owner): push a semantic
+  // pointer event into the SAME stream queue a DOM event would use. This is how
+  // the unmounted/headless (TextureRenderTarget) path receives deterministic
+  // input in CI. The event is plain data {type, x, y, button}.
+  injectPointer(event) {
+    if (!this.#live) return;
+    this.#emitInput(event);
+  }
+
+  // A single async-iterable stream of pointer events for this Surface. Both
+  // DOM events (when mounted) and synthetic-injected events flow through it.
+  #pointerStream() {
+    const listeners = this.#inputListeners;
+    const isLive = () => this.#live;
+    return {
+      [Symbol.asyncIterator]() {
+        const queue = [];
+        let wake = null;
+        const listener = (event) => {
+          queue.push(event);
+          if (wake) { wake(); wake = null; }
+        };
+        listeners.add(listener);
+        return {
+          next: () => new Promise((resolve) => {
+            if (queue.length > 0) {
+              resolve({value: queue.shift(), done: false});
+            } else if (!isLive()) {
+              resolve({value: undefined, done: true});
+            } else {
+              wake = () => resolve(queue.length > 0
+                ? {value: queue.shift(), done: false}
+                : {value: undefined, done: true});
+            }
+          }),
+          return: () => {
+            listeners.delete(listener);
+            return Promise.resolve({done: true});
+          },
+        };
+      },
+    };
+  }
+
+  // The WIT surface interface exposes per-gesture streams. Each is an
+  // independent iterator over the shared emit path (#inputListeners), filtered
+  // by event type, so a pointer-down consumer never starves a pointer-up one.
+  #filteredStream(type) {
+    const source = this.#pointerStream();
+    return {
+      [Symbol.asyncIterator]() {
+        const it = source[Symbol.asyncIterator]();
+        return {
+          async next() {
+            for (;;) {
+              const r = await it.next();
+              if (r.done) return r;
+              if (r.value.type === type) return r;
+            }
+          },
+          return: () => (it.return ? it.return() : Promise.resolve({done: true})),
+        };
+      },
+    };
+  }
+
+  onPointerUp() { return this.#filteredStream('pointer-up'); }
+  onPointerDown() { return this.#filteredStream('pointer-down'); }
+  onPointerMove() { return this.#filteredStream('pointer-move'); }
   onKeyUp() { return emptyStream(); }
   onKeyDown() { return emptyStream(); }
 
@@ -184,6 +292,12 @@ class Surface {
     for (const listener of this.#destroyListeners) listener();
     this.#destroyListeners.clear();
     this.#resizeListeners.clear();
+    // Detach DOM input listeners (input-capture teardown).
+    if (this.#domInputAttached && this.#canvas) {
+      for (const [name, fn] of this.#domListeners) this.#canvas.removeEventListener(name, fn);
+      this.#domListeners = [];
+      this.#domInputAttached = false;
+    }
     const index = constructed.indexOf(this);
     if (index !== -1) constructed.splice(index, 1);
   }
