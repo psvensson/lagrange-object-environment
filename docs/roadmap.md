@@ -56,14 +56,14 @@ Use a browser renderer first unless experiments show a strong reason not to. Kee
 
 This absorbs the old `lagrange-images` "Graphical environment" roadmap without inheriting its assumption that windows/widgets are fundamental. ADR 0011 also makes portable Component-backed graphics part of this phase rather than a later separate 3D subsystem.
 
-- [ ] drawing/input/rendering adapter contract
-- [ ] `RendererAdapter` host-resource boundary for concrete browser/native surfaces and GPU/device/queue/frame lifecycle
-- [ ] text/input/accessibility baseline
+- [x] rendering adapter contract — the 6-op lifecycle-only, data-representable `RendererAdapter` contract (`src/compositor.js` `RENDERER_ADAPTER_METHODS`), realized by `FakeRendererAdapter` and `BrowserRendererAdapter`; opaque transient Session-scoped handles; contained failure; idempotent teardown. (Input routing lives behind the same adapter — see "route one semantic interaction" below.)
+- [x] `RendererAdapter` host-resource boundary for concrete browser/native surfaces and GPU/device/queue/frame lifecycle — `BrowserRendererAdapter` owns all concrete host resources (canvas, WebGPU contexts, the instantiated Component, shim `navigator.gpu` resources) and returns only opaque handles upward (`docs/ownership.md`, `src/browser-renderer/`).
+- [ ] text/IME/accessibility baseline (split out from the old "drawing/input" item; NOT part of the adapter contract — separate concern)
 - [ ] retained presentation/view state where useful
 - [ ] compositor with nested split/stack/scroll primitives
 - [ ] surface policy; windows only as one optional composition
 - [ ] replaceable world/composition policy
-- [ ] selection/focus model linked to semantic subjects
+- [x] selection/focus model linked to semantic subjects — focus (which logical view; transient Session state; Compositor) strictly distinct from selection (which semantic subject; `SelectionModel`); subject from presentationDescriptor, never renderer input; selection keyed by identity (survives renderer teardown), confers zero authority, transient, never in Perspective (`src/selection-model.js`, `src/compositor.js`).
 - [ ] command palette/context menu/key binding policy
 - [ ] Perspective composition persisted independently of Session mechanics
 - [x] exact-version `wasi:webgpu` plus `wasi-gfx`-style surface interface experiment behind `RendererAdapter` — the real triangle Component (`wasi:webgpu/webgpu@0.3.0-rc.2` + `wasi-gfx:surface/*@0.2.0`, jco-transpiled) runs behind `BrowserRendererAdapter` (`src/browser-renderer/`), consuming ONLY the public `@wasi-gfx/wasi-gfx-shim/webgpu` host provider (pinned `0.1.0`); Lagrange owns the surface/multi-view/lifecycle. The renderer renders to a host-side **RenderTarget** realization the Component never sees (`src/browser-renderer/render-target.js`): `CanvasRenderTarget` (on-screen browser presentation) or `TextureRenderTarget` (headless/test/export, deterministic read-back) — the seam a future remote renderer plugs into.

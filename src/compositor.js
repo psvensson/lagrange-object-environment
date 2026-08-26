@@ -218,10 +218,13 @@ function createCompositor({rendererAdapter} = {}) {
         await rendererAdapter.destroySurface(view.surfaceHandle);
       } catch (error) {
         views.delete(viewId);
+        if (focusedViewId === viewId) focusedViewId = null;
         throw mapAdapterFailure(viewId, error);
       }
     }
     views.delete(viewId);
+    // Destroying a focused view clears focus cleanly (no stale handle).
+    if (focusedViewId === viewId) focusedViewId = null;
   }
 
   /**
@@ -243,6 +246,7 @@ function createCompositor({rendererAdapter} = {}) {
       );
     } finally {
       views.clear();
+      focusedViewId = null; // Session teardown clears focus
     }
   }
 
@@ -264,6 +268,56 @@ function createCompositor({rendererAdapter} = {}) {
     return views.get(viewId)?.status ?? null;
   }
 
+  // --- Focus (which LOGICAL VIEW receives interaction) ----------------------
+  // Focus is TRANSIENT Session state, about a VIEW — never serialized to a
+  // Perspective (durableIntent stays handle-free AND focus-free) and never a
+  // semantic selection. The Compositor owns it because it owns logical view
+  // lifetime/arrangement; ownership.md names focus/layout/stacking as a
+  // Compositor Phase 2 concern. Selection (which semantic subject the user
+  // means) is a SEPARATE owner (SelectionModel).
+  let focusedViewId = null;
+
+  // Focus a live view. Focusing A unfocuses B by construction (single focus).
+  // Returns the focused viewId. Throws on an unknown/lost view.
+  function focusView(viewId) {
+    requireAlive();
+    const view = requireLiveView(viewId);
+    if (view.status !== 'live') {
+      throw new RendererResourceLostError(`cannot focus lost view ${viewId}`);
+    }
+    focusedViewId = viewId;
+    return focusedViewId;
+  }
+
+  // The currently focused viewId, or null. Read-only.
+  function focusedView() {
+    return focusedViewId;
+  }
+
+  // Clear focus (e.g. explicit unfocus). Idempotent.
+  function clearFocus() {
+    focusedViewId = null;
+  }
+
+  // Resolve a renderer interaction to focus + selection. Given a surface handle
+  // (the renderer said 'an interaction happened on this view'), focus the bound
+  // logical view AND update the SelectionModel with the view's semantic subject
+  // (from its presentationDescriptor — never from the renderer). The Compositor
+  // owns focus; the SelectionModel owns selection; this seam keeps them in step
+  // without conflating them. Returns {viewId, subject} or null when the handle
+  // resolves to no live view.
+  function interactWithSurface(surfaceHandle, selectionModel) {
+    requireAlive();
+    const view = viewForSurfaceHandle(surfaceHandle);
+    if (!view) return null;
+    focusView(view.viewId);
+    const subject = view.presentationDescriptor?.subject ?? null;
+    if (selectionModel && typeof selectionModel.select === 'function') {
+      selectionModel.select(subject);
+    }
+    return Object.freeze({viewId: view.viewId, subject});
+  }
+
   // Resolve a renderer surface handle to the durable intent the Compositor
   // holds for that view — {viewId, presentationDescriptor} — or null when the
   // handle is unknown/torn down. This is the CommandRouter's subject source
@@ -281,6 +335,7 @@ function createCompositor({rendererAdapter} = {}) {
 
   return Object.freeze({
     openView, resizeView, presentOn, closeView, destroy, durableIntent, viewStatus, viewForSurfaceHandle,
+    focusView, focusedView, clearFocus, interactWithSurface,
   });
 }
 
