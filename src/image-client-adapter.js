@@ -9,7 +9,7 @@ import {decodePerspective, encodePerspectiveRecord, encodePresentations} from '.
  * This module composes the three verified pure cores against a REAL
  * lagrange-images runtime:
  *   - perspective-projection.js  (ADR 0012)  [child-object form; save/load planned]
- *   - image-observation.js       (ADR 0009)  -> observe()
+ *   - image-observation.js       (ADR 0009 as superseded by substrate ADR 0070) -> observe()
  *   - command-dispatcher.js      (ADR 0010)  -> dispatch()
  *
  * Renderer-independence and ADR 0002 are preserved by injection: the adapter
@@ -102,6 +102,39 @@ const OBJECT_READ_TYPE_DECLARATIONS = Object.freeze({
     fields: Object.freeze([
       Object.freeze({name: 'version-token', type: 'string'}),
       Object.freeze({name: 'value', type: 'object-record'}),
+    ]),
+  }),
+});
+
+// --- The authorized observation lane (image-observation-binding/v1, substrate
+// ADR 0070) -------------------------------------------------------------------
+//
+// The environment's SINGLE user-facing live-observation seam. The lane scans
+// the image's PRIVATE history internally and emits, for each `object.put` the
+// caller may `object/read`, ONLY identity + kind + an opaque per-event cursor —
+// never the record payload, never the raw global revision. The result cursor
+// is an opaque, integrity-protected STRING high-water token (encrypted
+// lane-side; the consumer cannot parse, compare or forge it), closing the
+// global-revision gap-analysis channel. State disclosure stays in ONE place:
+// the consumer re-reads through authorizedReadObject (ADR 0068).
+//
+// `obs-event` is the declared record {object-id, kind, cursor} (kebab-case
+// field names per the composite codec); `obs-result` couples the event list
+// to the scan's opaque high-water cursor.
+const OBSERVATION_TYPE_DECLARATIONS = Object.freeze({
+  'obs-event': Object.freeze({
+    kind: 'record',
+    fields: Object.freeze([
+      Object.freeze({name: 'object-id', type: 'string'}),
+      Object.freeze({name: 'kind', type: 'string'}),
+      Object.freeze({name: 'cursor', type: 'string'}),
+    ]),
+  }),
+  'obs-result': Object.freeze({
+    kind: 'record',
+    fields: Object.freeze([
+      Object.freeze({name: 'events', type: Object.freeze({kind: 'list', element: 'obs-event'})}),
+      Object.freeze({name: 'cursor', type: 'string'}),
     ]),
   }),
 });
@@ -217,6 +250,7 @@ function createImageClientAdapter(client) {
     installImageCreationBinding,
     installImageMutationBinding,
     installImageObjectReadBinding,
+    installImageObservationBinding,
     findSmalltalkKernel,
     objectRef,
     objectResource,
@@ -228,7 +262,7 @@ function createImageClientAdapter(client) {
     normalizeTypeDeclarations,
   } = client;
 
-  for (const [name, fn] of Object.entries({defineClass, installCallableInterfaceV2, installImageCreationBinding, installImageMutationBinding, installImageObjectReadBinding, findSmalltalkKernel, objectRef, objectResource, parseObjectResource, objectVersionToken, textValue, packCompositeValue, unpackCompositeValue, normalizeTypeDeclarations})) {
+  for (const [name, fn] of Object.entries({defineClass, installCallableInterfaceV2, installImageCreationBinding, installImageMutationBinding, installImageObjectReadBinding, installImageObservationBinding, findSmalltalkKernel, objectRef, objectResource, parseObjectResource, objectVersionToken, textValue, packCompositeValue, unpackCompositeValue, normalizeTypeDeclarations})) {
     if (typeof fn !== 'function') {
       throw new TypeError(`lagrange-images client is missing required helper: ${name}`);
     }
@@ -247,11 +281,11 @@ function createImageClientAdapter(client) {
    * is a PRECONDITION: it is checked and reported, never silently installed on
    * a foreign image.
    */
-  async function ensureSchema(imageId, {shapeId, className, interfaceId, bindingId, blockId, mutationInterfaceId, mutationBindingId, mutationBlockId, readInterfaceId, readBindingId, readBlockId} = {}) {
+  async function ensureSchema(imageId, {shapeId, className, interfaceId, bindingId, blockId, mutationInterfaceId, mutationBindingId, mutationBlockId, readInterfaceId, readBindingId, readBlockId, observationInterfaceId, observationBindingId, observationBlockId} = {}) {
     // Validate ids eagerly: a missing id would otherwise flow into the
     // substrate as undefined (or, for putShape, mint a random id and silently
     // break idempotence), surfacing a confusing error far from the cause.
-    for (const [key, value] of Object.entries({shapeId, className, interfaceId, bindingId, blockId, mutationInterfaceId, mutationBindingId, mutationBlockId, readInterfaceId, readBindingId, readBlockId})) {
+    for (const [key, value] of Object.entries({shapeId, className, interfaceId, bindingId, blockId, mutationInterfaceId, mutationBindingId, mutationBlockId, readInterfaceId, readBindingId, readBlockId, observationInterfaceId, observationBindingId, observationBlockId})) {
       if (typeof value !== 'string' || value.length === 0) {
         throw new TypeError(`ensureSchema requires a non-empty ids.${key}`);
       }
@@ -355,10 +389,35 @@ function createImageClientAdapter(client) {
       });
     }
 
+    // The authorized observation lane (image-observation-binding/v1, substrate
+    // ADR 0070): the environment's single user-facing live-observation seam.
+    const observationInterfaceRef = objectRef(imageId, observationInterfaceId);
+    if (!(await images.getCodeArtifact(imageId, observationInterfaceId))) {
+      await installCallableInterfaceV2({
+        images,
+        imageId,
+        functionName: 'observe',
+        parameters: ['string'],
+        result: 'obs-result',
+        types: OBSERVATION_TYPE_DECLARATIONS,
+        interfaceId: observationInterfaceId,
+      });
+    }
+    if (!(await images.getBlock(imageId, observationBlockId))) {
+      await installImageObservationBinding({
+        images,
+        callableInterface: observationInterfaceRef,
+        imageId,
+        bindingId: observationBindingId,
+        blockId: observationBlockId,
+      });
+    }
+
     return Object.freeze({
       shape, classRecord, interfaceRef, blockRef: objectRef(imageId, blockId),
       mutationBlockRef: objectRef(imageId, mutationBlockId),
       readBlockRef: objectRef(imageId, readBlockId),
+      observationBlockRef: objectRef(imageId, observationBlockId),
     });
   }
 
@@ -709,10 +768,65 @@ function createImageClientAdapter(client) {
     });
   }
 
-  function observe(imageId, options = {}) {
+  /**
+   * One authorized pull on the observation lane (image-observation-binding/v1,
+   * substrate ADR 0070). Invokes the observation block with the caller's
+   * after-cursor and executes under the caller's authority; the lane checks
+   * `object/read` per scanned event and emits only visible object.put
+   * invalidations. The authority context is threaded through this call only —
+   * it is never stored or captured by the adapter.
+   *
+   * `afterCursor` is the lane's opaque token: '' = live-follow from the
+   * current end; any earlier token resumes after its position. Returns
+   * {events: [{objectId, kind, cursor}], cursor} — the composite codec's
+   * kebab-case `object-id` is renamed to `objectId` here; nothing else is
+   * added or interpreted (the cursor is never parsed, only passed back).
+   */
+  async function observePull({imageId, afterCursor, authority, blockId}) {
+    if (typeof afterCursor !== 'string') {
+      throw new TypeError('observePull requires an opaque afterCursor string');
+    }
+    const types = normalizeTypeDeclarations(OBSERVATION_TYPE_DECLARATIONS);
+    const activation = await invocations.invokeBlock(objectRef(imageId, blockId), [textValue(afterCursor)]);
+    const packed = await executor.execute(activation, {authority});
+    const result = unpackCompositeValue(packed, 'obs-result', types);
+    return Object.freeze({
+      events: Object.freeze((result.events ?? []).map((event) => Object.freeze({
+        objectId: event['object-id'],
+        kind: event.kind,
+        cursor: event.cursor,
+      }))),
+      cursor: result.cursor,
+    });
+  }
+
+  /**
+   * The environment's single user-facing live-observation seam (substrate ADR
+   * 0070; supersedes env ADR 0009's raw-history feed for restricted
+   * principals). Returns an async iterable of METADATA-ONLY invalidations
+   * {type, kind, objectId, cursor}: an event means "an object you may
+   * object/read changed" — identity only, never the record payload, never a
+   * global revision. Consumers that need the new state re-read the object
+   * through `readObject` under their own per-call authority.
+   *
+   * Authority is threaded per call (each underlying poll re-executes under
+   * the caller-supplied context); it is never stored by the adapter. Options:
+   *   authority   the caller's authority context (required in practice: the
+   *               lane's per-event check-only require throws without one).
+   *   blockId     the observation lane's block (from ensureSchema).
+   *   afterCursor resume token; omitted = live-follow from the current end.
+   *   signal      AbortSignal; aborting ends iteration.
+   *   intervalMs  delay between polls when no new events arrive.
+   */
+  function observe(imageId, {authority = null, blockId, afterCursor, signal, intervalMs} = {}) {
+    if (typeof blockId !== 'string' || blockId.length === 0) {
+      throw new TypeError('observe requires the observation lane blockId');
+    }
     return observeChanges({
-      poll: (afterRevision) => images.history(imageId, {afterRevision}),
-      ...options,
+      poll: (cursor) => observePull({imageId, afterCursor: cursor, authority, blockId}),
+      afterCursor,
+      signal,
+      intervalMs,
     });
   }
 
@@ -730,6 +844,7 @@ function createImageClientAdapter(client) {
     readObject,
     authorizedReadObject,
     observe,
+    observePull,
     dispatch,
     refToEdgeString: (ref, imageId) => refToEdgeString(ref, imageId),
   });

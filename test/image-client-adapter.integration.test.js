@@ -41,6 +41,9 @@ const IDS = Object.freeze({
   readInterfaceId: 'object-read-interface',
   readBindingId: 'object-read-binding',
   readBlockId: 'object-read-block',
+  observationInterfaceId: 'observation-interface',
+  observationBindingId: 'observation-binding',
+  observationBlockId: 'observation-block',
 });
 
 // Ids for the Perspective schema (ADR 0012). Distinct image ids from the probe.
@@ -73,6 +76,7 @@ async function setup() {
     installImageCreationBinding: imagesApi.installImageCreationBinding,
     installImageMutationBinding: imagesApi.installImageMutationBinding,
     installImageObjectReadBinding: imagesApi.installImageObjectReadBinding,
+    installImageObservationBinding: imagesApi.installImageObservationBinding,
     findSmalltalkKernel: imagesApi.findSmalltalkKernel,
     objectRef: imagesApi.objectRef,
     objectResource: imagesApi.objectResource,
@@ -124,6 +128,7 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
         installImageCreationBinding: imagesApi.installImageCreationBinding,
         installImageMutationBinding: imagesApi.installImageMutationBinding,
         installImageObjectReadBinding: imagesApi.installImageObjectReadBinding,
+        installImageObservationBinding: imagesApi.installImageObservationBinding,
         findSmalltalkKernel: imagesApi.findSmalltalkKernel,
         objectRef: imagesApi.objectRef,
         objectResource: imagesApi.objectResource,
@@ -187,16 +192,61 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
       objectId: 'subject-target',
     });
 
-    // Observation: the create emitted an object.put change on the history
-    // stream. Catch-up mode (afterRevision: 0) replays it; live-follow would
-    // wait only for events after now.
-    const observed = [];
-    for await (const change of adapter.observe(IMAGE, {afterRevision: 0, intervalMs: 0})) {
-      observed.push(change);
-      if (observed.some((c) => c.kind === 'object.put' && c.record?.id === created.objectId)) break;
-    }
-    const created2 = observed.find((c) => c.record?.id === created.objectId);
-    assert.ok(created2, 'expected to observe the created object on the change feed');
+    // Observation over the AUTHORIZED LANE: live-follow from the current end
+    // replays no backlog, then a fresh create appears as a metadata-only
+    // invalidation — identity + kind + opaque cursor, no record payload, no
+    // global revision. (Catch-up/restricted proofs are their own test below.)
+    const ac = new AbortController();
+    const observing = (async () => {
+      for await (const change of adapter.observe(IMAGE, {
+        // Exact-match grant on the object we expect to change (NO wildcard — ADR 0037 §6).
+        authority: grant(runtime, 'object/read', imagesApi.objectResource(IMAGE, created.objectId)),
+        blockId: IDS.observationBlockId,
+        intervalMs: 0,
+        signal: ac.signal,
+      })) {
+        return change;
+      }
+      return null;
+    })();
+    await new Promise((resolve) => setTimeout(resolve, 25)); // let the lane anchor live-follow
+    // Mutate the ALREADY-GRANTED object (not a fresh create whose id we don't hold a grant for), so
+    // the exact-match object/read grant covers the change the lane filters on.
+    await adapter.mutateObject({
+      imageId: IMAGE,
+      objectId: created.objectId,
+      value: {title: 'My probe (edited)'},
+      authority: runtime.authority.issue({
+        principal: 'alice',
+        grants: [
+          {operation: 'object/write', resource: imagesApi.objectResource(IMAGE, created.objectId)},
+          {operation: 'object/create', resource: imagesApi.objectResource(IMAGE, classId)},
+        ],
+      }),
+      blockId: IDS.mutationBlockId,
+    });
+    const firstChange = await observing;
+    ac.abort();
+
+    assert.equal(firstChange.kind, 'object.put');
+    assert.equal(typeof firstChange.objectId, 'string');
+    // Metadata-only: no payload, no global revision, opaque string cursor.
+    assert.ok(!('record' in firstChange), 'the authorized feed never carries a record payload');
+    assert.ok(!('revision' in firstChange), 'the authorized feed never carries a global revision');
+    assert.equal(typeof firstChange.cursor, 'string');
+    assert.ok(Number.isNaN(Number(firstChange.cursor)), 'the cursor is an opaque string, not a number');
+    assert.match(firstChange.cursor, /^obs-cursor\/v1:/);
+
+    // The consumer re-reads CURRENT state via the authorized read seam; the
+    // feed itself disclosed nothing but identity.
+    const reread = await adapter.readObject({
+      imageId: IMAGE,
+      objectId: firstChange.objectId,
+      authority: grant(runtime, 'object/read', imagesApi.objectResource(IMAGE, firstChange.objectId)),
+      blockId: IDS.readBlockId,
+    });
+    assert.equal(reread.slots['probe-title'].value, 'My probe (edited)');
+    assert.equal(firstChange.objectId, created.objectId, 'the invalidation names the mutated, granted object');
   });
 
   await t.test('a foreign-image subject ref is rejected adapter-side', async () => {
@@ -395,6 +445,95 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
     );
   });
 
+  // The headline ADR 0070 proof env-side (mirror of the substrate lane proof):
+  // a restricted principal's observation receives ONLY invalidations for
+  // objects it may object/read; an UNREADABLE object's change never appears —
+  // not its record, not its identity, not a gap in any numeric sequence. This
+  // is the falsification arm: it goes red if observe() falls back to the raw
+  // images.history stream (which discloses every object's full record).
+  await t.test('authorized observation: an unreadable object\'s change never appears; the consumer re-reads via readObject', async () => {
+    const {runtime, adapter, schema} = await setup();
+    const classId = classIdFor(IDS.className);
+    const shapeId = schema.shape.id;
+
+    // Seed two objects: 'readable' (alice may object/read) and 'secret'
+    // (alice may not). Both writes land on the private history stream.
+    for (const [id, title] of [['readable', 'visible'], ['secret', 'hidden']]) {
+      await runtime.images.putObject(IMAGE, {
+        id,
+        shape: imagesApi.objectRef(IMAGE, shapeId),
+        behavior: imagesApi.objectRef(IMAGE, classId),
+        slots: {
+          'probe-title': imagesApi.textValue(title),
+          'probe-subject': imagesApi.objectRef(IMAGE, 'smalltalk/nil'),
+        },
+      });
+    }
+
+    // Sanity (control-plane/trusted host read): the secret write really is on
+    // the raw privileged stream — the lane's silence is filtering, not absence.
+    const raw = await runtime.images.history(IMAGE, {afterRevision: 0});
+    assert.ok(raw.some((e) => e.type === 'object.put' && e.objectId === 'secret'),
+      'sanity: the unreadable object really is in the private stream');
+
+    // The restricted principal: object/read on 'readable' ONLY. A consumer
+    // cannot mint cursors, so the documented flow is: live-follow to anchor at
+    // the current end (one authorized pull), write, then observe.
+    const restricted = grant(runtime, 'object/read', imagesApi.objectResource(IMAGE, 'readable'));
+
+    const anchor = await adapter.observePull({
+      imageId: IMAGE, afterCursor: '', authority: restricted, blockId: IDS.observationBlockId,
+    });
+    assert.equal(anchor.events.length, 0, 'live-follow replays no backlog');
+    assert.equal(typeof anchor.cursor, 'string');
+    assert.ok(Number.isNaN(Number(anchor.cursor)), 'the lane cursor is an opaque string, not a number');
+    assert.match(anchor.cursor, /^obs-cursor\/v1:/);
+
+    // Both objects change; only the readable one may surface.
+    for (const [id, title] of [['secret', 'hidden-v2'], ['readable', 'visible-v2']]) {
+      const existing = await runtime.images.getObject(IMAGE, id);
+      await runtime.images.putObject(IMAGE, {
+        id,
+        shape: imagesApi.objectRef(IMAGE, shapeId),
+        behavior: imagesApi.objectRef(IMAGE, classId),
+        slots: {
+          'probe-title': imagesApi.textValue(title),
+          'probe-subject': imagesApi.objectRef(IMAGE, 'smalltalk/nil'),
+        },
+      }, {expectedVersion: existing._version});
+    }
+
+    const page = await adapter.observePull({
+      imageId: IMAGE, afterCursor: anchor.cursor, authority: restricted, blockId: IDS.observationBlockId,
+    });
+    assert.deepEqual(page.events.map((e) => e.objectId), ['readable'],
+      'only the readable object\'s invalidation appears');
+    const event = page.events[0];
+    assert.equal(event.kind, 'object.put');
+    assert.deepEqual(Object.keys(event).sort(), ['cursor', 'kind', 'objectId'],
+      'metadata-only: identity + kind + per-event cursor, nothing else');
+    for (const cursor of [page.cursor, event.cursor]) {
+      assert.equal(typeof cursor, 'string');
+      assert.ok(Number.isNaN(Number(cursor)), 'no numeric revision leaks');
+      assert.match(cursor, /^obs-cursor\/v1:/);
+    }
+    const serialized = JSON.stringify(page);
+    assert.ok(!serialized.includes('"secret"'), 'the unreadable object\'s identity never appears');
+    assert.ok(!serialized.includes('hidden-v2'), 'the unreadable object\'s state never appears');
+    assert.ok(!/\brevision\b/.test(serialized), 'no global revision leaks');
+
+    // The consumer obtains CURRENT state only via the authorized read seam:
+    // the invalidation named 'readable'; re-reading it crosses object/read.
+    const reread = await adapter.readObject({
+      imageId: IMAGE,
+      objectId: event.objectId,
+      authority: restricted, // the same restricted context: object/read('readable')
+      blockId: IDS.readBlockId,
+    });
+    assert.equal(reread.slots['probe-title'].value, 'visible-v2',
+      'state disclosure stays in readObject; the feed carried identity only');
+  });
+
   await t.test('loadPerspective reads through the authorized lane; ref != authority for children', async () => {
     const {runtime, adapter} = await setup();
     const schema = await adapter.ensurePerspectiveSchema(IMAGE, PERSP_IDS);
@@ -508,20 +647,23 @@ test('createImageClientAdapter validates services and helpers (unit, no runtime)
   const good = {
     images: {}, invocations: {}, executor: {},
     defineClass: () => {}, installCallableInterfaceV2: () => {}, installImageCreationBinding: () => {},
-    installImageMutationBinding: () => {}, installImageObjectReadBinding: () => {}, findSmalltalkKernel: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
+    installImageMutationBinding: () => {}, installImageObjectReadBinding: () => {}, installImageObservationBinding: () => {}, findSmalltalkKernel: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
     objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, unpackCompositeValue: () => {}, normalizeTypeDeclarations: () => {},
   };
   assert.ok(createImageClientAdapter(good));
   const missing = {...good};
   delete missing.defineClass;
   assert.throws(() => createImageClientAdapter(missing), /missing required helper: defineClass/);
+  const noObservation = {...good};
+  delete noObservation.installImageObservationBinding;
+  assert.throws(() => createImageClientAdapter(noObservation), /missing required helper: installImageObservationBinding/);
 });
 
 test('ensureSchema validates its ids eagerly (unit)', async () => {
   const good = {
     images: {}, invocations: {}, executor: {},
     defineClass: () => {}, installCallableInterfaceV2: () => {}, installImageCreationBinding: () => {},
-    installImageMutationBinding: () => {}, installImageObjectReadBinding: () => {}, findSmalltalkKernel: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
+    installImageMutationBinding: () => {}, installImageObjectReadBinding: () => {}, installImageObservationBinding: () => {}, findSmalltalkKernel: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
     objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, unpackCompositeValue: () => {}, normalizeTypeDeclarations: () => {},
   };
   const adapter = createImageClientAdapter(good);
@@ -561,7 +703,7 @@ test('no ordinary runtime-facing path calls images.getObject directly (audit)', 
     );
   }
 
-  // The two user-facing read bodies must not contain a privileged getObject.
+  // The user-facing read bodies must not contain a privileged getObject.
   const bodyOf = (name) => {
     const start = source.indexOf(`async function ${name}`);
     assert.notEqual(start, -1, `${name} must exist`);
@@ -575,4 +717,32 @@ test('no ordinary runtime-facing path calls images.getObject directly (audit)', 
       `${name} must not call images.getObject; it must cross the authorized object/read lane`,
     );
   }
+});
+
+// HISTORY AUDIT (the observation invariant of this change, substrate ADR
+// 0070): the user-facing observe() must consume the authorized observation
+// lane — NEVER the raw privileged images.history stream, which discloses
+// every object's full record with no authority check. The lane's executor
+// (substrate-side) is the only authorized history consumer. This guard makes
+// a regression — observe()/observePull reaching back to images.history — go
+// red, and pins the one place the lane seam is wired.
+test('the restricted observation path never calls images.history (audit)', () => {
+  const source = readFileSync(resolve(HERE, '../src/image-client-adapter.js'), 'utf8');
+
+  // The whole adapter module must not reference the raw stream at all: the
+  // only authorized consumer of history is the substrate-side lane executor.
+  assert.ok(
+    !source.includes('images.history('),
+    'no adapter path may call the raw privileged images.history stream; ' +
+    'observation crosses the authorized image-observation-binding/v1 lane',
+  );
+
+  // observe() (non-async body) must wire the lane through observePull.
+  const observeStart = source.indexOf('function observe(');
+  assert.notEqual(observeStart, -1, 'observe must exist');
+  const observeRest = source.slice(observeStart);
+  const observeNext = observeRest.slice(1).search(/\n  (async )?function \w+\(/);
+  const observeBody = observeNext === -1 ? observeRest : observeRest.slice(0, observeNext + 1);
+  assert.ok(observeBody.includes('observePull'), 'observe must poll through the authorized lane (observePull)');
+  assert.ok(!observeBody.includes('history'), 'observe must not touch the history stream');
 });

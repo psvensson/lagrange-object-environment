@@ -46,6 +46,9 @@ const IDS = Object.freeze({
   readInterfaceId: 'object-read-interface',
   readBindingId: 'object-read-binding',
   readBlockId: 'object-read-block',
+  observationInterfaceId: 'observation-interface',
+  observationBindingId: 'observation-binding',
+  observationBlockId: 'observation-block',
 });
 
 test('Phase 1 end-to-end: open -> present -> navigate -> command -> authorized mutation -> observe -> presentation updates', {skip: !available && 'lagrange-images sibling runtime not available'}, async () => {
@@ -62,6 +65,7 @@ test('Phase 1 end-to-end: open -> present -> navigate -> command -> authorized m
     installImageCreationBinding: imagesApi.installImageCreationBinding,
     installImageMutationBinding: imagesApi.installImageMutationBinding,
     installImageObjectReadBinding: imagesApi.installImageObjectReadBinding,
+    installImageObservationBinding: imagesApi.installImageObservationBinding,
     findSmalltalkKernel: imagesApi.findSmalltalkKernel,
     objectRef: imagesApi.objectRef,
     objectResource: imagesApi.objectResource,
@@ -154,6 +158,24 @@ test('Phase 1 end-to-end: open -> present -> navigate -> command -> authorized m
   // --- 4. invoke through CommandDispatcher -> authorized image mutation ------
   // Authority is issued per-dispatch and crosses the boundary. The mutated
   // result exists ONLY as the return of this dispatch (falsification E1).
+  // OBSERVATION (step 5) wraps the mutation: anchor the authorized live-follow loop BEFORE
+  // dispatching, so the mutation it produces is observed (a live-follow anchored after the commit
+  // would miss it). Metadata-only invalidation: identity + kind + opaque cursor, NO record payload,
+  // NO global revision; the new VALUE is re-read via readObject in step 6.
+  const ac = new AbortController();
+  const observing = (async () => {
+    for await (const change of adapter.observe(IMAGE, {
+      authority: readAuthority(createdA.objectId),
+      blockId: IDS.observationBlockId,
+      intervalMs: 0,
+      signal: ac.signal,
+    })) {
+      if (change.kind === 'object.put' && change.objectId === createdA.objectId) return change;
+    }
+    return null;
+  })();
+  await new Promise((resolve) => setTimeout(resolve, 25)); // let the lane anchor live-follow
+
   const mutateAuthority = runtime.authority.issue({
     principal: 'alice',
     grants: [{operation: 'object/write', resource: imagesApi.objectResource(IMAGE, createdA.objectId)}],
@@ -163,19 +185,12 @@ test('Phase 1 end-to-end: open -> present -> navigate -> command -> authorized m
   });
   assert.equal(dispatched.objectId, createdA.objectId, 'mutation preserves identity (same object id)');
 
-  // --- 5. observation sees the change (the SAME object id, new value) -------
-  let observedChange = null;
-  for await (const change of adapter.observe(IMAGE, {afterRevision: 0, intervalMs: 0})) {
-    if (
-      change.kind === 'object.put' &&
-      change.record?.id === createdA.objectId &&
-      change.record?.slots?.['probe-title']?.value === 'A-changed'
-    ) {
-      observedChange = change;
-      break; // the stream is infinite; stop at the target change
-    }
-  }
+  // --- 5. observation sees the change (the SAME object id) -------------------
+  const observedChange = await observing;
+  ac.abort();
   assert.ok(observedChange, 'observation must see the authorized mutation on the change feed');
+  assert.ok(!('record' in observedChange), 'the authorized feed never carries a record payload');
+  assert.ok(!('revision' in observedChange), 'the authorized feed never carries a global revision');
 
   // --- 6. presentation model updates (fresh read from the image, not a shadow)
   const reopened = await navigator.navigate(ref(createdA.objectId), {authority: readAuthority(createdA.objectId), readBlockId: IDS.readBlockId});

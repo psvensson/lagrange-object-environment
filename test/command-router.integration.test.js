@@ -49,6 +49,9 @@ const IDS = Object.freeze({
   readInterfaceId: 'object-read-interface',
   readBindingId: 'object-read-binding',
   readBlockId: 'object-read-block',
+  observationInterfaceId: 'observation-interface',
+  observationBindingId: 'observation-binding',
+  observationBlockId: 'observation-block',
 });
 
 test('PR D: semantic interaction on a view routes Command -> authorized image mutation (per-view subject)', {skip: !available && 'lagrange-images sibling runtime not available'}, async () => {
@@ -65,6 +68,7 @@ test('PR D: semantic interaction on a view routes Command -> authorized image mu
     installImageCreationBinding: imagesApi.installImageCreationBinding,
     installImageMutationBinding: imagesApi.installImageMutationBinding,
     installImageObjectReadBinding: imagesApi.installImageObjectReadBinding,
+    installImageObservationBinding: imagesApi.installImageObservationBinding,
     findSmalltalkKernel: imagesApi.findSmalltalkKernel,
     objectRef: imagesApi.objectRef,
     objectResource: imagesApi.objectResource,
