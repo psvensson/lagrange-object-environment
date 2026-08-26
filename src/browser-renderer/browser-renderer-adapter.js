@@ -71,6 +71,9 @@ function createBrowserRendererAdapter({loadComponent, mount = null, createRender
     // the texture path deterministic under Xvfb/headless).
     if (entry.surface && !entry.surface.renderTarget && mountPoint && !entry.surface.canvas.parentNode) {
       mountPoint.appendChild(entry.surface.canvas);
+      // Attach DOM pointer listeners (input capture owner) so real pointer
+      // events flow into the same stream the synthetic-injection seam uses.
+      entry.surface.attachDomInput();
     }
   }
 
@@ -125,6 +128,12 @@ function createBrowserRendererAdapter({loadComponent, mount = null, createRender
     });
     entry.component = component;
     entry.surface = component?.surface ?? null;
+    // Observe the surface's raw input (DOM when mounted, or synthetic-injected)
+    // to resolve a semantic intent — separate from the WIT stream the Component
+    // consumes, so intent observation never steals renderer stream events.
+    if (entry.surface && typeof entry.surface.observeRawInput === 'function') {
+      entry.unobserveInput = entry.surface.observeRawInput((event) => emitIntent(surfaceHandle, event));
+    }
     // The Component constructs its Surface with its own (possibly-empty)
     // CreateDesc; the ADAPTER owns the logical dimensions (the Compositor's
     // createSurface {width,height}), so it applies them. This keeps sizing
@@ -205,6 +214,42 @@ function createBrowserRendererAdapter({loadComponent, mount = null, createRender
     clearAssetSource();
   }
 
+  // Host-side SYNTHETIC-INJECTION seam (input capture owner): deliver a
+  // semantic pointer event {type, x, y, button} to the surface's input stream —
+  // the SAME stream a DOM pointer event uses when the canvas is mounted. This
+  // is how the unmounted/headless (TextureRenderTarget) path receives input in
+  // CI. The event is plain data.
+  async function injectPointerEvent(surfaceHandle, event) {
+    requireAlive();
+    const entry = requireLive(surfaceHandle, 'injectPointerEvent');
+    // The surface emits the event to its stream AND its raw-input observers
+    // (which resolve the intent), so DOM and synthetic input share one path.
+    if (entry.surface) entry.surface.injectPointer(event);
+  }
+
+  // Host-side intent-consumption seam: register a handler that receives a
+  // SEMANTIC INTENT DESCRIPTOR (plain data, e.g. {kind:'activate'}) each time a
+  // pointer interaction resolves on a surface. The adapter maps a pointer-down
+  // on the surface to {kind:'activate'} — it emits ONLY 'an interaction
+  // happened on this view', NEVER a subject (the subject is resolved by the
+  // CommandRouter from the Compositor's view map). The handler receives
+  // (intentDescriptor, surfaceHandle). This is a host-inspection seam, not part
+  // of RENDERER_ADAPTER_METHODS (which stays lifecycle-only).
+  function onIntent(handler) {
+    intentHandlers.add(handler);
+    return () => intentHandlers.delete(handler);
+  }
+
+  const intentHandlers = new Set();
+
+  // Resolve a surface pointer event into a semantic intent descriptor and fan
+  // it out to intent consumers. Pointer-down on a live surface -> activate.
+  function emitIntent(surfaceHandle, event) {
+    if (event?.type !== 'pointer-down') return;
+    const intent = Object.freeze({kind: 'activate'});
+    for (const handler of intentHandlers) handler(intent, surfaceHandle);
+  }
+
   return Object.freeze({
     createSurface,
     attachPresentation,
@@ -213,6 +258,8 @@ function createBrowserRendererAdapter({loadComponent, mount = null, createRender
     destroySurface,
     destroyAll,
     readRenderedPixels,
+    injectPointerEvent,
+    onIntent,
   });
 }
 
