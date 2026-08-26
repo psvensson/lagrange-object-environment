@@ -381,8 +381,9 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
       (error) => error?.name === 'AuthorityError' && /object\/read/.test(error.message),
     );
 
-    // Authorized but nonexistent: a distinct not-found TypeError, never
-    // conflated with AuthorityError and never a silent null.
+    // Authorized but nonexistent: a distinct not-found, never conflated with
+    // AuthorityError and never a silent null. Machine-readable via the lane-owned
+    // stable code (OBJECT_NOT_FOUND), not by matching message text.
     await assert.rejects(
       adapter.readObject({
         imageId: IMAGE,
@@ -390,7 +391,7 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
         authority: grant(runtime, 'object/read', imagesApi.objectResource(IMAGE, 'no-such-object')),
         blockId: IDS.readBlockId,
       }),
-      (error) => error?.name === 'TypeError' && /not found/.test(error.message),
+      (error) => error?.code === 'OBJECT_NOT_FOUND' && error?.name !== 'AuthorityError',
     );
   });
 

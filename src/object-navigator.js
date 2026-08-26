@@ -119,14 +119,17 @@ function createObjectNavigator({adapter, presentationRegistry, commandRegistry, 
         reason: error?.message ?? 'unauthorized',
       });
     }
-    if (error instanceof TypeError && /^object not found: /.test(error?.message ?? '')) {
-      // Authorized but missing. The discriminator is the lane's EXACT
-      // single-owned not-found prefix (`object not found: <imageId>/<objectId>`,
-      // image-object-read-binding.js), never a bare /not found/i: an
-      // operational TypeError whose message merely CONTAINS "not found" (e.g.
-      // `activation block not found: ...` from a wrong readBlockId, `...
-      // interface not found: ...`) is NOT a missing object and must fall
-      // through to the operational branch below with its original message.
+    // Authorized but missing. The PRIMARY discriminator is the lane-owned stable error code
+    // (`error.code === 'OBJECT_NOT_FOUND'`, image-object-read-binding.js ObjectReadNotFoundError) —
+    // machine-readable, not message-text. The exact single-owned message prefix
+    // (`object not found: <imageId>/<objectId>`) is kept as a fallback for a substrate that predates
+    // the code. Never a bare /not found/i: an operational TypeError whose message merely CONTAINS
+    // "not found" (e.g. `activation block not found: ...` from a wrong readBlockId, `... interface
+    // not found: ...`) is NOT a missing object and must fall through to the operational branch below
+    // with its original message.
+    const isNotFound = error?.code === 'OBJECT_NOT_FOUND'
+      || (error instanceof TypeError && /^object not found: /.test(error?.message ?? ''));
+    if (isNotFound) {
       return Object.freeze({
         kind: UNAVAILABLE_REF_KIND,
         imageId: subject.imageId,

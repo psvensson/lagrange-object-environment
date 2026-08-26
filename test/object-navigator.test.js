@@ -144,6 +144,19 @@ test('the lane\'s exact "object not found: <image>/<id>" prefix IS classified as
   assert.equal(presentations[0].context.reason, 'object not found: img/obj-a');
 });
 
+// The PRIMARY discriminator is the lane-owned stable error code (OBJECT_NOT_FOUND), not the message
+// text. An error carrying the code is missing-object even if its message does NOT match the prefix;
+// and an operational TypeError WITHOUT the code but WITH "not found" in its message is still NOT a
+// missing object (covered by the falsification test above).
+test('the stable OBJECT_NOT_FOUND code IS classified as a missing object (machine-readable, not message text)', async () => {
+  const coded = new TypeError('object not found: img/obj-b');
+  coded.code = 'OBJECT_NOT_FOUND';
+  const {navigator} = makeNavigator({readError: coded});
+  const {presentations} = await navigator.navigate(ref('obj-b'));
+  assert.equal(presentations[0].kind, 'unavailable-reference');
+  assert.equal(presentations[0].context.reason, 'object not found: img/obj-b');
+});
+
 // --- the authorized read lane: unauthorized vs unavailable -------------------
 
 test('navigate threads authority to the read seam per call and never stores it', async () => {
