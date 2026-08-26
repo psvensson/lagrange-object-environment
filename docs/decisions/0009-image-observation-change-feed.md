@@ -2,7 +2,14 @@
 
 ## Status
 
-Accepted
+**Amended** — the *full-record / raw-history / numeric-revision-cursor* half of this ADR is superseded
+for the authorized feed by lagrange-images [ADR 0070] (`image-observation-binding/v1`). ADR 0009's
+boundary and ownership decisions stand unchanged: the `ImageClientAdapter` owns observation end-to-end,
+the seam is pull-based and async-iterable (no push), and receiving a Change confers no authority. What
+changed is the *content* of the feed: for restricted principals the feed is a **metadata-only
+invalidation** (`{type, kind, objectId, cursor}` — identity + kind + opaque cursor, **never** the
+record payload, **never** a global revision), and state is re-read via the authorized `readObject`
+seam. See the amended "The normalized Change" and "Cursor and resume" sections below.
 
 ## Context
 
@@ -19,7 +26,7 @@ So the environment cannot consume a push feed that does not exist, and ADR 0002 
 
 ## Decision
 
-Live observation is a **pull-based change feed**, owned end-to-end by the `ImageClientAdapter` (the owner of the Object Environment → Lagrange Images interaction). The environment exposes one normalized seam; the adapter implements it over the public `history` contract.
+Live observation is a **pull-based change feed**, owned end-to-end by the `ImageClientAdapter` (the owner of the Object Environment → Lagrange Images interaction). The environment exposes one normalized seam. **Amended (substrate ADR 0070):** the adapter implements it over the **authorized observation lane** (`image-observation-binding/v1`) under per-call authority for restricted principals — not over the raw `history` stream, which is a privileged/host-internal seam carrying full records.
 
 ### The seam
 
@@ -32,6 +39,23 @@ observe(imageRef, { afterRevision }) -> AsyncIterable<Change>
 Async iteration is the renderer-independent contract for "a sequence of changes over time": a consumer `for await`s changes; cancellation is breaking the loop; errors surface as iteration errors. The adapter hides polling intervals, retries and revision advancement behind it. The seam makes **no claim of push** — latency is bounded by the poll, and consumers must not assume real-time delivery.
 
 ### The normalized Change
+
+**Amended for the authorized feed (substrate ADR 0070):** for restricted principals the feed is a
+**metadata-only invalidation**, not a full-record Change. Each event is normalized to:
+
+```
+  type,            // 'record.put' (object.put in v1)
+  kind,            // the raw record-kind string (e.g. 'object.put')
+  objectId,        // the changed object's identity
+  cursor,          // the lane's OPAQUE resume cursor (NOT a number, NOT a global revision)
+```
+
+There is deliberately **no `record` payload** and **no `revision`**: the lane filters per-event by
+`object/read` inside the substrate and strips the global revision, so the feed discloses only the
+*identity* of an object the caller may read — never its state, never the image's global clock. A
+consumer that needs the new state re-reads the object through the authorized `readObject` seam. The
+earlier full-record/revision shape described below applied to the *privileged* raw-history feed and is
+superseded for restricted observation.
 
 Every substrate event is normalized to one shape so presentations consume a single contract regardless of record kind:
 
@@ -49,7 +73,13 @@ Every substrate event is normalized to one shape so presentations consume a sing
 
 ### Cursor and resume
 
-A change's `revision` is the only cursor. A consumer that wants **catch-up** passes a stored `afterRevision`; a consumer that wants **live follow** starts from the current end of the stream. The two modes are distinct and both must be provable: catch-up must replay events the consumer missed, and live-follow must not replay a backlog it never asked for.
+**Amended for the authorized feed (substrate ADR 0070):** the cursor is the lane's **opaque token**
+(`obs-cursor/v1:...`), not a numeric `revision`. An empty cursor means **live follow** (the lane
+anchors at the current end and replays no backlog); a previously-returned token **resumes** after its
+position (a valid older token idempotently re-emits earlier visible invalidations). The token is
+opaque and integrity-protected, so the consumer cannot read a revision out of it or gap-analyze
+writes to objects it cannot see. The earlier `afterRevision`-as-cursor text described the privileged
+raw-history feed and is superseded for restricted observation.
 
 ### No authority
 
