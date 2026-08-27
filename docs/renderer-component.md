@@ -44,8 +44,15 @@ import print: func(s: string);
 
 The Component is unaware of the RenderTarget realization (canvas vs texture) —
 that stays host wiring. It is also unaware of the asset-bytes authority: it only
-calls `load-glb(name)`; the host (`src/browser-renderer/assets.js`, injected
-per-attach by `BrowserRendererAdapter`) supplies the bytes.
+calls `load(name)` with a PRESENTATION-LOCAL name (e.g. `load("main-model")`),
+never an image/object id. The Component is transpiled in jco INSTANTIATION mode,
+so per attach the adapter builds a fresh provider (`createAssetProvider`) and
+binds it as `imports['lagrange-assets']` for THAT ONE Component instance — there
+is no process-global provider, and Component A's `load` closure cannot reach
+Component B's bytes (Bead `lagrange-object-environment-0dm`). The environment
+resolves the durable asset refs to bytes under per-ref `object/read`
+(`ImageClientAdapter.resolveAssetBytes`) and hands the adapter only the opaque
+attach-scoped allowlist.
 
 ## Supported GLB subset (the rejection contract)
 

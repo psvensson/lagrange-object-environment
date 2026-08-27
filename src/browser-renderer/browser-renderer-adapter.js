@@ -1,6 +1,6 @@
 import {RendererResourceLostError} from '../renderer-errors.js';
 import {pushPendingRenderTarget} from './surface.js';
-import {registerAssetSource, clearAssetSource} from './assets.js';
+import {createAssetProvider} from './assets.js';
 
 /**
  * BrowserRendererAdapter: a realization of the RendererAdapter contract
@@ -40,10 +40,13 @@ function createBrowserRendererAdapter({loadComponent, mount = null, createRender
   // null, each Surface defaults to a CanvasRenderTarget over its own canvas.
   // The Compositor and Presentation never know which realization is used.
   const makeRenderTarget = typeof createRenderTarget === 'function' ? createRenderTarget : null;
-  // Host wiring (optional): resolve a presentationDescriptor to the asset byte
-  // source (a Map<name, Uint8Array>) for THIS attach. Called per-attach so the
-  // durable bytes cross the host -> Component boundary at runtime; the source
-  // is injected wiring, NOT an ambient store (cleared on destroyAll).
+  // Host wiring (optional): resolve a presentationDescriptor to the attach-
+  // scoped, AUTHORIZED asset bytes (a Map<presentationLocalName, Uint8Array>)
+  // for THIS attach. ASYNC (an authorized read). The environment side resolves
+  // each asset ref under object/read (ImageClientAdapter lane); the adapter
+  // receives only the opaque bytes, never refs/ids/authority. Per-attach, so a
+  // cold Component re-receives its durable bytes; the provider closure is bound
+  // into that one Component instance (no process-global store) and dropped with it.
   const getAssets = typeof resolveAssets === 'function' ? resolveAssets : null;
 
   const surfaces = new Map(); // handle -> {surface|null, component, running, width, height}
@@ -108,10 +111,12 @@ function createBrowserRendererAdapter({loadComponent, mount = null, createRender
     if (entry.running) {
       throw new RendererResourceLostError('browser renderer: a presentation is already attached to this surface');
     }
-    // Host wiring: inject the asset byte source for THIS attach, before the
-    // Component starts (it calls load-glb inside start()). Per-attach, so a
-    // cold Component re-receives its durable bytes; cleared on destroyAll.
-    registerAssetSource(getAssets ? getAssets(presentationDescriptor) : null);
+    // Host wiring: resolve THIS attach's asset bytes under authority (ASYNC),
+    // then build an attach-scoped provider closing over exactly that allowlist.
+    // The provider is passed to loadComponent and bound into THIS Component
+    // instance's imports (jco instantiation mode) — never a process-global.
+    const assetBytes = getAssets ? await getAssets(presentationDescriptor) : null;
+    const assetProvider = createAssetProvider(assetBytes);
     // Host wiring: push the RenderTarget for the Surface the Component is
     // about to construct, so it is in place BEFORE the Component builds its
     // Context inside start() (the Context reads surface.renderTarget at
@@ -119,12 +124,15 @@ function createBrowserRendererAdapter({loadComponent, mount = null, createRender
     if (makeRenderTarget) {
       pushPendingRenderTarget(makeRenderTarget({width: entry.width, height: entry.height}));
     }
-    // Start the Component. It constructs its Surface (the Lagrange-owned one)
-    // via the mapped surface import; loadComponent returns {start, surface}.
+    // Start the Component. loadComponent instantiates it (jco instantiation
+    // mode) with THIS attach's assetProvider in its import closure, then calls
+    // start; it returns {start, surface}. The Component constructs its Surface
+    // (the Lagrange-owned one) via the mapped surface import.
     const component = await loadComponent({
       presentationDescriptor,
       width: entry.width,
       height: entry.height,
+      assetProvider,
     });
     entry.component = component;
     entry.surface = component?.surface ?? null;
@@ -209,9 +217,11 @@ function createBrowserRendererAdapter({loadComponent, mount = null, createRender
       unmountCanvas(entry);
     }
     surfaces.clear();
-    // Session teardown: drop the asset byte source so a cold Component provably
-    // re-receives its bytes on the next attach (no ambient asset store).
-    clearAssetSource();
+    // Session teardown: each entry's Component instance is dropped (stopEntry),
+    // and with it the attach-scoped asset provider closure bound into that
+    // instance's imports. There is no process-global asset store to clear — a
+    // cold Component provably re-receives its bytes on the next attach because
+    // the adapter resolves + builds a fresh provider per attach.
   }
 
   // Host-side SYNTHETIC-INJECTION seam (input capture owner): deliver a
