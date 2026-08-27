@@ -157,11 +157,53 @@ function createCompositor({rendererAdapter} = {}) {
    * Open a logical view: create its surface and attach its presentation.
    * Returns the logical viewId (durable intent handle, NOT a renderer handle).
    */
-  async function openView({viewDescriptor, presentationDescriptor}) {
+  // The Compositor is the SOLE owner of viewId allocation and admission. A
+  // caller-supplied viewId is NOT the caller inventing identity — it is the
+  // RE-ADMISSION of a previously-issued durable ID on the restore path. Both
+  // paths enforce uniqueness against the live set; a collision is a typed error.
+  function admitViewId(candidate) {
+    if (views.has(candidate)) {
+      // An IDENTITY/admission conflict (not a lost renderer resource): a
+      // supplied durable ID collides with an already-live view.
+      throw new TypeError(`a live view already holds viewId "${candidate}" (viewId allocation is Compositor-owned; a restore must not collide with a live view)`);
+    }
+    return candidate;
+  }
+
+  // Mint a fresh auto viewId, skipping any candidate already live (a restored
+  // caller-supplied ID may occupy an early ordinal).
+  function mintViewId() {
+    let candidate = `view-${nextViewOrdinal++}`;
+    while (views.has(candidate)) {
+      candidate = `view-${nextViewOrdinal++}`;
+    }
+    return candidate;
+  }
+
+  /**
+   * Open a logical view: create its surface and attach its presentation.
+   * Returns the logical viewId (durable intent handle, NOT a renderer handle).
+   *
+   * viewId is OPTIONAL. Omit it to mint a fresh durable ID (a genuinely new
+   * view). Supply it to RE-ADMIT a previously-persisted durable ID (restore):
+   * the Session uses the SAME ID, so a composition tree's leaf identity is
+   * stable across destroy/recreate with entirely new renderer handles. The
+   * Compositor owns allocation in both modes; a supplied ID that collides with
+   * a live view throws.
+   */
+  async function openView({viewId: suppliedViewId, viewDescriptor, presentationDescriptor}) {
     requireAlive();
     requireViewDescriptor(viewDescriptor);
     requirePresentationDescriptor(presentationDescriptor);
-    const viewId = `view-${nextViewOrdinal++}`;
+    let viewId;
+    if (suppliedViewId !== undefined) {
+      if (typeof suppliedViewId !== 'string' || suppliedViewId.length === 0) {
+        throw new TypeError('a supplied viewId must be a non-empty string (re-admission of a durable ID, not new identity)');
+      }
+      viewId = admitViewId(suppliedViewId);
+    } else {
+      viewId = mintViewId();
+    }
     let surfaceHandle = null;
     try {
       surfaceHandle = await rendererAdapter.createSurface(viewDescriptor);
