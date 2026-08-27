@@ -7,6 +7,8 @@ import {fileURLToPath} from 'node:url';
 
 import {Command} from '../src/index.js';
 import {createImageClientAdapter, classIdFor, refToEdgeString} from '../src/image-client-adapter.js';
+import {presentation, split, stack, empty, leafViewIds as leafViewIdsImport} from '../src/composition-tree.js';
+import {encodeCompositionLayout, decodeCompositionLayout} from '../src/composition-persistence.js';
 import {
   CommandAuthorizationError,
   CommandNotApplicableError,
@@ -386,6 +388,112 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
       loaded.presentations.map((p) => p.subject.objectId),
       ['subject-b', 'subject-a', 'subject-b'],
     );
+  });
+
+  await t.test('composition tree round-trips through the REAL authorized Perspective save/load; indexed order != arrangement', async () => {
+    const {runtime, adapter} = await setup();
+    const schema = await adapter.ensurePerspectiveSchema(IMAGE, PERSP_IDS);
+
+    const subjectShape = await runtime.images.putShape(IMAGE, {id: 'subj-shape', slots: []});
+    for (const id of ['subject-a', 'subject-b', 'subject-c']) {
+      await runtime.images.putObject(IMAGE, {
+        id, shape: imagesApi.objectRef(IMAGE, subjectShape.id), slots: {}, metadata: {},
+      }, {expectedVersion: 0});
+    }
+    const ref = (objectId) => ({kind: 'ref', imageId: IMAGE, objectId});
+
+    // The intended composition: split(A, stack([B, C], active B)).
+    const tree = split('row', 0.3, presentation('view-A'), stack([presentation('view-B'), presentation('view-C')], 'view-B'));
+    // Perspective presentations DELIBERATELY enumerated in a DIFFERENT order
+    // (C, A, B) than the arrangement — proving indexed enumeration != arrangement.
+    const presentations = [
+      {id: 'view-C', kind: 'inspector', subject: ref('subject-c'), context: {}, state: {open: true}},
+      {id: 'view-A', kind: 'browser', subject: ref('subject-a'), context: {}, state: {}},
+      {id: 'view-B', kind: 'editor', subject: ref('subject-b'), context: {line: 3}, state: {}},
+    ];
+    // The layout is the VERSIONED composition payload (bijection enforced at encode).
+    const layout = encodeCompositionLayout(tree, presentations);
+
+    const {Perspective} = await import('../src/model.js');
+    const perspective = new Perspective({
+      id: 'in-memory',
+      subject: ref('subject-a'),
+      title: 'Composed workbench',
+      layout,
+      presentations,
+    });
+
+    const authorityProvider = async (request) => {
+      const grants = [
+        {operation: 'object/create', resource: imagesApi.objectResource(request.imageId, request.classId)},
+        {operation: 'object/edge-write', resource: imagesApi.objectResource(request.imageId, request.subjectRef.objectId)},
+      ];
+      for (const childRef of request.childRefs ?? []) {
+        grants.push({operation: 'object/edge-write', resource: imagesApi.objectResource(request.imageId, childRef.objectId)});
+      }
+      return runtime.authority.issue({principal: 'alice', grants});
+    };
+
+    const saved = await adapter.savePerspective({imageId: IMAGE, perspective, authorityProvider, schema});
+    const loaded = await adapter.loadPerspective({
+      imageId: IMAGE,
+      perspectiveId: saved.perspectiveId,
+      authorityProvider: readAuthorityProvider(runtime),
+      readBlockId: IDS.readBlockId,
+    });
+
+    // The indexed enumeration order is preserved (C, A, B) — NOT the arrangement.
+    assert.deepEqual(loaded.presentations.map((p) => p.id), ['view-C', 'view-A', 'view-B'], 'indexed enumeration is membership order, not arrangement');
+    // The composition tree decodes identically from the layout slot.
+    const decoded = decodeCompositionLayout(loaded.layout, loaded.presentations);
+    assert.equal(decoded.legacy, false);
+    assert.deepEqual(decoded.composition, tree, 'the composition tree round-trips through the real save/load');
+    assert.equal(decoded.composition.second.active, 'view-B', 'stack.active survives persistence');
+    // The tree's leaf order (A,B,C) differs from the indexed order (C,A,B): the
+    // two orders are independent.
+    assert.deepEqual([...leafViewIdsImport(decoded.composition)], ['view-A', 'view-B', 'view-C']);
+
+    // The layout JSON is ref-free and carries no viewDescriptor/geometry/handle.
+    const layoutJson = JSON.stringify(loaded.layout);
+    for (const banned of ['"kind":"ref"', 'surfaceHandle', 'width', 'height', 'viewDescriptor', 'focus', 'selection', 'authority']) {
+      assert.ok(!layoutJson.includes(banned), `persisted layout must not carry "${banned}"`);
+    }
+  });
+
+  await t.test('an empty Perspective round-trips an empty() composition', async () => {
+    const {runtime, adapter} = await setup();
+    const schema = await adapter.ensurePerspectiveSchema(IMAGE, PERSP_IDS);
+    const subjectShape = await runtime.images.putShape(IMAGE, {id: 'subj-shape', slots: []});
+    await runtime.images.putObject(IMAGE, {
+      id: 'subject-a', shape: imagesApi.objectRef(IMAGE, subjectShape.id), slots: {}, metadata: {},
+    }, {expectedVersion: 0});
+    const ref = (objectId) => ({kind: 'ref', imageId: IMAGE, objectId});
+
+    const {Perspective} = await import('../src/model.js');
+    const perspective = new Perspective({
+      id: 'in-memory',
+      subject: ref('subject-a'),
+      title: null,
+      layout: encodeCompositionLayout(empty(), []),
+      presentations: [],
+    });
+    const authorityProvider = async (request) => runtime.authority.issue({
+      principal: 'alice',
+      grants: [
+        {operation: 'object/create', resource: imagesApi.objectResource(request.imageId, request.classId)},
+        {operation: 'object/edge-write', resource: imagesApi.objectResource(request.imageId, request.subjectRef.objectId)},
+      ],
+    });
+    const saved = await adapter.savePerspective({imageId: IMAGE, perspective, authorityProvider, schema});
+    const loaded = await adapter.loadPerspective({
+      imageId: IMAGE,
+      perspectiveId: saved.perspectiveId,
+      authorityProvider: readAuthorityProvider(runtime),
+      readBlockId: IDS.readBlockId,
+    });
+    assert.equal(loaded.presentations.length, 0);
+    const decoded = decodeCompositionLayout(loaded.layout, loaded.presentations);
+    assert.deepEqual(decoded.composition, {kind: 'empty'}, 'an empty Perspective round-trips empty(), not a special-cased layout');
   });
 
   // The authorized object/read lane (substrate ADR 0068): readObject is the
