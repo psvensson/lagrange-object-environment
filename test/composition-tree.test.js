@@ -45,8 +45,29 @@ test('malformed nodes fail loudly', () => {
   assert.throws(() => split('row', 0, presentation('a'), presentation('b')), /ratio/);
   assert.throws(() => split('row', 1.5, presentation('a'), presentation('b')), /ratio/);
   assert.throws(() => stack([], 'a'), /non-empty array/);
-  assert.throws(() => stack([presentation('a')], 'not-a-child'), /must name a viewId present/);
+  assert.throws(() => stack([presentation('a')], 'not-a-child'), /exposed leaf of exactly one direct child/);
   assert.throws(() => validate({kind: 'window', x: 0, y: 0, w: 1, h: 1}), /unknown composition node kind/);
+  // Duplicate leaf viewIds are malformed (one durable view = one slot).
+  assert.throws(() => split('row', 0.5, presentation('a'), presentation('a')), /more than one composition position/);
+  assert.throws(() => stack([presentation('a'), presentation('b')], 'a') && validate(split('row', 0.5, stack([presentation('a')], 'a'), presentation('a'))), /more than one composition position/);
+  // stack.active must name the exposed leaf of a DIRECT child — not a leaf
+  // deep inside a split child (which exposes no single slot).
+  assert.throws(
+    () => stack([split('row', 0.5, presentation('a'), presentation('b')), presentation('c')], 'a'),
+    /exposed leaf of exactly one direct child/,
+  );
+});
+
+test('a VALID nested stack is NOT false-rejected (active names a nested stack child\'s exposed leaf)', () => {
+  // A stack whose child is itself a stack: active names the inner stack's
+  // exposed leaf (a direct child's exposedLeafId), which is well-defined.
+  const inner = stack([presentation('a')], 'a');
+  const outer = stack([inner, presentation('b')], 'a');
+  assert.equal(outer.active, 'a', 'nested stack active is honored (a direct child that is a stack exposes its own active)');
+  // A two-leaf inner stack: active names the inner stack's exposed leaf.
+  const inner2 = stack([presentation('a'), presentation('c')], 'c');
+  const outer2 = stack([inner2, presentation('b')], 'c');
+  assert.equal(outer2.active, 'c');
 });
 
 test('stack.active is a durable viewId, NOT an index (reorder-safe)', () => {

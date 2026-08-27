@@ -36,9 +36,9 @@ There is **no `ordinal` and no `perspective` back-edge** (see "Ordering" below �
 
 - `subject` — a ref/pinned-ref Value (the Perspective's root subject).
 - `title` — a leaf **text** slot (empty string when untitled).
-- `layout` — the compositor's opaque JSON layout descriptor, serialized into a leaf **text** slot. Still owned by the compositor policy; the projection treats it as opaque.
+- `layout` — the compositor's opaque JSON layout descriptor, serialized into a leaf **text** slot. Still owned by the compositor policy; the projection treats it as opaque. (As of E2, when the layout IS a composition it carries the versioned payload `{kind:'composition', version:1, root}` whose *meaning* is owned by `src/composition-persistence.js`; this projection still treats the slot as opaque ref-free JSON.)
 - `formatVersion` — an **integer** leaf slot; the migration seam. (The integer Value stores a decimal-string payload; readers parse it, they do not expect a JS number.)
-- **Indexed part** — the ordered list of presentation refs (`ref`/`pinned-ref` elements), one per presentation, in order. This is the membership *and* the ordering, in one walk-visible place (substrate ADR 0047/0064). The Perspective class is defined with an **indexed instance Shape** (`indexed: 'values'`), and the list is written through the creation lane's single edge indexed field.
+- **Indexed part** — the list of presentation refs (`ref`/`pinned-ref` elements), one per presentation. This owns durable child **membership** and the **canonical record enumeration order**, in one walk-visible place (substrate ADR 0047/0064). It does **not** own arrangement/layout order: once E2 exists, the composition tree (in the `layout` slot) owns how the presentations are *arranged*; the indexed part's order is record enumeration, independent of arrangement. The Perspective class is defined with an **indexed instance Shape** (`indexed: 'values'`), and the list is written through the creation lane's single edge indexed field.
 
 ### Ordering and creation sequence
 
