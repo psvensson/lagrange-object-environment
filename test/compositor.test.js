@@ -165,28 +165,67 @@ test('the adapter contract is exactly the agreed lifecycle method set (no raw GP
 
 // --- invariant 6: recreate-from-Perspective (the raison d'etre) --------------
 
-test('a fresh Session recreates views from durable intent (Session recreates the machinery)', async () => {
-  // Session 1: open views, capture durable intent, tear down.
+test('a fresh Session recreates views from durable intent, RESTORING the same durable viewIds (not counter-coincidence)', async () => {
+  // Session 1: open THREE views, close the MIDDLE one, so the persisted intent
+  // has a GAP (view-0 + view-2, no view-1). Under the OLD design (restore via a
+  // fresh counter) Session 2 would mint view-0 + view-1 — this test goes RED.
   const first = setup();
-  await first.compositor.openView({viewDescriptor: viewDescriptor(), presentationDescriptor: presentationDescriptor('obj-1')});
+  const idA = await first.compositor.openView({viewDescriptor: viewDescriptor(), presentationDescriptor: presentationDescriptor('obj-a')});
+  const idMiddle = await first.compositor.openView({viewDescriptor: viewDescriptor(), presentationDescriptor: presentationDescriptor('obj-middle')});
+  const idB = await first.compositor.openView({viewDescriptor: viewDescriptor(), presentationDescriptor: presentationDescriptor('obj-b')});
+  await first.compositor.closeView(idMiddle); // gap: view-0 and view-2 remain
   const intent = first.compositor.durableIntent();
+  assert.deepEqual(intent.map((v) => v.viewId), [idA, idB], 'persisted intent has a gap (view-0, view-2)');
   await first.compositor.destroy();
   assert.equal(first.adapter.liveResourceCount(), 0);
 
-  // Session 2: a NEW compositor + adapter recreate the views from the intent.
+  // Session 2: restore by RE-ADMITTING the persisted durable IDs, OUT OF ORDER
+  // (idB first). The Session must use the SAME IDs bound to the SAME subjects —
+  // proving identity is durable, not a coincidental fresh mint.
   const second = setup();
-  for (const view of intent) {
-    await second.compositor.openView({
+  const byId = new Map(intent.map((v) => [v.viewId, v]));
+  for (const restoreId of [idB, idA]) { // out of order
+    const view = byId.get(restoreId);
+    const used = await second.compositor.openView({
+      viewId: restoreId,
       viewDescriptor: view.viewDescriptor, presentationDescriptor: view.presentationDescriptor,
     });
+    assert.equal(used, restoreId, 'the Session re-admits the SAME durable viewId');
   }
-  assert.equal(second.adapter.liveResourceCount(), intent.length, 'the new Session recreates one resource per intended view');
+  assert.equal(second.adapter.liveResourceCount(), 2, 'one resource per restored view');
+
   const restored = second.compositor.durableIntent();
+  // Identity is durable: the SAME IDs come back, bound to the SAME subjects.
   assert.deepEqual(
-    restored.map((v) => v.presentationDescriptor.subject.objectId),
-    ['obj-1'],
-    'the recreated Session reflects the same durable intent',
+    restored.map((v) => v.viewId).sort(),
+    [idA, idB].sort(),
+    'restored viewIds are the persisted durable IDs (with the gap), NOT a fresh 0/1 mint',
   );
+  const subjectById = new Map(restored.map((v) => [v.viewId, v.presentationDescriptor.subject.objectId]));
+  assert.equal(subjectById.get(idA), 'obj-a', 'viewId -> subject binding is by durable ID, not counter position');
+  assert.equal(subjectById.get(idB), 'obj-b');
+  // No renderer handle leaked into the durable intent.
+  for (const v of restored) {
+    assert.ok(!('surfaceHandle' in v), 'durable intent stays handle-free');
+  }
+});
+
+test('a fresh openView after a restore does not collide with restored IDs; a duplicate re-admission is rejected', async () => {
+  const compositor = setup().compositor;
+  // Restore a durable ID that occupies an early ordinal.
+  const restored = await compositor.openView({
+    viewId: 'view-0', viewDescriptor: viewDescriptor(), presentationDescriptor: presentationDescriptor('obj-a'),
+  });
+  assert.equal(restored, 'view-0');
+  // A fresh openView must SKIP the live 'view-0' (no collision).
+  const fresh = await compositor.openView({viewDescriptor: viewDescriptor(), presentationDescriptor: presentationDescriptor('obj-b')});
+  assert.notEqual(fresh, 'view-0', 'auto-mint skips a live restored ID');
+  // Re-admitting an ALREADY-LIVE ID is rejected (allocation is Compositor-owned).
+  await assert.rejects(
+    compositor.openView({viewId: 'view-0', viewDescriptor: viewDescriptor(), presentationDescriptor: presentationDescriptor('obj-c')}),
+    /already holds viewId|collide/i,
+  );
+  await compositor.destroy();
 });
 
 // --- contract validation ------------------------------------------------------
