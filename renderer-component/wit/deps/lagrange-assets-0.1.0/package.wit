@@ -7,11 +7,19 @@ package lagrange:assets@0.1.0;
 /// a GLB chosen at Session time can reach the running Component.
 ///
 /// Ownership: the host realization is BrowserRendererAdapter host wiring
-/// (src/browser-renderer/assets.js) — an injected byte source, NOT an asset
-/// store. The asset-bytes authority (which subsystem owns the durable bytes)
-/// is a separate concern (Bead lagrange-object-environment-0dm).
+/// (src/browser-renderer/assets.js `createAssetProvider`) — an injected,
+/// attach-scoped byte source bound into ONE Component instance's import closure
+/// (jco instantiation mode), NOT an asset store and NOT a process-global. The
+/// asset-bytes authority (resolving durable refs to bytes under object/read) is
+/// the environment's authorized read lane (`ImageClientAdapter.resolveAssetBytes`);
+/// the adapter receives only the opaque attach-scoped allowlist. (Resolved by
+/// Bead lagrange-object-environment-0dm.)
 interface provider {
-    /// Load an asset's bytes by name. Returns the bytes, or an error string
-    /// when the name is unknown / the bytes are unavailable.
-    load-glb: func(name: string) -> result<list<u8>, string>;
+    /// Load an asset's bytes by its PRESENTATION-LOCAL name. The name is an
+    /// opaque string scoped to THIS attach's allowlist (e.g. "main-model"); it
+    /// is never an image/object id and never another attach's name. Returns
+    /// the bytes, or an error string when the name is not in this attach's
+    /// allowlist. Format-neutral (the Component interprets the bytes; the host
+    /// treats them as opaque).
+    load: func(name: string) -> result<list<u8>, string>;
 }

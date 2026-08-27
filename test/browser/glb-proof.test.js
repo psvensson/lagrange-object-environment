@@ -174,3 +174,50 @@ test('CI: GLB Component renders a shaded Box (asset transfer + buffers + depth +
     server.close();
   }
 });
+
+// Bead 0dm: per-instance asset isolation. TWO simultaneous GLB views each load
+// 'main-model' but with DIFFERENT bytes (small vs big Box). Per-instance import
+// closures (jco instantiation mode) mean A renders its small Box, B renders its
+// big Box, and A STILL renders its small Box AFTER B is instantiated — the
+// critical falsifier against a shared/clobbered provider.
+test('CI: per-instance asset isolation — A and B render their own bytes; A unaffected by B', {skip: !available && 'no Chrome available'}, async (t) => {
+  const {server, port} = await serveRepo();
+  const browser = await puppeteer.launch({
+    executablePath: CHROME, headless: false, args: CHROME_FLAGS,
+    env: {...process.env, DISPLAY: process.env.DISPLAY ?? ':0'},
+  });
+  try {
+    const page = await browser.newPage();
+    await page.setViewport({width: 1000, height: 900});
+    page.on('pageerror', (e) => console.error('[pageerror]', e.message));
+    await page.goto(`http://127.0.0.1:${port}/test/browser/proof.html`, {waitUntil: 'networkidle0'});
+    await page.waitForFunction('window.__lagrangeProof !== undefined', {timeout: 15000});
+
+    const r = await page.evaluate(async () => {
+      const S = await window.__lagrangeProof.openTwoIsolatedGlbSessions(320, 200);
+      return {frameA1: S.frameA1, frameA2: S.frameA2, frameB: S.frameB};
+    });
+
+    const meshA1 = assertMesh(r.frameA1, 'A (small Box) before B');
+    const meshA2 = assertMesh(r.frameA2, 'A (small Box) AFTER B instantiated');
+    const meshB = assertMesh(r.frameB, 'B (big Box)');
+
+    // B's big Box covers a discriminatingly larger area than A's small Box.
+    assert.ok(
+      meshB > meshA1 * 1.3,
+      `B (big Box, mesh ${meshB}) should cover clearly more than A (small Box, mesh ${meshA1}) — they resolved DIFFERENT bytes for 'main-model'`,
+    );
+    // A is unchanged by B's instantiation: A-after-B ≈ A-before-B (same bytes).
+    // Allow drift for the auto-orbit camera (a rotating cube's silhouette varies
+    // with angle), but A must NOT jump toward B's larger footprint. A clobbered
+    // provider would push meshA2 ≈ meshB (|delta| ≈ meshB − meshA1), far above
+    // this 0.75 bound; per-instance closures keep the delta to orbit drift only.
+    assert.ok(
+      Math.abs(meshA2 - meshA1) < (meshB - meshA1) * 0.75,
+      `A AFTER B (mesh ${meshA2}) must stay near A BEFORE B (mesh ${meshA1}), NOT jump toward B's footprint (mesh ${meshB}) — proves A's provider was not clobbered by B`,
+    );
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});

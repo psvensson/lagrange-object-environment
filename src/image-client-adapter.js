@@ -510,6 +510,65 @@ function createImageClientAdapter(client) {
     return await authorizedReadObject({imageId, objectId, authority, blockId});
   }
 
+  // --- Presentation asset refs -> authorized bytes (Bead 0dm) -----------------
+
+  // Decode a durable byte array from an authorized object-read result. The
+  // substrate stores bytes as a base64 string (or an array of byte ints) in a
+  // named slot. Returns a Uint8Array, or null when the object carries no bytes.
+  function decodeBytesField(record, slotName) {
+    let v = record?.slots?.[slotName];
+    // The authorized read returns slots as Value objects: text ({value}) or the
+    // substrate's first-class bytes kind ({kind:'bytes', base64}). Unwrap both.
+    if (v && typeof v === 'object' && typeof v.base64 === 'string') v = v.base64;
+    else if (v && typeof v === 'object' && typeof v.value === 'string') v = v.value;
+    if (typeof v === 'string') {
+      // base64
+      if (typeof atob === 'function') {
+        const bin = atob(v);
+        const out = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
+        return out;
+      }
+      return new Uint8Array(Buffer.from(v, 'base64'));
+    }
+    if (Array.isArray(v)) return new Uint8Array(v);
+    return null;
+  }
+
+  /**
+   * Resolve a set of PRESENTATION-LOCAL asset names (each mapped to a durable
+   * ref by the Presentation) to opaque bytes under explicit per-call object/read
+   * authority. This is the environment-side owner of the "Presentation asset
+   * refs -> authorized bytes" interaction (docs/ownership.md): it routes through
+   * the SAME authorized whole-record read lane as readObject (no separate grant
+   * type, no broad asset grant), so each asset ref needs its OWN authorized
+   * resolution — reading a Presentation never transitively authorizes its assets.
+   *
+   * The BrowserRendererAdapter consumes only the returned Map<presentationLocalName,
+   * Uint8Array> (never refs/ids/authority); it stays a byte conduit.
+   *
+   * @param {object} spec
+   * @param {Array<{name: string, ref: {imageId: string, objectId: string, blockId: string, slot?: string}}>} spec.assets
+   *        presentation-local name -> durable ref (+ read blockId, + optional byte slot, default 'bytes')
+   * @param {object} spec.authority per-call authority (threaded, never stored)
+   * @returns {Promise<Map<string, Uint8Array>>} name -> opaque bytes
+   */
+  async function resolveAssetBytes({assets, authority}) {
+    if (!Array.isArray(assets)) throw new TypeError('resolveAssetBytes requires an assets array');
+    const out = new Map();
+    for (const {name, ref} of assets) {
+      if (typeof name !== 'string' || !ref || typeof ref.imageId !== 'string' || typeof ref.objectId !== 'string' || typeof ref.blockId !== 'string') {
+        throw new TypeError('each asset needs a presentation-local name and a durable ref {imageId, objectId, blockId, ...}');
+      }
+      // Authorized per-ref read (object/read). No ref is authority.
+      const record = await readObject({imageId: ref.imageId, objectId: ref.objectId, authority, blockId: ref.blockId});
+      const bytes = decodeBytesField(record, ref.slot ?? 'bytes');
+      if (!bytes) throw new Error(`asset "${name}" (object ${ref.objectId}) carries no byte payload`);
+      out.set(name, bytes);
+    }
+    return out;
+  }
+
   // --- Perspective save/load (ADR 0012 indexed form) --------------------------
 
   // Run a creation-lane block: invoke the binding block with the class id and
@@ -843,6 +902,7 @@ function createImageClientAdapter(client) {
     loadPerspective,
     readObject,
     authorizedReadObject,
+    resolveAssetBytes,
     observe,
     observePull,
     dispatch,

@@ -16,7 +16,7 @@ import {fileURLToPath} from 'node:url';
 
 // A unit cube centered at the origin: 24 vertices (4 per face, so each face
 // has flat normals), 36 indices (12 triangles).
-function boxData() {
+function boxData(scale = 1) {
   const positions = [];
   const normals = [];
   const indices = [];
@@ -32,7 +32,7 @@ function boxData() {
   for (const face of faces) {
     const base = positions.length;
     for (const corner of face.c) {
-      positions.push(corner);
+      positions.push(corner.map((v) => v * scale));
       normals.push(face.n);
     }
     indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
@@ -40,8 +40,8 @@ function boxData() {
   return {positions, normals, indices};
 }
 
-function buildGlb() {
-  const {positions, normals, indices} = boxData();
+function buildGlb(scale = 1) {
+  const {positions, normals, indices} = boxData(scale);
 
   // Lay out the BIN chunk: positions | normals | indices (each aligned to 4).
   const posBytes = new Float32Array(positions.flat());
@@ -109,3 +109,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 const target = join(here, 'box.glb');
 writeFileSync(target, buildGlb());
 console.log(`wrote ${target}`);
+// A discriminating larger Box for the per-instance asset-isolation proof (two
+// simultaneous views load 'main-model' but render visibly different meshes).
+writeFileSync(join(here, 'box-big.glb'), buildGlb(1.35));
+console.log(`wrote ${join(here, 'box-big.glb')}`);
+
+export {buildGlb};

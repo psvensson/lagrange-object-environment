@@ -267,8 +267,11 @@ async fn init() -> Result<Example, String> {
     let height = surface.height();
 
     // Load + parse the GLB at runtime (the asset-transfer seam).
-    let bytes = crate::lagrange::assets::provider::load_glb("box")
-        .map_err(|e| format!("load_glb: {e}"))?;
+    // Load the durable asset by its presentation-local name (the Component
+    // never learns the underlying image/object identity — reference is not
+    // authority). The host resolves + authorizes it per-attach.
+    let bytes = crate::lagrange::assets::provider::load("main-model")
+        .map_err(|e| format!("load: {e}"))?;
     let mesh = glb::parse_first_mesh(&bytes)?;
 
     // Build vertex buffer (interleaved pos+normal).

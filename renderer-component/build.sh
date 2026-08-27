@@ -33,24 +33,32 @@ echo "==> componentize (wasm-tools component new)"
 mkdir -p "$OUT_DIR"
 wasm-tools component new "$WASM" -o "$OUT_DIR/glb.component.wasm"
 
-# jco --map resolves the mapped specifier to a path RELATIVE to the OUTPUT
-# component.js. The output lives at test/browser/components/glb/, four levels
-# below the repo root, so the host modules are ../../../../src/browser-renderer/.
-echo "==> transpile (jco)"
+# Transpile in jco INSTANTIATION mode (`--instantiation async`): the output
+# exports `instantiate(getCoreModule, imports)` instead of a module-level
+# `start`, so EACH attach constructs a fresh Component instance with its OWN
+# host imports — critically its own `lagrange:assets/provider` `load` closure
+# (Bead lagrange-object-environment-0dm: per-Component asset isolation, no
+# process-global provider). The `--map` specifier becomes the KEY the adapter
+# uses in the `imports` object; we use stable bare specifiers (not file paths)
+# so the adapter passes `imports['lagrange-assets']` etc.
+echo "==> transpile (jco, instantiation mode)"
 npx --yes @bytecodealliance/jco@1.32.1 transpile "$OUT_DIR/glb.component.wasm" \
   -o "$OUT_DIR" \
   --no-nodejs-compat --async-wasi-imports --async-wasi-exports \
-  --map "wasi:webgpu/webgpu@0.3.0-rc.2=../../../../src/browser-renderer/webgpu.js" \
-  --map "wasi-gfx:surface/surface@0.2.0=../../../../src/browser-renderer/surface.js" \
-  --map "wasi-gfx:surface/surface-webgpu@0.2.0=../../../../src/browser-renderer/surface-webgpu.js" \
-  --map "lagrange:assets/provider@0.1.0=../../../../src/browser-renderer/assets.js" \
-  --map "print=../../../../src/browser-renderer/print.js"
+  --instantiation async \
+  --map "wasi:webgpu/webgpu@0.3.0-rc.2=lagrange-webgpu" \
+  --map "wasi-gfx:surface/surface@0.2.0=lagrange-surface" \
+  --map "wasi-gfx:surface/surface-webgpu@0.2.0=lagrange-surface-webgpu" \
+  --map "lagrange:assets/provider@0.1.0=lagrange-assets" \
+  --map "print=lagrange-print"
 
-echo "==> verify import mappings resolve to src/browser-renderer/"
-grep -q "from '../../../../src/browser-renderer/webgpu.js'" "$OUT_DIR/glb.component.js" \
-  || { echo "ERROR: webgpu import not mapped to src/browser-renderer"; exit 1; }
-grep -q "from '../../../../src/browser-renderer/assets.js'" "$OUT_DIR/glb.component.js" \
-  || { echo "ERROR: lagrange:assets import not mapped to src/browser-renderer"; exit 1; }
+echo "==> verify instantiation-mode output + bare-specifier import keys"
+grep -q "export function instantiate(getCoreModule, imports" "$OUT_DIR/glb.component.js" \
+  || { echo "ERROR: instantiation-mode transpile did not export instantiate(getCoreModule, imports)"; exit 1; }
+grep -q "imports\['lagrange-assets'\]" "$OUT_DIR/glb.component.js" \
+  || { echo "ERROR: lagrange:assets import not keyed by 'lagrange-assets'"; exit 1; }
+grep -q "imports\['lagrange-webgpu'\]" "$OUT_DIR/glb.component.js" \
+  || { echo "ERROR: wasi:webgpu import not keyed by 'lagrange-webgpu'"; exit 1; }
 
 echo "==> regenerate the Box.glb test fixture"
 node "$REPO_ROOT/test/browser/generate-box-glb.js"

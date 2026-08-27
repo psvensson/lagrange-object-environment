@@ -445,6 +445,82 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
     );
   });
 
+  await t.test('resolveAssetBytes resolves durable bytes per-ref under object/read; denied and invalid are distinct', async () => {
+    const {runtime, adapter, schema} = await setup();
+    const classId = classIdFor(IDS.className);
+    const shapeId = schema.shape.id;
+    const b64 = (bytes) => Buffer.from(bytes).toString('base64');
+
+    // Two durable asset objects, each carrying a byte payload (base64) in the
+    // 'probe-title' text slot — the probe shape allows only probe-title/subject,
+    // so the durable bytes live there and resolveAssetBytes reads them via
+    // ref.slot = 'probe-title'.
+    const assetSlots = (bytesVal) => ({
+      'probe-title': imagesApi.textValue(bytesVal),
+      'probe-subject': imagesApi.objectRef(IMAGE, 'smalltalk/nil'),
+    });
+    await runtime.images.putObject(IMAGE, {
+      id: 'asset-a',
+      shape: imagesApi.objectRef(IMAGE, shapeId),
+      behavior: imagesApi.objectRef(IMAGE, classId),
+      slots: assetSlots(b64([1, 2, 3, 4])),
+    });
+    await runtime.images.putObject(IMAGE, {
+      id: 'asset-b',
+      shape: imagesApi.objectRef(IMAGE, shapeId),
+      behavior: imagesApi.objectRef(IMAGE, classId),
+      slots: assetSlots(b64([9, 9, 9])),
+    });
+
+    // Authorized: each presentation-local name resolves to ITS OWN opaque bytes.
+    const allow = await adapter.resolveAssetBytes({
+      assets: [
+        {name: 'main-model', ref: {imageId: IMAGE, objectId: 'asset-a', slot: 'probe-title', blockId: IDS.readBlockId}},
+        {name: 'alt-model', ref: {imageId: IMAGE, objectId: 'asset-b', slot: 'probe-title', blockId: IDS.readBlockId}},
+      ],
+      // A multi-grant context authorizing both reads (per-ref object/read).
+      authority: runtime.authority.issue({
+        principal: 'alice',
+        grants: [
+          {operation: 'object/read', resource: imagesApi.objectResource(IMAGE, 'asset-a')},
+          {operation: 'object/read', resource: imagesApi.objectResource(IMAGE, 'asset-b')},
+        ],
+      }),
+    });
+    assert.deepEqual([...allow.get('main-model')], [1, 2, 3, 4], 'main-model -> asset-a bytes');
+    assert.deepEqual([...allow.get('alt-model')], [9, 9, 9], 'alt-model -> asset-b bytes (names are presentation-local, not the object id)');
+
+    // Denied: a principal without object/read on asset-b cannot resolve it, even
+    // though the name is presentation-local. AuthorityError, no existence oracle.
+    await assert.rejects(
+      adapter.resolveAssetBytes({
+        assets: [{name: 'main-model', ref: {imageId: IMAGE, objectId: 'asset-b', slot: 'probe-title', blockId: IDS.readBlockId}}],
+        authority: grant(runtime, 'object/read', imagesApi.objectResource(IMAGE, 'asset-a')),
+      }),
+      (error) => error?.name === 'AuthorityError' && /object\/read/.test(error.message),
+    );
+
+    // Invalid: an object whose named slot carries no byte payload is a distinct
+    // failure (not a silent empty allowlist). asset-empty has a probe-title that
+    // is not valid base64 bytes we can use — we ask for a slot that does not exist.
+    await runtime.images.putObject(IMAGE, {
+      id: 'asset-empty',
+      shape: imagesApi.objectRef(IMAGE, shapeId),
+      behavior: imagesApi.objectRef(IMAGE, classId),
+      slots: {
+        'probe-title': imagesApi.textValue('not-bytes'),
+        'probe-subject': imagesApi.objectRef(IMAGE, 'smalltalk/nil'),
+      },
+    });
+    await assert.rejects(
+      adapter.resolveAssetBytes({
+        assets: [{name: 'main-model', ref: {imageId: IMAGE, objectId: 'asset-empty', slot: 'no-such-slot', blockId: IDS.readBlockId}}],
+        authority: grant(runtime, 'object/read', imagesApi.objectResource(IMAGE, 'asset-empty')),
+      }),
+      /carries no byte payload/,
+    );
+  });
+
   // The headline ADR 0070 proof env-side (mirror of the substrate lane proof):
   // a restricted principal's observation receives ONLY invalidations for
   // objects it may object/read; an UNREADABLE object's change never appears —
