@@ -1,0 +1,34 @@
+[package]
+name = "surface-wasmtime"
+version = "0.2.0"
+edition = "2021"
+license = "Apache-2.0 WITH LLVM-exception"
+repository = "https://github.com/wasi-gfx/wasi-gfx-runtime"
+description = "Wasmtime host implementation of the wasi-gfx surface API"
+
+# Vendored copy of wasi-gfx-runtime@772bc34 crates/surface-wasmtime with the
+# SINGLE change `mod surface` -> `pub mod surface` (see src/lib.rs header and
+# hosts/linux/README.md). Dependency versions below are the pinned runtime
+# workspace's [workspace.dependencies] resolved inline so the crate builds
+# standalone (it was `*.workspace = true` inheritance upstream).
+
+[features]
+default = []
+surface-webgpu = ["wasi-webgpu-wasmtime"]
+surface-frame-buffer = ["frame-buffer-wasmtime", "softbuffer"]
+
+[dependencies]
+wasmtime = "47"
+wasmtime-wasi = "47"
+raw-window-handle = "0.6"
+async-broadcast = "0.7"
+oneshot = "0.1"
+winit = { version = "0.30", features = ["android-native-activity"], optional = true }
+futures = "0.3"
+wasi-webgpu-wasmtime = { git = "https://github.com/wasi-gfx/wasi-gfx-runtime.git", rev = "772bc344d3d0e24ba2d3ee29fc0033fc6ccea81d", optional = true }
+frame-buffer-wasmtime = { git = "https://github.com/wasi-gfx/wasi-gfx-runtime.git", rev = "772bc344d3d0e24ba2d3ee29fc0033fc6ccea81d", optional = true }
+shared = { git = "https://github.com/wasi-gfx/wasi-gfx-runtime.git", rev = "772bc344d3d0e24ba2d3ee29fc0033fc6ccea81d", package = "wasi-gfx-runtime-shared" }
+softbuffer = { version = "0.4", optional = true }
+bytemuck = { version = "1", features = ["extern_crate_std"] }
+
+[workspace]

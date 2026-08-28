@@ -1,0 +1,50 @@
+[package]
+name = "lagrange-host-linux"
+version = "0.0.0"
+edition = "2021"
+description = "Native Linux host portability falsification (Bead hqt / ADR 0013 L1): runs the EXACT checked-in GLB renderer Component core binary (test/browser/components/glb/glb.component.wasm) under Wasmtime with native wasi:webgpu + wasi-gfx surface + lagrange:assets, with NO jco/JS/browser/DOM. A falsification spike, NOT a production Linux client."
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "lagrange-host-linux"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+sha2 = "0.10"
+futures = "0.3"
+raw-window-handle = "0.6"
+env_logger = "0.11"
+log = "0.4"
+
+# Native wasi:webgpu + wasi-gfx:surface host runtime, pinned to an EXACT git
+# revision (NOT main) because the wasmtime/wgpu/wit-bindgen combination is
+# tightly coupled and reproducibility matters (user direction, Bead hqt).
+# This revision is the one the plan review verified pins wasi:webgpu@0.3.0-rc.2
+# and wasi-gfx:surface@0.2.0 with WIT deps byte-identical to
+# renderer-component/wit/deps (re-verified by diff against wit/deps here).
+wasi-webgpu-wasmtime = { git = "https://github.com/wasi-gfx/wasi-gfx-runtime.git", rev = "772bc344d3d0e24ba2d3ee29fc0033fc6ccea81d" }
+surface-wasmtime = { git = "https://github.com/wasi-gfx/wasi-gfx-runtime.git", rev = "772bc344d3d0e24ba2d3ee29fc0033fc6ccea81d" }
+
+# Same versions the pinned wasi-gfx-runtime workspace pins.
+wasmtime = { version = "47", features = ["component-model", "async"] }
+wasmtime-wasi = "47"
+wgpu-core = "29"
+wgpu-types = "29"
+
+# The pinned revision's surface-wasmtime made the surface TYPES public
+# ("export custom surface types") but left `mod surface` private, so the
+# generated `wasi_gfx::surface::surface` module cannot be named in a bindgen
+# `with` remap (required to replace surface-webgpu with our offscreen
+# realization). `wasi-webgpu-wasmtime` already exposes its generated `wasi`
+# module publicly; this one-line patch (`mod surface` -> `pub mod surface`)
+# gives surface-wasmtime the same reachability. NOT a behavior fork: no host
+# logic changes, only module visibility. See src/lib.rs header.
+[patch."https://github.com/wasi-gfx/wasi-gfx-runtime.git"]
+surface-wasmtime = { path = "vendor/surface-wasmtime" }
+
+[workspace]

@@ -1,0 +1,25 @@
+package lagrange:assets@0.1.0;
+
+/// The host provides durable asset bytes to the renderer Component at runtime.
+/// The renderer requests an asset by name; the host returns its bytes or an
+/// error. This is the asset-transfer seam: upstream wasi-gfx examples bake
+/// assets in at build time (include_bytes!); Lagrange loads them at runtime so
+/// a GLB chosen at Session time can reach the running Component.
+///
+/// Ownership: the host realization is BrowserRendererAdapter host wiring
+/// (src/browser-renderer/assets.js `createAssetProvider`) — an injected,
+/// attach-scoped byte source bound into ONE Component instance's import closure
+/// (jco instantiation mode), NOT an asset store and NOT a process-global. The
+/// asset-bytes authority (resolving durable refs to bytes under object/read) is
+/// the environment's authorized read lane (`ImageClientAdapter.resolveAssetBytes`);
+/// the adapter receives only the opaque attach-scoped allowlist. (Resolved by
+/// Bead lagrange-object-environment-0dm.)
+interface provider {
+    /// Load an asset's bytes by its PRESENTATION-LOCAL name. The name is an
+    /// opaque string scoped to THIS attach's allowlist (e.g. "main-model"); it
+    /// is never an image/object id and never another attach's name. Returns
+    /// the bytes, or an error string when the name is not in this attach's
+    /// allowlist. Format-neutral (the Component interprets the bytes; the host
+    /// treats them as opaque).
+    load: func(name: string) -> result<list<u8>, string>;
+}
