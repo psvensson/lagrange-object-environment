@@ -1,0 +1,21 @@
+package lagrange:glb-renderer;
+
+/// The WIT world the native Linux host binds against. This file is a COPY of
+/// renderer-component/wit/world.wit so the host crate is self-contained (the
+/// two worlds are identical; only these comments differ). The deps/ here are
+/// byte-identical to both renderer-component/wit/deps and the pinned
+/// wasi-gfx-runtime revision's examples/wit/deps (verified by diff), which is
+/// what makes the runtime crates' generated Rust types unify with ours.
+world glb-renderer {
+    include wasi:webgpu/imports@0.3.0-rc.2;
+    include wasi-gfx:surface/webgpu-imports@0.2.0;
+
+    /// main entrypoint
+    export start: async func();
+
+    /// print to stdout (debug output, no semantics)
+    import print: func(s: string);
+
+    /// durable asset bytes, loaded at runtime
+    import lagrange:assets/provider@0.1.0;
+}

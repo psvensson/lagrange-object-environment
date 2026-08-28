@@ -53,3 +53,32 @@ jobs:
           npx bd version
           npm run beads:prime >/dev/null
           npm run beads:ready >/dev/null
+
+  # ADR 0013 L1: the native Linux Component host must run the EXACT checked-in
+  # GLB Component binary (same sha256 the browser tests run) and render a real
+  # shaded mesh — with NO jco/JS/Node/browser/DOM. This job makes the
+  # portability claim CI-gating so it cannot regress while main stays green.
+  # Headless offscreen (the native analogue of the browser's TextureRenderTarget
+  # CI lane); the on-screen native-window proof is a separate follow-up.
+  linux-host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Pin the toolchain explicitly: rust-toolchain.toml lives at hosts/linux/
+      # (nested), so the action (running at repo root) might not select it;
+      # wasmtime 47 needs >= 1.94. Keep this in sync with
+      # hosts/linux/rust-toolchain.toml.
+      - name: Install Rust toolchain (1.98.0, matches hosts/linux/rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.0"
+      - name: Install native build + software-GPU dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libudev-dev \
+            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libssl-dev \
+            mesa-vulkan-drivers libgl1-mesa-dri vulkan-tools
+      - name: Native Linux Component host proof (cargo test)
+        working-directory: hosts/linux
+        run: cargo test

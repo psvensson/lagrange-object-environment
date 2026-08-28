@@ -5,3 +5,6 @@ coverage/
 
 # Rust build cache for the renderer Component
 renderer-component/target/
+
+# Rust build cache for the native Linux host (ADR 0013 L1)
+hosts/linux/target/
