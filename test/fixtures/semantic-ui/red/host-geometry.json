@@ -1,0 +1,5 @@
+{
+  "kind": "semantic-ui",
+  "version": 1,
+  "root": { "kind": "group", "title": "x", "x": 10, "y": 20, "children": [] }
+}

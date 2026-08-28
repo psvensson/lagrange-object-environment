@@ -1,0 +1,11 @@
+{
+  "kind": "semantic-ui",
+  "version": 1,
+  "root": {
+    "kind": "group",
+    "title": "x",
+    "children": [
+      { "kind": "text", "role": "heading", "text": "x", "cssClass": "banner" }
+    ]
+  }
+}

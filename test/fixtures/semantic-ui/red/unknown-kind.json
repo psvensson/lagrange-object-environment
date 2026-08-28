@@ -1,0 +1,5 @@
+{
+  "kind": "semantic-ui",
+  "version": 1,
+  "root": { "kind": "window", "title": "x", "children": [] }
+}
