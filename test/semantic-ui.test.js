@@ -76,6 +76,10 @@ test('specific violations are rejected with clear reasons', () => {
   assert.throws(() => validateSemanticUi({...base, root: {kind: 'window', children: []}}), /unknown node kind/);
   // non-integer action key
   assert.throws(() => validateSemanticUi({...base, root: {kind: 'group', children: [{kind: 'collection', items: [{kind: 'action', key: 'obj-c', label: 'a'}]}]}}), /descriptor-local item key/);
+  // host-specific field on the DOCUMENT object itself (not just nodes)
+  assert.throws(() => validateSemanticUi({...base, geometry: {x: 0}}), /document: host-specific field/);
+  // a ref smuggled at the document level
+  assert.throws(() => validateSemanticUi({...base, subject: ref('o')}), /document\.subject: a ref\/subject/);
 });
 
 test('action keys stay descriptor-local integers (the PR #33 security property)', () => {

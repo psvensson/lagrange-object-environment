@@ -19,9 +19,18 @@
  *
  * VALIDATION is owned HERE (one authoritative contract), not re-decided per
  * realizer. It LOUDLY rejects: unknown versions/node kinds, host-specific
- * fields (tagName/cssClass/GtkWidget/coordinates...), and any ref/subject
- * smuggled into an action. The checked-in fixture corpus (green + red) is the
- * conformance suite both the JS and the Rust validators run against.
+ * fields (tagName/cssClass/GtkWidget/coordinates...) at BOTH the document and
+ * every node level, and any ref/subject smuggled in. The checked-in fixture
+ * corpus (green + red) is the conformance suite both the JS and the Rust
+ * validators run against.
+ *
+ * CONFORMANCE NOTE (for the Rust validator — replicate exactly, or the two
+ * validators drift): ref/host detection inspects each node's DIRECT own
+ * properties (and the document's). Unknown extra properties are TOLERATED
+ * (forward-compat) and not recursed, EXCEPT the structural `children`/`items`
+ * arrays which are recursed as nodes. A ref nested inside an arbitrary unknown
+ * array property is not detected (no realizer reads unknown keys). Keep the
+ * Rust validator's tolerance identical to this.
  */
 
 const VERSION = 1;
@@ -111,10 +120,20 @@ function validateNode(node, path) {
  * a TypeError on any violation. Unknown `version` fails loudly.
  */
 function validateSemanticUi(doc) {
-  if (doc == null || typeof doc !== 'object') fail('the document must be a plain object');
+  if (doc == null || typeof doc !== 'object' || Array.isArray(doc)) fail('the document must be a plain object');
   if (doc.kind !== 'semantic-ui') fail(`document.kind must be 'semantic-ui', got ${JSON.stringify(doc.kind)}`);
   if (doc.version !== VERSION) fail(`unsupported version ${JSON.stringify(doc.version)} (this host understands ${VERSION})`);
   if (doc.root == null) fail('document.root is required');
+  // The document object itself is data too: no host-specific fields or
+  // smuggled refs at the top level (only kind/version/root are expected).
+  for (const key of Object.keys(doc)) {
+    if (FORBIDDEN_KEYS.includes(key)) {
+      fail(`document: host-specific field ${JSON.stringify(key)} is not allowed (semantic, not DOM/GTK/geometry)`);
+    }
+    if (isRefLike(doc[key])) {
+      fail(`document.${key}: a ref/subject may not appear in a SemanticUi document`);
+    }
+  }
   validateNode(doc.root, 'root');
   return Object.freeze(doc);
 }
