@@ -7,6 +7,9 @@ import * as lagrangeSurfaceWebgpu from '../../src/browser-renderer/surface-webgp
 import lagrangePrint from '../../src/browser-renderer/print.js';
 import {start as startTriangle} from './components/triangle.component.js';
 import {instantiate as instantiateGlb} from './components/glb/glb.component.js';
+import {createCompositor} from '../../src/compositor.js';
+import {createSelectionModel} from '../../src/selection-model.js';
+import {createEnvironmentShell} from '../../src/environment-shell.js';
 
 // The PR B browser proof harness. Drives the BrowserRendererAdapter through
 // the full lifecycle against real Chrome WebGPU with the triangle Component.
@@ -120,6 +123,129 @@ const openTriangle = (adapter, width, height) => openView(adapter, {kind: 'trian
 
 window.__lagrangeProof = {
   canvases: () => Array.from(document.querySelectorAll('#mount canvas')),
+
+  // --- DOM + Component COEXISTENCE proof (Bead 9vl): navigator + inspector
+  // (DOM tool realizations) + a GLB Component view behind ONE adapter. An
+  // optional sentinel realizer for kind 'navigator' proves the dispatch seam is
+  // INJECTED, not a hard-coded kind switch. ---
+  async openCoexistenceSession({sentinelNavigator = false} = {}) {
+    const boxBytes = await fetchBoxGlb();
+    const assets = async () => new Map([['main-model', boxBytes]]);
+    // An optional sentinel DOM realizer for 'navigator': if the adapter honors
+    // the INJECTED realizerFor (not a hard-coded switch), this sentinel is used
+    // and its marker node appears; a hard-coded switch would ignore it.
+    let sentinelUsed = false;
+    const realizerFor = sentinelNavigator
+      ? (descriptor) => {
+        if (descriptor?.kind === 'navigator') {
+          sentinelUsed = true;
+          return {
+            attach: async ({surfaceHandle, emitIntent}) => {
+              const node = document.createElement('div');
+              node.id = 'sentinel-navigator';
+              node.textContent = 'SENTINEL-NAVIGATOR-REALIZED';
+              mount.appendChild(node);
+              return {
+                kind: 'dom',
+                start() {}, stop() {}, resize() {},
+                readPixels: async () => null,
+                dispose() { if (node.parentNode) node.parentNode.removeChild(node); },
+                isRunning: () => true,
+              };
+            },
+          };
+        }
+        return undefined; // fall through to the default for other kinds
+      }
+      : undefined;
+    // The adapter's realizerFor: honor an injected mapping, else the default
+    // (tool kinds -> DOM, others -> Component). When realizerFor returns
+    // undefined for a non-sentinel kind, the adapter must still dispatch right.
+    const adapter = createBrowserRendererAdapter({
+      loadComponent: makeGlbLoadComponent(),
+      mount,
+      createRenderTarget: ({width, height}) => new TextureRenderTarget(width, height),
+      resolveAssets: assets,
+      ...(sentinelNavigator ? {realizerFor} : {}),
+    });
+    const open = async (descriptor, w, h) => {
+      const handle = await adapter.createSurface({kind: 'webgpu-canvas', width: w, height: h});
+      await adapter.attachPresentation(handle, descriptor);
+      for (let i = 0; i < 15; i += 1) await new Promise((r) => requestAnimationFrame(r));
+      return handle;
+    };
+    // The navigator + inspector descriptors (tool kinds -> DOM realization).
+    const navigatorDescriptor = {
+      kind: 'navigator',
+      subject: {kind: 'ref', imageId: 'img', objectId: 'obj-root'},
+      parameters: {
+        fields: {'slot-title': {kind: 'text', value: 'Root'}},
+        references: [{kind: 'ref', imageId: 'img', objectId: 'obj-b'}, {kind: 'ref', imageId: 'img', objectId: 'obj-c'}],
+      },
+    };
+    const inspectorDescriptor = {
+      kind: 'inspector',
+      subject: {kind: 'ref', imageId: 'img', objectId: 'obj-root'},
+      parameters: {fields: {'slot-title': {kind: 'text', value: 'Root'}}, references: []},
+    };
+    const glbDescriptor = {kind: 'glb', asset: 'main-model'};
+    const navHandle = await open(navigatorDescriptor, 200, 200);
+    const inspHandle = await open(inspectorDescriptor, 200, 200);
+    const glbHandle = await open(glbDescriptor, 320, 200);
+    return {
+      adapter, navHandle, inspHandle, glbHandle,
+      sentinelUsed: () => sentinelUsed,
+      readGlb: () => adapter.readRenderedPixels(glbHandle),
+      toolRoots: () => Array.from(document.querySelectorAll('#mount .lagrange-tool')),
+      referenceButtons: () => Array.from(document.querySelectorAll('#mount .lagrange-tool-references button')),
+      onIntent: (fn) => adapter.onIntent(fn),
+      destroyAll: () => adapter.destroyAll(),
+    };
+  },
+
+  // --- The REAL navigator -> selection -> inspector loop driven through real
+  // DOM (Bead 9vl): a real EnvironmentShell + Compositor + DOM realizations.
+  // The navigator is stubbed (no substrate in the browser) but the shell, the
+  // Compositor, the DOM realization, and the activate-item -> selection ->
+  // inspector path are all REAL. ---
+  async openDomLoopSession() {
+    const ref = (objectId) => ({kind: 'ref', imageId: 'img', objectId});
+    // A stubbed ObjectNavigator: navigate(ref) yields an inspector Presentation
+    // with the ref's fields + references (root carries refs to B and C).
+    const RECORDS = {
+      'obj-root': {fields: {'slot-title': {kind: 'text', value: 'Root'}}, references: [ref('obj-b'), ref('obj-c')]},
+      'obj-b': {fields: {'slot-title': {kind: 'text', value: 'B'}}, references: []},
+      'obj-c': {fields: {'slot-title': {kind: 'text', value: 'C'}}, references: []},
+    };
+    const navigator = {
+      async navigate(subject) {
+        const rec = RECORDS[subject.objectId] ?? {fields: {}, references: []};
+        return {presentations: [{kind: 'inspector', subject, context: {fields: rec.fields, references: rec.references}}], commands: [], failures: []};
+      },
+    };
+    const adapter = createBrowserRendererAdapter({
+      loadComponent: makeGlbLoadComponent(),
+      mount,
+      createRenderTarget: ({width, height}) => new TextureRenderTarget(width, height),
+      resolveAssets: async () => new Map(),
+    });
+    const compositor = createCompositor({rendererAdapter: adapter});
+    const selectionModel = createSelectionModel();
+    const shell = createEnvironmentShell({navigator, selectionModel, compositor});
+    await shell.openWorkspace(ref('obj-root'), {viewDescriptorFor: () => ({kind: 'webgpu-canvas', width: 200, height: 200})});
+    // Wire the DOM activate-item intents to selection. The navigator view is
+    // opened first, so its surface handle is browser-surface-0.
+    shell.bindDomIntents({adapter, navigatorSurfaceHandle: 'browser-surface-0'});
+    return {
+      adapter, compositor, selectionModel, shell,
+      navigatorButtons: () => Array.from(document.querySelectorAll('#mount .lagrange-tool-navigator .lagrange-tool-references button')),
+      inspectorText: () => document.querySelector('#mount .lagrange-tool-inspector')?.textContent ?? '',
+      inspectorSubject: () => compositor.durableIntent().find((v) => v.viewId === 'inspector-view')?.presentationDescriptor.subject.objectId ?? null,
+      selected: () => selectionModel.selectedSubject()?.objectId ?? null,
+      focused: () => compositor.focusedView(),
+      destroyAll: () => adapter.destroyAll(),
+    };
+  },
 
   // --- Texture-target (CI pixel proof) session ---
   async openTextureSession() {
