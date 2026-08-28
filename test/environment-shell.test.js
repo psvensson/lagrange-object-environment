@@ -115,6 +115,51 @@ test('inspectSelected re-navigates the selected object (the observation->reread 
   assert.equal(readCalls.length, 3, 'exactly the navigate() reads the loop implies (no shadow-model pre-reads)');
 });
 
+test('handleActivateItem resolves a descriptor-local key to a ref; a stale key is a no-op (never a wrong ref)', async () => {
+  const records = {
+    'obj-root': {slots: {'slot-b': ref('obj-b'), 'slot-c': ref('obj-c')}, indexed: []},
+    'obj-b': {slots: {'slot-title': {kind: 'text', value: 'B'}}, indexed: []},
+  };
+  const {shell, selectionModel} = makeShell({records});
+  await shell.openWorkspace(ref('obj-root'), {});
+  // Activate key 0 -> obj-b (the navigator's references[0]).
+  const selected = await shell.handleActivateItem({key: 0});
+  assert.equal(selected.objectId, 'obj-b', 'key 0 resolves to the navigator\'s references[0]');
+  assert.deepEqual(selectionModel.selectedSubject(), ref('obj-b'));
+  // A STALE key (out of range) resolves to null and does NOT change the selection.
+  const stale = await shell.handleActivateItem({key: 99});
+  assert.equal(stale, null, 'an out-of-range key is a no-op');
+  assert.deepEqual(selectionModel.selectedSubject(), ref('obj-b'), 'the selection is unchanged by a stale key');
+  // A non-number key is a no-op too.
+  assert.equal(await shell.handleActivateItem({key: 'obj-c'}), null, 'a key is an index, never a ref');
+  await shell.destroy?.();
+});
+
+test('bindDomIntents routes a DOM activate-item from the navigator surface to selection', async () => {
+  const records = {
+    'obj-root': {slots: {'slot-b': ref('obj-b')}, indexed: []},
+    'obj-b': {slots: {'slot-title': {kind: 'text', value: 'B'}}, indexed: []},
+  };
+  const {shell, selectionModel, compositor} = makeShell({records});
+  await shell.openWorkspace(ref('obj-root'), {});
+  // A minimal adapter intent seam stub.
+  const handlers = new Set();
+  const adapter = {onIntent: (fn) => { handlers.add(fn); return () => handlers.delete(fn); }};
+  shell.bindDomIntents({adapter, navigatorSurfaceHandle: 'fake-surface-0'});
+  // Emit an activate-item key 0 from the navigator surface.
+  for (const fn of handlers) fn({kind: 'activate-item', key: 0}, 'fake-surface-0');
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(selectionModel.selectedSubject(), ref('obj-b'), 'the DOM intent resolved + selected obj-b');
+  // An intent from a DIFFERENT surface is ignored.
+  for (const fn of handlers) fn({kind: 'activate-item', key: 0}, 'fake-surface-999');
+  // A non-activate-item intent is ignored.
+  selectionModel.clear();
+  for (const fn of handlers) fn({kind: 'activate'}, 'fake-surface-0');
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(selectionModel.selectedSubject(), null, 'a non-activate-item intent does not select');
+  await compositor.destroy();
+});
+
 test('durable intent is focus/selection/handle-free after select (focus/selection are transient)', async () => {
   const records = {'obj-root': {slots: {'slot-b': ref('obj-b')}, indexed: []}};
   const {shell, compositor} = makeShell({records});

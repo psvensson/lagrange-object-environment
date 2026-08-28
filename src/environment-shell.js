@@ -153,11 +153,51 @@ function createEnvironmentShell({navigator, selectionModel, compositor}) {
     });
   }
 
+  // The 'activate-item' intent handler (the shell-boundary interaction owner for
+  // DOM ref-row activation -> selection; NOT CommandRouter). A DOM realizer emits
+  // {kind:'activate-item', key} where `key` is a DESCRIPTOR-LOCAL index into the
+  // navigator view's CURRENT presentationDescriptor.parameters.references. The
+  // shell resolves key -> ref against the Compositor's OWN Presentation data,
+  // then selects it. A STALE/out-of-range key resolves to null and does NOT
+  // select (never throws, never resolves a wrong ref). Returns the selected ref
+  // (or null). This is the ONLY place a renderer-supplied key becomes a semantic
+  // ref — the key itself is meaningless without the current descriptor.
+  async function handleActivateItem({key, authority = null, readBlockId} = {}) {
+    const view = compositor.durableIntent().find((v) => v.viewId === NAVIGATOR_VIEW_ID);
+    const references = view?.presentationDescriptor?.parameters?.references;
+    if (!Array.isArray(references) || typeof key !== 'number' || key < 0 || key >= references.length) {
+      return null; // stale / out-of-range key: no selection, no throw.
+    }
+    const ref = references[key];
+    if (!ref || typeof ref.objectId !== 'string') return null;
+    await selectObject(ref, {authority, readBlockId});
+    return ref;
+  }
+
+  // Wire the shell to the renderer's intent seam: on a DOM {kind:'activate-item',
+  // key} from the NAVIGATOR view's surface, resolve the key and select. Other
+  // intents (e.g. a Component pointer 'activate') are ignored here (CommandRouter
+  // owns those). `navigatorSurfaceHandle` is the navigator view's surface handle;
+  // the shell resolves it via the Compositor's view map. Returns an unsubscribe.
+  function bindDomIntents({adapter, navigatorSurfaceHandle, authority = null, readBlockId} = {}) {
+    if (!adapter || typeof adapter.onIntent !== 'function') {
+      throw new TypeError('bindDomIntents requires an adapter with onIntent');
+    }
+    return adapter.onIntent((intent, surfaceHandle) => {
+      if (intent?.kind !== 'activate-item') return;
+      if (surfaceHandle !== navigatorSurfaceHandle) return;
+      // Fire-and-forget; errors route nowhere (the handler is best-effort UI).
+      handleActivateItem({key: intent.key, authority, readBlockId}).catch(() => {});
+    });
+  }
+
   return Object.freeze({
     openWorkspace,
     selectObject,
     inspectSelected,
     followSelected,
+    handleActivateItem,
+    bindDomIntents,
     navigatorViewId: NAVIGATOR_VIEW_ID,
     inspectorViewId: INSPECTOR_VIEW_ID,
   });

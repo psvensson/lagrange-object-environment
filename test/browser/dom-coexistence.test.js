@@ -1,0 +1,184 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {createServer} from 'node:http';
+import {readFile} from 'node:fs/promises';
+import {join, extname, dirname} from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
+
+// The DOM + Component COEXISTENCE proof (Bead 9vl): DOM tool realizations
+// (navigator/inspector) + a real GLB Component view behind ONE
+// BrowserRendererAdapter, via the INJECTED realization-dispatch seam (not a
+// hard-coded kind switch). Runs under Xvfb/headless SwiftShader.
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = join(HERE, '..', '..');
+const CHROME = process.env.CHROME_PATH ?? '/usr/bin/google-chrome';
+
+const MIME = {
+  '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm',
+  '.glb': 'model/gltf-binary',
+};
+
+async function chromeAvailable() {
+  try {
+    await promisify(execFile)(CHROME, ['--version']);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function serveRepo() {
+  const server = createServer(async (req, res) => {
+    try {
+      const path = req.url === '/' ? '/test/browser/proof.html' : new URL(req.url, 'http://x').pathname;
+      const file = join(REPO_ROOT, path);
+      if (!file.startsWith(REPO_ROOT)) { res.writeHead(403); res.end(); return; }
+      const body = await readFile(file);
+      res.writeHead(200, {'content-type': MIME[extname(file)] ?? 'application/octet-stream'});
+      res.end(body);
+    } catch { res.writeHead(404); res.end(); }
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => resolve({server, port: server.address().port}));
+  });
+}
+
+const available = await chromeAvailable();
+const puppeteer = available ? (await import('puppeteer-core')).default : null;
+
+const CHROME_FLAGS = [
+  '--no-sandbox', '--enable-blink-features=WebGPU', '--enable-unsafe-webgpu',
+  '--enable-unsafe-swiftshader', '--window-size=1000,900',
+];
+
+async function launch() {
+  const {server, port} = await serveRepo();
+  const browser = await puppeteer.launch({
+    executablePath: CHROME, headless: false, args: CHROME_FLAGS,
+    env: {...process.env, DISPLAY: process.env.DISPLAY ?? ':0'},
+  });
+  const page = await browser.newPage();
+  await page.setViewport({width: 1000, height: 900});
+  page.on('pageerror', (e) => console.error('[pageerror]', e.message));
+  await page.goto(`http://127.0.0.1:${port}/test/browser/proof.html`, {waitUntil: 'networkidle0'});
+  await page.waitForFunction('window.__lagrangeProof !== undefined', {timeout: 15000});
+  return {server, browser, page};
+}
+
+test('CI: DOM tool realizations + a GLB Component coexist behind one adapter (injected dispatch seam)', {skip: !available && 'no Chrome available'}, async () => {
+  const {server, browser, page} = await launch();
+  try {
+    const result = await page.evaluate(async () => {
+      const S = await window.__lagrangeProof.openCoexistenceSession();
+      // GLB Component renders pixels (TextureRenderTarget read-back).
+      const glbFrame = await S.readGlb();
+      const glbMesh = (() => {
+        if (!glbFrame) return 0;
+        let mesh = 0;
+        const {data, width, height, bytesPerRow} = glbFrame;
+        for (let y = 0; y < height; y += 1) {
+          for (let x = 0; x < width; x += 1) {
+            const i = y * bytesPerRow + x * 4;
+            if (data[i] > 40 && data[i + 1] > 35 && data[i + 2] < data[i] - 15) mesh += 1;
+          }
+        }
+        return mesh;
+      })();
+      // DOM panes: navigator shows its reference buttons; inspector shows fields.
+      const toolRoots = S.toolRoots().map((n) => n.className);
+      const refButtons = S.referenceButtons().map((b) => b.textContent);
+      // Activate ref-row 0 (obj-b): the DOM emits a descriptor-local item key.
+      const intents = [];
+      S.onIntent((intent, handle) => intents.push(intent));
+      S.referenceButtons()[0].click();
+      return {glbMesh, glbOk: Boolean(glbFrame), toolRoots, refButtons, intents};
+    });
+
+    // The GLB Component still renders (coexistence with the DOM panes).
+    assert.ok(result.glbOk, 'the GLB Component renders a frame behind the same adapter');
+    assert.ok(result.glbMesh > 320 * 200 * 0.02, `GLB mesh pixels present (coexisting with DOM), got ${result.glbMesh}`);
+    // The DOM panes realized (navigator + inspector).
+    assert.ok(result.toolRoots.some((c) => c.includes('lagrange-tool-navigator')), 'navigator DOM pane realized');
+    assert.ok(result.toolRoots.some((c) => c.includes('lagrange-tool-inspector')), 'inspector DOM pane realized');
+    // The navigator's reference rows are native buttons labeled by objectId.
+    assert.deepEqual(result.refButtons, ['obj-b', 'obj-c'], 'navigator reference rows rendered as native buttons');
+    // Activating row 0 emits a DESCRIPTOR-LOCAL item key (never a ref).
+    assert.equal(result.intents.length, 1, 'one intent from the click');
+    assert.deepEqual(result.intents[0], {kind: 'activate-item', key: 0}, 'DOM emits a descriptor-local item key, not a ref');
+    assert.ok(!('ref' in result.intents[0]) && !('subject' in result.intents[0]), 'no ref/subject leaks into the intent');
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});
+
+test('CI: the real navigator -> selection -> inspector loop drives through real DOM', {skip: !available && 'no Chrome available'}, async () => {
+  const {server, browser, page} = await launch();
+  try {
+    const result = await page.evaluate(async () => {
+      const S = await window.__lagrangeProof.openDomLoopSession();
+      const before = {subject: S.inspectorSubject(), selected: S.selected(), focused: S.focused()};
+      // The navigator shows two reference rows (obj-b, obj-c) as native buttons.
+      const buttons = S.navigatorButtons().map((b) => b.textContent);
+      // Click the obj-b row in the REAL DOM -> activate-item -> selection -> inspector.
+      S.navigatorButtons()[0].click();
+      await new Promise((r) => setTimeout(r, 100));
+      const after = {
+        subject: S.inspectorSubject(), selected: S.selected(), focused: S.focused(),
+        inspectorText: S.inspectorText(),
+        inspectorNodeCount: document.querySelectorAll('#mount .lagrange-tool-inspector').length,
+      };
+      await S.destroyAll();
+      return {buttons, before, after};
+    });
+
+    assert.deepEqual(result.buttons, ['obj-b', 'obj-c'], 'navigator reference rows are native DOM buttons');
+    assert.equal(result.before.subject, 'obj-root', 'inspector starts on the root');
+    assert.equal(result.before.selected, null, 'nothing selected before the click');
+    // After clicking obj-b: selection = obj-b, focus = navigator-view, inspector = obj-b.
+    assert.equal(result.after.selected, 'obj-b', 'DOM click -> selectionModel selects obj-b');
+    assert.equal(result.after.focused, 'navigator-view', 'focus is the navigator pane (the user is interacting there)');
+    assert.equal(result.after.subject, 'obj-b', 'the inspector re-presents the selected obj-b');
+    assert.ok(result.after.inspectorText.includes('B'), 'the inspector DOM shows B\'s fields (the descriptor drove the DOM)');
+    // presentOn detach DISPOSES the old inspector node (no lingering duplicate).
+    assert.equal(result.after.inspectorNodeCount, 1, 'exactly one inspector DOM node after the presentOn swap (detach disposed the old one)');
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});
+
+test('CI: the dispatch seam is INJECTED, not a hard-coded kind switch (sentinel realizer)', {skip: !available && 'no Chrome available'}, async () => {
+  const {server, browser, page} = await launch();
+  try {
+    const result = await page.evaluate(async () => {
+      const S = await window.__lagrangeProof.openCoexistenceSession({sentinelNavigator: true});
+      const glbFrame = await S.readGlb();
+      const sentinelNode = document.getElementById('sentinel-navigator');
+      const out = {
+        sentinelUsed: S.sentinelUsed(),
+        sentinelInDom: Boolean(sentinelNode),
+        sentinelText: sentinelNode?.textContent ?? null,
+        glbOk: Boolean(glbFrame),
+      };
+      await S.destroyAll();
+      out.mountEmptyAfterDestroy = document.querySelectorAll('#mount canvas, #mount .lagrange-tool, #mount #sentinel-navigator').length === 0;
+      return out;
+    });
+    // The injected sentinel realizer was ACTUALLY used for the navigator leaf
+    // (a hard-coded kind switch would ignore it).
+    assert.ok(result.sentinelUsed, 'the injected sentinel realizer was invoked for kind navigator');
+    assert.ok(result.sentinelInDom, 'the sentinel DOM node is in the document (the seam honored the injection)');
+    assert.equal(result.sentinelText, 'SENTINEL-NAVIGATOR-REALIZED');
+    // The GLB Component still rendered (the sentinel only displaced the navigator).
+    assert.ok(result.glbOk, 'GLB still renders while the navigator uses the sentinel realizer');
+    // destroyAll tears down BOTH the canvas and the DOM/sentinel nodes.
+    assert.ok(result.mountEmptyAfterDestroy, 'destroyAll disposes the Component canvas AND the DOM realizations');
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});

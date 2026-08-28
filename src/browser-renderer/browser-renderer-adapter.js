@@ -1,6 +1,6 @@
 import {RendererResourceLostError} from '../renderer-errors.js';
-import {pushPendingRenderTarget} from './surface.js';
-import {createAssetProvider} from './assets.js';
+import {createComponentRealizer} from './component-realizer.js';
+import {createDomRealizer, isToolKind} from './dom-realizer.js';
 
 /**
  * BrowserRendererAdapter: a realization of the RendererAdapter contract
@@ -30,7 +30,7 @@ import {createAssetProvider} from './assets.js';
  * single-surface demo host violates.)
  */
 
-function createBrowserRendererAdapter({loadComponent, mount = null, createRenderTarget = null, resolveAssets = null} = {}) {
+function createBrowserRendererAdapter({loadComponent, mount = null, createRenderTarget = null, resolveAssets = null, realizerFor = null} = {}) {
   if (typeof loadComponent !== 'function') {
     throw new TypeError('createBrowserRendererAdapter requires a loadComponent() factory that imports the transpiled renderer Component module');
   }
@@ -49,7 +49,34 @@ function createBrowserRendererAdapter({loadComponent, mount = null, createRender
   // into that one Component instance (no process-global store) and dropped with it.
   const getAssets = typeof resolveAssets === 'function' ? resolveAssets : null;
 
-  const surfaces = new Map(); // handle -> {surface|null, component, running, width, height}
+  // The Presentation-realization DISPATCH seam (host wiring; the adapter stays
+  // the LIFECYCLE owner, NOT a hard-coded kind switch). realizerFor:
+  // (presentationDescriptor) -> Realizer {attach({surfaceHandle,
+  //   presentationDescriptor, width, height, emitInput, emitIntent}) ->
+  //   Realization {start, stop, resize, readPixels, dispose, isRunning}}.
+  // The caller/host decides the kind->realizer mapping; the adapter is a
+  // conduit that invokes it per attach. DEFAULT: the Component realizer for
+  // Component kinds and the DOM realizer for the tool kinds (navigator/
+  // inspector/unavailable/unauthorized); a host may inject a different mapping
+  // (e.g. the sentinel-realizer coexistence proof).
+  const componentRealizer = createComponentRealizer({
+    loadComponent, createRenderTarget: makeRenderTarget, resolveAssets: getAssets,
+    mountPoint, emitInput: (handle, event) => emitIntent(handle, event),
+  });
+  const domRealizer = mountPoint ? createDomRealizer({
+    mountPoint, emitIntent: (handle, intent) => fanOutIntent(handle, intent),
+  }) : null;
+  // The default mapping: tool kinds -> the DOM realizer, everything else ->
+  // the Component realizer. An injected realizerFor may return a realizer for a
+  // kind it claims and `undefined` for kinds it doesn't; those fall through to
+  // the default. This keeps the adapter a CONDUIT (host wiring decides), never
+  // a hard-coded kind switch.
+  const defaultRealizerFor = (descriptor) => (isToolKind(descriptor?.kind) && domRealizer ? domRealizer : componentRealizer);
+  const resolveRealizer = typeof realizerFor === 'function'
+    ? (descriptor) => realizerFor(descriptor) ?? defaultRealizerFor(descriptor)
+    : defaultRealizerFor;
+
+  const surfaces = new Map(); // handle -> {realization|null, running, width, height, kind}
   let nextHandle = 0;
   let destroyed = false;
 
@@ -67,42 +94,25 @@ function createBrowserRendererAdapter({loadComponent, mount = null, createRender
     return entry;
   }
 
-  function mountCanvas(entry) {
-    // Only mount the canvas for the on-screen (canvas) realization. A texture
-    // render target is headless — its Surface's canvas is never attached, so
-    // the browser's on-screen compositor is never engaged (which is what makes
-    // the texture path deterministic under Xvfb/headless).
-    if (entry.surface && !entry.surface.renderTarget && mountPoint && !entry.surface.canvas.parentNode) {
-      mountPoint.appendChild(entry.surface.canvas);
-      // Attach DOM pointer listeners (input capture owner) so real pointer
-      // events flow into the same stream the synthetic-injection seam uses.
-      entry.surface.attachDomInput();
-    }
-  }
-
-  function unmountCanvas(entry) {
-    if (entry.surface && entry.surface.canvas.parentNode) {
-      entry.surface.canvas.parentNode.removeChild(entry.surface.canvas);
-    }
-  }
-
   async function createSurface(viewDescriptor) {
     requireAlive();
     const handle = `browser-surface-${nextHandle++}`;
     surfaces.set(handle, {
-      surface: null, component: null, running: false,
+      realization: null, running: false,
       width: viewDescriptor?.width ?? 0, height: viewDescriptor?.height ?? 0,
     });
     return handle;
   }
 
   function stopEntry(entry) {
-    // End the Surface's frame stream so the Component's render loop wakes and
-    // exits (the Component has no explicit stop; ending its frame stream is the
-    // host-side stop signal), then drop the Component reference.
+    // Stop the realization (end the frame loop / stop DOM updates) and drop it.
+    // A DOM realization's stop() is a no-op (it has no frame loop), so a detach
+    // must DISPOSE it (remove the node + listeners) or the old DOM lingers
+    // beside the re-attached one. A Component's dispose() is stop + unmount,
+    // equivalent to the old stopEntry.
     entry.running = false;
-    if (entry.surface) entry.surface.destroy();
-    entry.component = null;
+    if (entry.realization) entry.realization.dispose();
+    entry.realization = null;
   }
 
   async function attachPresentation(surfaceHandle, presentationDescriptor) {
@@ -111,58 +121,32 @@ function createBrowserRendererAdapter({loadComponent, mount = null, createRender
     if (entry.running) {
       throw new RendererResourceLostError('browser renderer: a presentation is already attached to this surface');
     }
-    // Host wiring: resolve THIS attach's asset bytes under authority (ASYNC),
-    // then build an attach-scoped provider closing over exactly that allowlist.
-    // The provider is passed to loadComponent and bound into THIS Component
-    // instance's imports (jco instantiation mode) — never a process-global.
-    const assetBytes = getAssets ? await getAssets(presentationDescriptor) : null;
-    const assetProvider = createAssetProvider(assetBytes);
-    // Host wiring: push the RenderTarget for the Surface the Component is
-    // about to construct, so it is in place BEFORE the Component builds its
-    // Context inside start() (the Context reads surface.renderTarget at
-    // construction). The Component is unaware which realization it got.
-    if (makeRenderTarget) {
-      pushPendingRenderTarget(makeRenderTarget({width: entry.width, height: entry.height}));
+    // The realization DISPATCH seam: the adapter is a conduit — it resolves the
+    // realizer for this presentationDescriptor (host wiring decides the mapping)
+    // and delegates the attach. The adapter stays the lifecycle owner; it never
+    // hard-codes a kind switch. The Realization is opaque (Component or DOM).
+    const realizer = resolveRealizer(presentationDescriptor);
+    if (!realizer || typeof realizer.attach !== 'function') {
+      throw new RendererResourceLostError(`browser renderer: no realizer for presentation kind "${presentationDescriptor?.kind}"`);
     }
-    // Start the Component. loadComponent instantiates it (jco instantiation
-    // mode) with THIS attach's assetProvider in its import closure, then calls
-    // start; it returns {start, surface}. The Component constructs its Surface
-    // (the Lagrange-owned one) via the mapped surface import.
-    const component = await loadComponent({
+    const realization = await realizer.attach({
+      surfaceHandle,
       presentationDescriptor,
       width: entry.width,
       height: entry.height,
-      assetProvider,
+      emitInput: (handle, event) => emitIntent(handle, event),
+      emitIntent: (handle, intent) => fanOutIntent(handle, intent),
     });
-    entry.component = component;
-    entry.surface = component?.surface ?? null;
-    // Observe the surface's raw input (DOM when mounted, or synthetic-injected)
-    // to resolve a semantic intent — separate from the WIT stream the Component
-    // consumes, so intent observation never steals renderer stream events.
-    if (entry.surface && typeof entry.surface.observeRawInput === 'function') {
-      entry.unobserveInput = entry.surface.observeRawInput((event) => emitIntent(surfaceHandle, event));
-    }
-    // The Component constructs its Surface with its own (possibly-empty)
-    // CreateDesc; the ADAPTER owns the logical dimensions (the Compositor's
-    // createSurface {width,height}), so it applies them. This keeps sizing
-    // Lagrange-owned, not Component-decided.
-    if (entry.surface && (entry.width || entry.height)) {
-      entry.surface.setSize(entry.width, entry.height);
-    }
-    mountCanvas(entry);
-    if (component && typeof component.start === 'function') {
-      entry.running = true;
-      component.start().catch(() => {
-        entry.running = false;
-      });
-    }
+    entry.realization = realization;
+    entry.running = true;
+    await realization.start();
   }
 
   async function detachPresentation(surfaceHandle) {
     requireAlive();
     const entry = requireLive(surfaceHandle, 'detachPresentation');
-    // Stop the Component's render loop (not just drop the reference) so a
-    // detached presentation does not leak a live rAF/GPU loop per swap.
+    // Stop the realization (not just drop the reference) so a detached
+    // presentation does not leak a live rAF/GPU loop or DOM listeners per swap.
     stopEntry(entry);
   }
 
@@ -176,9 +160,7 @@ function createBrowserRendererAdapter({loadComponent, mount = null, createRender
   async function readRenderedPixels(surfaceHandle) {
     requireAlive();
     const entry = requireLive(surfaceHandle, 'readRenderedPixels');
-    const target = entry.surface?.context?.renderTarget;
-    if (!target || typeof target.readPixels !== 'function') return null;
-    const frame = await target.readPixels();
+    const frame = entry.realization ? await entry.realization.readPixels() : null;
     if (!frame) return null;
     const {data, width, height, bytesPerRow} = frame;
     let red = 0;
@@ -196,32 +178,25 @@ function createBrowserRendererAdapter({loadComponent, mount = null, createRender
     const entry = requireLive(surfaceHandle, 'resize');
     entry.width = size.width;
     entry.height = size.height;
-    if (entry.surface) {
-      // Lagrange host extension: resize the canvas the Component renders to.
-      entry.surface.setSize(size.width, size.height);
-    }
+    if (entry.realization) entry.realization.resize(size);
   }
 
   async function destroySurface(surfaceHandle) {
     requireAlive();
     const entry = requireLive(surfaceHandle, 'destroySurface');
-    stopEntry(entry);
-    unmountCanvas(entry);
+    if (entry.realization) entry.realization.dispose();
     surfaces.delete(surfaceHandle);
   }
 
   async function destroyAll() {
     destroyed = true;
     for (const entry of surfaces.values()) {
-      stopEntry(entry);
-      unmountCanvas(entry);
+      if (entry.realization) entry.realization.dispose();
     }
     surfaces.clear();
-    // Session teardown: each entry's Component instance is dropped (stopEntry),
-    // and with it the attach-scoped asset provider closure bound into that
-    // instance's imports. There is no process-global asset store to clear — a
-    // cold Component provably re-receives its bytes on the next attach because
-    // the adapter resolves + builds a fresh provider per attach.
+    // Session teardown: each entry's realization is disposed — a Component's
+    // instance (and its attach-scoped asset provider closure) or a DOM pane's
+    // node + listeners. There is no process-global store to clear.
   }
 
   // Host-side SYNTHETIC-INJECTION seam (input capture owner): deliver a
@@ -234,7 +209,8 @@ function createBrowserRendererAdapter({loadComponent, mount = null, createRender
     const entry = requireLive(surfaceHandle, 'injectPointerEvent');
     // The surface emits the event to its stream AND its raw-input observers
     // (which resolve the intent), so DOM and synthetic input share one path.
-    if (entry.surface) entry.surface.injectPointer(event);
+    // Only the Component realization has a Surface with a pointer stream.
+    if (entry.realization?.surface) entry.realization.surface.injectPointer(event);
   }
 
   // Host-side intent-consumption seam: register a handler that receives a
@@ -252,12 +228,21 @@ function createBrowserRendererAdapter({loadComponent, mount = null, createRender
 
   const intentHandlers = new Set();
 
-  // Resolve a surface pointer event into a semantic intent descriptor and fan
-  // it out to intent consumers. Pointer-down on a live surface -> activate.
+  // Fan a semantic intent descriptor out to intent consumers. The intent is
+  // plain data: a Component pointer interaction -> {kind:'activate'} ('an
+  // interaction happened on this view'); a DOM ref-row activation ->
+  // {kind:'activate-item', key} (a descriptor-local item key). NEVER a
+  // ref/subject — the environment resolves the subject (CommandRouter) or the
+  // item key (EnvironmentShell) against its own Presentation data.
+  function fanOutIntent(surfaceHandle, intent) {
+    for (const handler of intentHandlers) handler(intent, surfaceHandle);
+  }
+
+  // Resolve a Component surface pointer event into a semantic intent descriptor.
+  // Pointer-down on a live surface -> activate ('an interaction happened').
   function emitIntent(surfaceHandle, event) {
     if (event?.type !== 'pointer-down') return;
-    const intent = Object.freeze({kind: 'activate'});
-    for (const handler of intentHandlers) handler(intent, surfaceHandle);
+    fanOutIntent(surfaceHandle, Object.freeze({kind: 'activate'}));
   }
 
   return Object.freeze({
