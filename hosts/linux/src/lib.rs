@@ -34,6 +34,9 @@
 //! the readback copy on that queue before `buffer_map_async` + poll. No fork,
 //! no Component change.
 
+pub mod semantic_gtk;
+pub mod semantic_ui;
+
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;

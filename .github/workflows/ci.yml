@@ -72,13 +72,18 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.98.0"
-      - name: Install native build + software-GPU dependencies
+      - name: Install native build + software-GPU + GTK4 dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config libudev-dev \
             libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libxkbcommon-dev libssl-dev \
-            mesa-vulkan-drivers libgl1-mesa-dri vulkan-tools
-      - name: Native Linux Component host proof (cargo test)
+            mesa-vulkan-drivers libgl1-mesa-dri vulkan-tools \
+            libgtk-4-dev xvfb
+      # L1 (Component graphics) + L2b (GTK semantic UI). The GTK tests need
+      # gtk4::init(), which requires a display — run the whole native suite
+      # under Xvfb (the L1 offscreen GPU tests are unaffected by a display).
+      # GTK is main-thread-only, so the GTK widget test is a single #[test].
+      - name: Native Linux host proof (L1 Component graphics + L2b GTK semantic UI)
         working-directory: hosts/linux
-        run: cargo test
+        run: xvfb-run -a -s "-screen 0 1280x1024x24" cargo test
