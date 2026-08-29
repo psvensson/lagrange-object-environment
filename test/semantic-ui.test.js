@@ -82,6 +82,21 @@ test('specific violations are rejected with clear reasons', () => {
   assert.throws(() => validateSemanticUi({...base, subject: ref('o')}), /document\.subject: a ref\/subject/);
 });
 
+test('integral-valued numbers are accepted (JSON number model), matching the Rust validator', () => {
+  // JSON has one number type; 1 and 1.0 are the same number. Both validators
+  // accept integral-valued numbers and reject fractional/negative ones.
+  const withKey = (key) => ({kind: 'semantic-ui', version: 1, root: {kind: 'group', children: [{kind: 'collection', items: [{kind: 'action', key, label: 'a'}]}]}});
+  for (const k of [1, 1.0, 1e3, -0]) {
+    assert.equal(validateSemanticUi(withKey(k)).root.children[0].items[0].key, k, `integral key ${k} accepted`);
+  }
+  for (const k of [1.5, -1, -1.0]) {
+    assert.throws(() => validateSemanticUi(withKey(k)), /descriptor-local item key/, `key ${k} rejected`);
+  }
+  // version as an integral number (incl. float syntax) is accepted; non-1 rejected.
+  assert.ok(validateSemanticUi({kind: 'semantic-ui', version: 1.0, root: {kind: 'group', children: []}}));
+  assert.throws(() => validateSemanticUi({kind: 'semantic-ui', version: 2.0, root: {kind: 'group', children: []}}), /unsupported version/);
+});
+
 test('action keys stay descriptor-local integers (the PR #33 security property)', () => {
   const doc = semanticUiForPresentation(CASES.navigator);
   const collection = doc.root.children.find((c) => c.kind === 'collection');

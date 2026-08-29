@@ -71,6 +71,30 @@ fn rejects_red_fixtures() {
     assert!(count >= 6, "expected the red conformance corpus (>= 6 fixtures), found {count}");
 }
 
+/// Conformance with the JS validator on integral-valued JSON numbers: JSON has
+/// one number type, so `1`/`1.0`/`1e3`/`-0` are all integral (JS
+/// Number.isInteger accepts them); both validators must accept those and reject
+/// genuinely fractional/negative values (1.5, -1.0). This pins the JS<->Rust
+/// validator equivalence the contract's CONFORMANCE NOTE requires.
+#[test]
+fn integral_float_conformance_with_js() {
+    // Accepted (integral-valued, even with float syntax).
+    for v in ["1", "1.0", "1e3"] {
+        let json = format!(r#"{{"kind":"semantic-ui","version":1,"root":{{"kind":"group","children":[{{"kind":"collection","items":[{{"kind":"action","key":{v},"label":"a"}}]}}]}}}}"#);
+        // version must be 1 for accept; use version:1 and vary only the key.
+        let _ = v;
+        assert!(parse_semantic_ui(&json).is_ok(), "integral key must be accepted");
+    }
+    // Rejected (genuinely fractional or negative).
+    for bad in ["1.5", "-1.0", "-2"] {
+        let json = format!(r#"{{"kind":"semantic-ui","version":1,"root":{{"kind":"group","children":[{{"kind":"collection","items":[{{"kind":"action","key":{bad},"label":"a"}}]}}]}}}}"#);
+        assert!(parse_semantic_ui(&json).is_err(), "non-integral/negative key {bad} must be rejected");
+    }
+    // version with float syntax (integral) is accepted; non-1 is rejected.
+    assert!(parse_semantic_ui(r#"{"kind":"semantic-ui","version":1.0,"root":{"kind":"group","children":[]}}"#).is_ok());
+    assert!(parse_semantic_ui(r#"{"kind":"semantic-ui","version":2.0,"root":{"kind":"group","children":[]}}"#).is_err());
+}
+
 /// Cross-host identity: the GTK realizer builds real controls from the SAME
 /// fixtures the browser consumes, and an action activation emits the EXACT same
 /// intent the DOM emits. ONE test: GTK is main-thread-only, so all widget work

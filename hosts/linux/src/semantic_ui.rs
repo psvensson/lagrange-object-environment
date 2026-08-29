@@ -63,6 +63,19 @@ const FORBIDDEN_KEYS: &[&str] = &[
     "y", "width", "height", "left", "top", "coordinates", "bounds", "geometry",
 ];
 
+// Return the integral value of a JSON number, matching JS Number.isInteger
+// semantics: accepts `1`, `1.0`, `1e3`, `-0` (all integral); rejects `1.5`,
+// `-1.0`, non-numbers. serde's as_i64/as_u64 alone would reject float-typed
+// tokens even when integral, which would drift from the JS validator.
+fn integral_number(v: &serde_json::Value) -> Option<u64> {
+    let f = v.as_f64()?;
+    if f.is_finite() && f.fract() == 0.0 && f >= 0.0 {
+        Some(f as u64)
+    } else {
+        None
+    }
+}
+
 fn is_ref_like(v: &serde_json::Value) -> bool {
     if let serde_json::Value::Object(m) = v {
         m.get("objectId").is_some_and(|o| o.is_string())
@@ -99,9 +112,15 @@ pub fn validate_and_parse(raw: &serde_json::Value) -> Result<SemanticUi, String>
             obj.get("kind")
         ));
     }
+    // Match the JS validator's semantics EXACTLY (CONFORMANCE NOTE): JSON has
+    // one number type, so `1` and `1.0` are the same number. JS Number.isInteger
+    // accepts integral-valued floats (1.0, 1e3); serde's as_u64/as_i64 reject
+    // float-typed tokens regardless of integrality. To replicate the JS
+    // semantics, accept any integral-valued finite number (as_f64 + fract==0),
+    // rejecting only genuinely fractional/negative values — exactly like JS.
     let version = obj
         .get("version")
-        .and_then(|v| v.as_u64())
+        .and_then(integral_number)
         .ok_or_else(|| "document.version must be an integer".to_string())?;
     if version != SUPPORTED_VERSION as u64 {
         return Err(format!(
@@ -113,8 +132,35 @@ pub fn validate_and_parse(raw: &serde_json::Value) -> Result<SemanticUi, String>
         .ok_or_else(|| "document.root is required".to_string())?;
     validate_node_value(root, "root")?;
 
-    // Now that the raw shape is validated, deserialize to the typed document.
-    serde_json::from_value(raw.clone()).map_err(|e| format!("SemanticUi/v1 deserialize: {e}"))
+    // Now that the raw shape is validated, normalize integral-valued floats to
+    // integers (so `version:1.0` / `key:1.0` deserialize to u32/i64, matching
+    // the JS number model) and deserialize to the typed document.
+    let normalized = normalize_numbers(raw.clone());
+    serde_json::from_value(normalized).map_err(|e| format!("SemanticUi/v1 deserialize: {e}"))
+}
+
+// Recursively rewrite integral-valued floats to integers so the typed
+// deserialize (which expects u32/i64) accepts `1.0` exactly as the JS number
+// model does. Genuinely fractional values are left as-is (validation already
+// rejected them where they are not allowed).
+fn normalize_numbers(v: serde_json::Value) -> serde_json::Value {
+    match v {
+        serde_json::Value::Number(n) => {
+            if let Some(f) = n.as_f64() {
+                if f.is_finite() && f.fract() == 0.0 && f.abs() <= (i64::MAX as f64) {
+                    return serde_json::Value::Number((f as i64).into());
+                }
+            }
+            serde_json::Value::Number(n)
+        }
+        serde_json::Value::Array(a) => {
+            serde_json::Value::Array(a.into_iter().map(normalize_numbers).collect())
+        }
+        serde_json::Value::Object(m) => serde_json::Value::Object(
+            m.into_iter().map(|(k, v)| (k, normalize_numbers(v))).collect(),
+        ),
+        other => other,
+    }
 }
 
 // Recursively validate the RAW JSON of a node: known shape, no host fields,
@@ -178,8 +224,9 @@ fn validate_node_value(node: &serde_json::Value, path: &str) -> Result<(), Strin
             if !obj.get("label").is_some_and(|l| l.is_string()) {
                 return Err(format!("{path}.action.label must be a string"));
             }
-            match obj.get("key").and_then(|k| k.as_i64()) {
-                Some(k) if k >= 0 => {}
+            // Same integral-number semantics as `version` (match JS).
+            match obj.get("key").and_then(integral_number) {
+                Some(_k) => {}
                 _ => {
                     return Err(format!(
                         "{path}.action.key must be a non-negative integer (a descriptor-local item key)"
