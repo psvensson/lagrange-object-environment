@@ -25,7 +25,10 @@ log = "0.4"
 # checked-in fixtures the browser DOM realizer consumes) and builds real GTK4
 # controls. serde/serde_json deserialize the host-neutral description.
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# preserve_order: keep JSON object insertion order (the JS projector emits
+# fields in insertion order; the Rust projector must match it for the
+# fixture-conformance deep-equal, so serde_json::Map must be order-preserving).
+serde_json = { version = "1", features = ["preserve_order"] }
 gtk4 = "0.9"
 
 # Native wasi:webgpu + wasi-gfx:surface host runtime, pinned to an EXACT git

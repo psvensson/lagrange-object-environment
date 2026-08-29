@@ -34,6 +34,8 @@
 //! the readback copy on that queue before `buffer_map_async` + poll. No fork,
 //! no Component change.
 
+pub mod linux_adapter;
+pub mod projector;
 pub mod semantic_gtk;
 pub mod semantic_ui;
 
@@ -653,7 +655,8 @@ pub struct InstanceRun {
 }
 
 /// The native GLB host. One `Engine` + one shared wgpu `Global`; each
-/// `run_instance` gets its own `Store` (per-instance isolation).
+/// `run_instance`/`GlbInstance::spawn` gets its own `Store` (per-instance
+/// isolation).
 pub struct GlbHost {
     engine: Engine,
     instance: Arc<wgpu_core::global::Global>,
@@ -692,6 +695,10 @@ impl GlbHost {
     /// The Component's `start()` never resolves (it awaits frame events
     /// forever). If it TRAPS before the first frame is presented (e.g. a
     /// denied `load`), that error is surfaced here.
+    ///
+    /// Implemented in terms of `GlbInstance` (spawn -> drive N frames ->
+    /// finish): the run-to-completion L1 API and the live-instance L3 API
+    /// share one spawn/ready/size/frame-drive path.
     pub async fn run_instance(
         &self,
         allowlist: HashMap<String, Vec<u8>>,
@@ -699,6 +706,23 @@ impl GlbHost {
         height: u32,
         frames: usize,
     ) -> anyhow::Result<InstanceRun> {
+        let instance = GlbInstance::spawn(self, allowlist, width, height).await?;
+        instance.drive_frames(frames).await;
+        instance.finish().await
+    }
+
+    /// Spawn the checked-in Component in a FRESH Store (attach-scoped asset
+    /// allowlist, per-instance isolation), wait until it is READY (its
+    /// offscreen surface-webgpu context configured + its wasi-gfx surface
+    /// created), size the surface to the view, and return the LIVE instance
+    /// held open across calls. This is the L3 live-instance seam the
+    /// `LinuxRendererAdapter` holds behind a `glb` surface handle.
+    async fn spawn_live(
+        &self,
+        allowlist: HashMap<String, Vec<u8>>,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<GlbInstance> {
         let component = wasmtime::component::Component::new(&self.engine, component_bytes())
             .map_err(|e| anyhow::anyhow!("compiling checked-in Component: {e}"))?;
 
@@ -770,17 +794,147 @@ impl GlbHost {
         // surface.setSize). The Component reads surface.width()/height() live.
         surface.request_set_size(Some(width), Some(height));
 
-        for _ in 0..frames {
-            surface.animation_frame();
+        Ok(GlbInstance {
+            start_task,
+            surface,
+            captured,
+            prints,
+            width,
+            height,
+        })
+    }
+}
+
+/// A LIVE GLB Component instance held open across calls (the L3 seam the
+/// `LinuxRendererAdapter` uses for a `glb` surface): spawn -> drive_frames(n)
+/// on demand -> read_latest_frame() -> drop/finish. Refactored from
+/// `run_instance`'s logic so the run-to-completion L1 API and the live L3 API
+/// share one spawn/ready/size/frame-drive path. The instance's Store +
+/// start-task live on the tokio runtime that called `spawn`; frames are driven
+/// on demand from the same runtime.
+pub struct GlbInstance {
+    /// The never-resolving Component start() task (aborted on teardown).
+    start_task: tokio::task::JoinHandle<Result<(), wasmtime::Error>>,
+    /// The Component's wasi-gfx surface: animation_frame() drives a frame.
+    surface: Surface,
+    /// Every BGRA frame present() captured (bytes_per_row stride, padded).
+    captured: Arc<Mutex<Vec<Vec<u8>>>>,
+    /// What the Component printed (diagnostics).
+    prints: Arc<Mutex<Vec<String>>>,
+    width: u32,
+    height: u32,
+}
+
+impl GlbInstance {
+    /// Spawn a live instance (see `GlbHost::spawn_live`). Must be called from
+    /// within a tokio runtime (it `tokio::spawn`s the Component start task).
+    pub async fn spawn(
+        host: &GlbHost,
+        allowlist: HashMap<String, Vec<u8>>,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<Self> {
+        host.spawn_live(allowlist, width, height).await
+    }
+
+    /// Drive `n` animation frames, waiting after each for the Component to run
+    /// its frame handler through present(). Stops early if the Component's
+    /// start task finishes (e.g. it trapped).
+    pub async fn drive_frames(&self, n: usize) {
+        for _ in 0..n {
+            self.surface.animation_frame();
             // Let the Component task run its frame handler through present().
             // A real timer sleep (not yield_now) so the tokio runtime actually
             // schedules the Component task's wakers and the wasmtime concurrent
             // stream machinery turns; yield_now can starve it.
             tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-            if start_task.is_finished() {
+            if self.start_task.is_finished() {
                 break;
             }
         }
+    }
+
+    /// Drive animation frames until the Component presents at least one frame
+    /// (load-independent), or give up after `max_frames` attempts. Unlike
+    /// `drive_frames` (a fixed count for L1's run-to-completion), this is for
+    /// the LIVE path: under host CPU contention the Component's frame handler
+    /// may not be scheduled within a fixed number of 30ms sleeps, so a fixed
+    /// count can return before present() runs. Looping until a frame is
+    /// captured makes the pump robust regardless of load. Returns the number
+    /// of captured frames (>= 1 on success, 0 if the bound was hit / the
+    /// Component finished without presenting).
+    pub async fn drive_until_frame(&self, max_frames: usize) -> usize {
+        for _ in 0..max_frames {
+            if !self.captured.lock().unwrap().is_empty() {
+                break;
+            }
+            if self.start_task.is_finished() {
+                break;
+            }
+            self.surface.animation_frame();
+            // A real timer sleep (not yield_now) so the tokio runtime actually
+            // schedules the Component task's wakers through present().
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        }
+        self.captured.lock().unwrap().len()
+    }
+
+    /// Resize the live surface (the Component reads width/height live next
+    /// frame). Host-side: updates the view size the surface reports.
+    pub fn resize(&self, width: u32, height: u32) {
+        self.surface.request_set_size(Some(width), Some(height));
+    }
+
+    /// The most recently captured BGRA frame (host-side inspection seam), or
+    /// None if the Component has not presented yet.
+    pub fn read_latest_frame(&self) -> Option<Vec<u8>> {
+        self.captured.lock().unwrap().last().cloned()
+    }
+
+    /// `bytes_per_row` for this instance's frames (COPY_BYTES_PER_ROW_ALIGNMENT
+    /// padded). Uses the LIVE surface size so a resize is reflected.
+    pub fn bytes_per_row(&self) -> u32 {
+        self.surface.width().max(1).div_ceil(64) * 256
+    }
+
+    pub fn width(&self) -> u32 {
+        self.surface.width().max(1)
+    }
+
+    pub fn height(&self) -> u32 {
+        self.surface.height().max(1)
+    }
+
+    /// The nominal width/height this instance was spawned with (the view size
+    /// before any resize).
+    pub fn nominal_size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    /// Abort the Component's start task (idempotent). Dropping a `JoinHandle`
+    /// only DETACHES the task — the never-resolving Component would keep its
+    /// Store + attach-scoped asset closure alive on the runtime. So teardown
+    /// (detach/destroy in the adapter, or a dropped live instance) MUST abort
+    /// explicitly; this is the real native-teardown guarantee.
+    fn abort(&self) {
+        self.start_task.abort();
+    }
+
+    /// Tear the instance down and return everything it captured (the L1
+    /// run-to-completion shape). Surfaces a Component trap and the
+    /// zero-frames/denied-asset diagnostic as errors, exactly like the
+    /// original `run_instance`.
+    pub async fn finish(self) -> anyhow::Result<InstanceRun> {
+        // Move the start task out without running Drop (we handle it explicitly
+        // below, surfacing a trap rather than blindly aborting). The other
+        // fields are behind Arc/Copy, so they are read, not moved.
+        let this = std::mem::ManuallyDrop::new(self);
+        // SAFETY: start_task is read out exactly once; `this` is not dropped.
+        let start_task = unsafe { std::ptr::read(&this.start_task) };
+        let captured = Arc::clone(&this.captured);
+        let prints = Arc::clone(&this.prints);
+        let width = this.width;
+        let height = this.height;
 
         // If the Component's start trapped (e.g. denied asset), surface that
         // error rather than returning an empty capture as if it rendered.
@@ -818,6 +972,15 @@ impl GlbHost {
     }
 }
 
+impl Drop for GlbInstance {
+    fn drop(&mut self) {
+        // A dropped live instance (detach/destroy in the adapter) MUST abort
+        // its Component start task: dropping the JoinHandle alone would detach
+        // it and leak the Store + asset closure on the runtime.
+        self.abort();
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Mesh-pixel predicate (ported from test/browser/glb-proof.test.js, BGRA)
 // ---------------------------------------------------------------------------
@@ -839,4 +1002,13 @@ pub fn mesh_pixels(frame: &[u8], width: u32, height: u32, bytes_per_row: u32) ->
         }
     }
     mesh
+}
+
+#[cfg(test)]
+mod send_sync_checks {
+    use super::*;
+    fn _assert_send<T: Send>() {}
+    fn _glb_instance_send() {
+        _assert_send::<GlbInstance>();
+    }
 }
