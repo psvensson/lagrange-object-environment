@@ -10,6 +10,8 @@ import {instantiate as instantiateGlb} from './components/glb/glb.component.js';
 import {createCompositor} from '../../src/compositor.js';
 import {createSelectionModel} from '../../src/selection-model.js';
 import {createEnvironmentShell} from '../../src/environment-shell.js';
+import {renderSemanticUiToDom} from '../../src/browser-renderer/dom-realizer.js';
+import {validateSemanticUi} from '../../src/semantic-ui.js';
 
 // The PR B browser proof harness. Drives the BrowserRendererAdapter through
 // the full lifecycle against real Chrome WebGPU with the triangle Component.
@@ -358,6 +360,38 @@ window.__lagrangeProof = {
     return {
       frameA1, frameA2, frameB,
       destroy: async () => { await adapterA.destroyAll(); await adapterB.destroyAll(); },
+    };
+  },
+
+  // --- L2 cross-host identity: drive the browser SemanticUi->DOM rendering
+  // path from a CHECKED-IN FIXTURE (fetched by URL), the SAME bytes the Linux
+  // GTK realizer consumes. Asserts the DOM structure + the activate-item intent
+  // for a fixture. ---
+  async renderSemanticUiFixture(fixtureUrl, kind) {
+    const res = await fetch(fixtureUrl);
+    if (!res.ok) throw new Error(`failed to fetch fixture ${fixtureUrl}: ${res.status}`);
+    const doc = validateSemanticUi(await res.json());
+    const mount = document.getElementById('mount');
+    mount.innerHTML = '';
+    const listeners = [];
+    const listen = (el, type, fn) => { el.addEventListener(type, fn); listeners.push([el, type, fn]); };
+    const intents = [];
+    const root = renderSemanticUiToDom({
+      doc, kind, surfaceHandle: 'fixture-surface',
+      listen, onAction: (key) => intents.push({kind: 'activate-item', key}),
+    });
+    mount.appendChild(root);
+    return {
+      html: root.innerHTML,
+      text: root.textContent,
+      heading: root.querySelector('h3')?.textContent ?? null,
+      reason: root.querySelector('.lagrange-tool-reason')?.textContent ?? null,
+      fields: Array.from(root.querySelectorAll('.lagrange-tool-fields dt')).map((d) => d.textContent),
+      fieldValues: Array.from(root.querySelectorAll('.lagrange-tool-fields dd')).map((d) => d.textContent),
+      buttons: Array.from(root.querySelectorAll('.lagrange-tool-references button')).map((b) => b.textContent),
+      clickButton: (i) => { root.querySelectorAll('.lagrange-tool-references button')[i]?.click(); },
+      takeIntents: () => intents.splice(0, intents.length),
+      dispose: () => { for (const [el, t, f] of listeners) el.removeEventListener(t, f); root.remove(); },
     };
   },
 };

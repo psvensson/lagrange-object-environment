@@ -21,6 +21,13 @@ raw-window-handle = "0.6"
 env_logger = "0.11"
 log = "0.4"
 
+# L2b: the GTK semantic-UI realizer consumes a SemanticUi/v1 document (the SAME
+# checked-in fixtures the browser DOM realizer consumes) and builds real GTK4
+# controls. serde/serde_json deserialize the host-neutral description.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+gtk4 = "0.9"
+
 # Native wasi:webgpu + wasi-gfx:surface host runtime, pinned to an EXACT git
 # revision (NOT main) because the wasmtime/wgpu/wit-bindgen combination is
 # tightly coupled and reproducibility matters (user direction, Bead hqt).

@@ -1,0 +1,36 @@
+{
+  "kind": "semantic-ui",
+  "version": 1,
+  "root": {
+    "kind": "group",
+    "title": "Inspector: obj-b",
+    "children": [
+      {
+        "kind": "text",
+        "role": "heading",
+        "text": "Inspector: obj-b"
+      },
+      {
+        "kind": "field",
+        "label": "slot-title",
+        "text": "B"
+      },
+      {
+        "kind": "field",
+        "label": "slot-count",
+        "text": "17"
+      },
+      {
+        "kind": "collection",
+        "label": "References",
+        "items": [
+          {
+            "kind": "action",
+            "key": 0,
+            "label": "obj-c"
+          }
+        ]
+      }
+    ]
+  }
+}

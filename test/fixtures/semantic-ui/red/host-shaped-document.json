@@ -1,0 +1,6 @@
+{
+  "kind": "semantic-ui",
+  "version": 1,
+  "geometry": { "x": 10, "y": 20 },
+  "root": { "kind": "group", "title": "x", "children": [] }
+}

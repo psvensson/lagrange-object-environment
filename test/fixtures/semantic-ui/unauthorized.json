@@ -1,0 +1,20 @@
+{
+  "kind": "semantic-ui",
+  "version": 1,
+  "root": {
+    "kind": "group",
+    "title": "unauthorized-reference",
+    "children": [
+      {
+        "kind": "text",
+        "role": "heading",
+        "text": "unauthorized-reference"
+      },
+      {
+        "kind": "text",
+        "role": "reason",
+        "text": "Not authorized: obj-secret (denied)"
+      }
+    ]
+  }
+}

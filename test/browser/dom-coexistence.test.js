@@ -182,3 +182,58 @@ test('CI: the dispatch seam is INJECTED, not a hard-coded kind switch (sentinel 
     server.close();
   }
 });
+
+// L2 cross-host identity: the browser SemanticUi->DOM rendering path consumes
+// the CHECKED-IN fixtures (the SAME bytes the Linux GTK realizer consumes).
+// This also covers the unavailable/unauthorized kinds, which had NO DOM-level
+// coverage before L2.
+test('CI: the browser realizer renders the checked-in SemanticUi fixtures (all four kinds)', {skip: !available && 'no Chrome available'}, async () => {
+  const {server, browser, page} = await launch();
+  try {
+    const result = await page.evaluate(async () => {
+      const out = {};
+      // navigator: heading + fields + reference buttons + activate-item intent.
+      const nav = await window.__lagrangeProof.renderSemanticUiFixture('../fixtures/semantic-ui/navigator.json', 'navigator');
+      out.nav = {heading: nav.heading, fields: nav.fields, buttons: nav.buttons};
+      nav.clickButton(1);
+      out.navIntent = nav.takeIntents();
+      nav.dispose();
+      // inspector: heading + fields + one reference.
+      const insp = await window.__lagrangeProof.renderSemanticUiFixture('../fixtures/semantic-ui/inspector.json', 'inspector');
+      out.insp = {heading: insp.heading, fields: insp.fields, fieldValues: insp.fieldValues, buttons: insp.buttons};
+      insp.clickButton(0);
+      out.inspIntent = insp.takeIntents();
+      insp.dispose();
+      // unavailable + unauthorized: heading + an explicit reason line, no refs.
+      const un = await window.__lagrangeProof.renderSemanticUiFixture('../fixtures/semantic-ui/unavailable.json', 'unavailable-reference');
+      out.unavailable = {heading: un.heading, reason: un.reason, buttons: un.buttons};
+      un.dispose();
+      const unauth = await window.__lagrangeProof.renderSemanticUiFixture('../fixtures/semantic-ui/unauthorized.json', 'unauthorized-reference');
+      out.unauthorized = {heading: unauth.heading, reason: unauth.reason, buttons: unauth.buttons};
+      unauth.dispose();
+      return out;
+    });
+
+    // navigator
+    assert.equal(result.nav.heading, 'Navigator: obj-root');
+    assert.deepEqual(result.nav.fields, ['slot-title']);
+    assert.deepEqual(result.nav.buttons, ['obj-b', 'obj-c']);
+    assert.deepEqual(result.navIntent, [{kind: 'activate-item', key: 1}], 'navigator click emits the descriptor-local key, no ref');
+    // inspector (field value normalization: int Value -> "17")
+    assert.equal(result.insp.heading, 'Inspector: obj-b');
+    assert.deepEqual(result.insp.fields, ['slot-title', 'slot-count']);
+    assert.deepEqual(result.insp.fieldValues, ['B', '17']);
+    assert.deepEqual(result.insp.buttons, ['obj-c']);
+    assert.deepEqual(result.inspIntent, [{kind: 'activate-item', key: 0}]);
+    // unavailable + unauthorized (the previously-uncovered kinds)
+    assert.equal(result.unavailable.heading, 'unavailable-reference');
+    assert.equal(result.unavailable.reason, 'Unavailable: obj-gone (not found)');
+    assert.deepEqual(result.unavailable.buttons, []);
+    assert.equal(result.unauthorized.heading, 'unauthorized-reference');
+    assert.equal(result.unauthorized.reason, 'Not authorized: obj-secret (denied)');
+    assert.deepEqual(result.unauthorized.buttons, []);
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});
