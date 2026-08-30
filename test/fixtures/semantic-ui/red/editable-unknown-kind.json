@@ -1,0 +1,17 @@
+{
+  "kind": "semantic-ui",
+  "version": 1,
+  "root": {
+    "kind": "group",
+    "title": "Inspector: obj-b",
+    "children": [
+      {
+        "kind": "field",
+        "label": "slot-count",
+        "text": "17",
+        "key": 0,
+        "editable": "integer"
+      }
+    ]
+  }
+}

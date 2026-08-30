@@ -129,6 +129,7 @@ test('CI: the real navigator -> selection -> inspector loop drives through real 
       const after = {
         subject: S.inspectorSubject(), selected: S.selected(), focused: S.focused(),
         inspectorText: S.inspectorText(),
+        inspectorFieldValues: S.inspectorFieldInputs().map((i) => i.value),
         inspectorNodeCount: document.querySelectorAll('#mount .lagrange-tool-inspector').length,
       };
       await S.destroyAll();
@@ -142,7 +143,10 @@ test('CI: the real navigator -> selection -> inspector loop drives through real 
     assert.equal(result.after.selected, 'obj-b', 'DOM click -> selectionModel selects obj-b');
     assert.equal(result.after.focused, 'navigator-view', 'focus is the navigator pane (the user is interacting there)');
     assert.equal(result.after.subject, 'obj-b', 'the inspector re-presents the selected obj-b');
-    assert.ok(result.after.inspectorText.includes('B'), 'the inspector DOM shows B\'s fields (the descriptor drove the DOM)');
+    // B's title is the EDITABLE <input> value (not in textContent); the
+    // read-only count renders as text. Both prove the descriptor drove the DOM.
+    assert.ok(result.after.inspectorFieldValues.includes('B'), 'the inspector DOM shows B\'s editable title input (the descriptor drove the DOM)');
+    assert.ok(result.after.inspectorText.includes('17'), 'the inspector DOM shows B\'s read-only count as text');
     // presentOn detach DISPOSES the old inspector node (no lingering duplicate).
     assert.equal(result.after.inspectorNodeCount, 1, 'exactly one inspector DOM node after the presentOn swap (detach disposed the old one)');
   } finally {
@@ -198,11 +202,16 @@ test('CI: the browser realizer renders the checked-in SemanticUi fixtures (all f
       nav.clickButton(1);
       out.navIntent = nav.takeIntents();
       nav.dispose();
-      // inspector: heading + fields + one reference.
+      // inspector: heading + fields + one reference. The writable slot-title is
+      // an editable <input> (the SAME fixture bytes the GTK realizer consumes);
+      // slot-count is a read-only <dd>. Committing an edit emits a RAW-STRING
+      // edit-field intent with the descriptor-local key — identical to GTK.
       const insp = await window.__lagrangeProof.renderSemanticUiFixture('../fixtures/semantic-ui/inspector.json', 'inspector');
-      out.insp = {heading: insp.heading, fields: insp.fields, fieldValues: insp.fieldValues, buttons: insp.buttons};
+      out.insp = {heading: insp.heading, fields: insp.fields, fieldValues: insp.fieldValues, fieldInputs: insp.fieldInputs, buttons: insp.buttons};
       insp.clickButton(0);
       out.inspIntent = insp.takeIntents();
+      insp.editField(0, 'B2');
+      out.inspEditIntent = insp.takeIntents();
       insp.dispose();
       // unavailable + unauthorized: heading + an explicit reason line, no refs.
       const un = await window.__lagrangeProof.renderSemanticUiFixture('../fixtures/semantic-ui/unavailable.json', 'unavailable-reference');
@@ -225,6 +234,12 @@ test('CI: the browser realizer renders the checked-in SemanticUi fixtures (all f
     assert.deepEqual(result.insp.fieldValues, ['B', '17']);
     assert.deepEqual(result.insp.buttons, ['obj-c']);
     assert.deepEqual(result.inspIntent, [{kind: 'activate-item', key: 0}]);
+    // S3: exactly one editable input (the writable slot-title); slot-count is a
+    // read-only <dd>. Enter commits a RAW-STRING edit-field intent — identical
+    // shape to the GTK GtkEntry's intent (cross-host edit parity).
+    assert.deepEqual(result.insp.fieldInputs, ['B'], 'only the writable field renders an <input>');
+    assert.deepEqual(result.inspEditIntent, [{kind: 'edit-field', key: 0, text: 'B2'}],
+      'Enter on the editable input emits a raw-string edit-field intent (descriptor-local key, no ref)');
     // unavailable + unauthorized (the previously-uncovered kinds)
     assert.equal(result.unavailable.heading, 'unavailable-reference');
     assert.equal(result.unavailable.reason, 'Unavailable: obj-gone (not found)');

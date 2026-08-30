@@ -22,7 +22,7 @@ fn ref_(o: &str) -> Value {
 fn rust_projector_matches_the_checked_in_fixtures() {
     let cases: Vec<(&str, Value)> = vec![
         ("navigator.json", json!({"kind":"navigator","subject":ref_("obj-root"),"parameters":{"fields":{"slot-title":{"kind":"text","value":"Root"}},"references":[ref_("obj-b"),ref_("obj-c")]}})),
-        ("inspector.json", json!({"kind":"inspector","subject":ref_("obj-b"),"parameters":{"fields":{"slot-title":{"kind":"text","value":"B"},"slot-count":{"kind":"int","value":17}},"references":[ref_("obj-c")]}})),
+        ("inspector.json", json!({"kind":"inspector","subject":ref_("obj-b"),"parameters":{"fields":{"slot-title":{"kind":"text","value":"B"},"slot-count":{"kind":"int","value":17}},"writable":["slot-title"],"references":[ref_("obj-c")]}})),
         ("unavailable.json", json!({"kind":"unavailable-reference","subject":ref_("obj-gone"),"parameters":{"reason":"not found"}})),
         ("unauthorized.json", json!({"kind":"unauthorized-reference","subject":ref_("obj-secret"),"parameters":{"reason":"denied"}})),
     ];

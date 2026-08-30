@@ -23,11 +23,15 @@ use std::rc::Rc;
 use crate::semantic_ui::{Node, SemanticUi};
 
 /// A plain-data intent emitted by a control — identical shape to the browser's
-/// `{kind:'activate-item', key}`.
+/// `{kind:'activate-item', key}` or `{kind:'edit-field', key, text}`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Intent {
     pub kind: String,
     pub key: i64,
+    /// The RAW-STRING payload of an edit-field intent (None for activate-item).
+    /// Never a parsed value: text is the only editable scalar in this slice, and
+    /// raw text has one host-neutral interpretation (the canonical text value).
+    pub text: Option<String>,
 }
 
 impl Intent {
@@ -35,18 +39,29 @@ impl Intent {
         Self {
             kind: "activate-item".to_string(),
             key,
+            text: None,
+        }
+    }
+
+    pub fn edit_field(key: i64, text: String) -> Self {
+        Self {
+            kind: "edit-field".to_string(),
+            key,
+            text: Some(text),
         }
     }
 }
 
-/// A realized tool pane: the root GTK widget plus the recorded intents and the
-/// action buttons (so a test can programmatically activate them).
+/// A realized tool pane: the root GTK widget plus the recorded intents, the
+/// action buttons, and the editable-field entries (so a test can drive them).
 pub struct GtkRealization {
     pub root: gtk4::Box,
-    /// Intents emitted by action activations, in order.
+    /// Intents emitted by action activations + edit commits, in order.
     pub intents: Rc<RefCell<Vec<Intent>>>,
     /// One button per `action(key)` node, in document order.
     buttons: Rc<RefCell<Vec<(i64, gtk4::Button)>>>,
+    /// One entry per editable `field(key)` node, in document order.
+    entries: Rc<RefCell<Vec<(i64, gtk4::Entry)>>>,
 }
 
 impl GtkRealization {
@@ -76,6 +91,28 @@ impl GtkRealization {
         collect_text(self.root.upcast_ref::<gtk4::Widget>(), &mut out);
         out
     }
+
+    /// Set the text of the editable field with the given descriptor-local key
+    /// and commit it (the native analogue of typing into a DOM <input> and
+    /// pressing Enter). Returns the intent it emitted, or None if no such
+    /// editable field exists. Commit is Enter/activate ONLY (no focus-leave in
+    /// this slice) — identical to the DOM.
+    pub fn edit_field(&self, key: i64, text: &str) -> Option<Intent> {
+        let entries = self.entries.borrow();
+        let (_, entry) = entries.iter().find(|(k, _)| *k == key)?;
+        entry.set_text(text);
+        entry.emit_activate();
+        self.intents.borrow().last().cloned()
+    }
+
+    /// The current text of each editable field, in document order (for tests).
+    pub fn editable_texts(&self) -> Vec<String> {
+        self.entries
+            .borrow()
+            .iter()
+            .map(|(_, e)| e.text().to_string())
+            .collect()
+    }
 }
 
 fn collect_text(widget: &gtk4::Widget, out: &mut Vec<String>) {
@@ -99,16 +136,18 @@ fn collect_text(widget: &gtk4::Widget, out: &mut Vec<String>) {
 pub fn realize(doc: &SemanticUi) -> GtkRealization {
     let intents = Rc::new(RefCell::new(Vec::new()));
     let buttons = Rc::new(RefCell::new(Vec::new()));
+    let entries = Rc::new(RefCell::new(Vec::new()));
     let root = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
     root.set_widget_name("lagrange-tool");
     if let Some(title) = group_title(&doc.root) {
         root.set_tooltip_text(Some(&title));
     }
-    render_children(&doc.root, &root, &intents, &buttons);
+    render_children(&doc.root, &root, &intents, &buttons, &entries);
     GtkRealization {
         root,
         intents,
         buttons,
+        entries,
     }
 }
 
@@ -124,10 +163,11 @@ fn render_children(
     container: &gtk4::Box,
     intents: &Rc<RefCell<Vec<Intent>>>,
     buttons: &Rc<RefCell<Vec<(i64, gtk4::Button)>>>,
+    entries: &Rc<RefCell<Vec<(i64, gtk4::Entry)>>>,
 ) {
     if let Node::Group { children, .. } = node {
         for child in children {
-            render_node(child, container, intents, buttons);
+            render_node(child, container, intents, buttons, entries);
         }
     }
 }
@@ -137,6 +177,7 @@ fn render_node(
     container: &gtk4::Box,
     intents: &Rc<RefCell<Vec<Intent>>>,
     buttons: &Rc<RefCell<Vec<(i64, gtk4::Button)>>>,
+    entries: &Rc<RefCell<Vec<(i64, gtk4::Entry)>>>,
 ) {
     match node {
         Node::Text { role, text } => {
@@ -149,15 +190,33 @@ fn render_node(
             }
             container.append(&label);
         }
-        Node::Field { label, text } => {
+        Node::Field { label, text, key, editable } => {
             let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
             row.set_widget_name("lagrange-tool-field");
-            let key = gtk4::Label::new(Some(label));
-            key.set_halign(gtk4::Align::Start);
-            let value = gtk4::Label::new(Some(text));
-            value.set_halign(gtk4::Align::Start);
-            row.append(&key);
-            row.append(&value);
+            let key_label = gtk4::Label::new(Some(label));
+            key_label.set_halign(gtk4::Align::Start);
+            row.append(&key_label);
+            if editable.as_deref() == Some("text") {
+                // Editable: a real GtkEntry committing on Enter/activate ONLY
+                // (no focus-leave in this slice), emitting a RAW-STRING intent
+                // with the descriptor-local field key — identical to the DOM.
+                let field_key = key.expect("an editable field always carries its key");
+                let entry = gtk4::Entry::new();
+                entry.set_text(text);
+                entry.set_widget_name("lagrange-tool-field-input");
+                let intents = Rc::clone(intents);
+                entry.connect_activate(move |e| {
+                    intents
+                        .borrow_mut()
+                        .push(Intent::edit_field(field_key, e.text().to_string()));
+                });
+                entries.borrow_mut().push((field_key, entry.clone()));
+                row.append(&entry);
+            } else {
+                let value = gtk4::Label::new(Some(text));
+                value.set_halign(gtk4::Align::Start);
+                row.append(&value);
+            }
             container.append(&row);
         }
         Node::Collection { items, .. } => {
@@ -180,7 +239,7 @@ fn render_node(
         Node::Group { children, .. } => {
             let nested = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
             for child in children {
-                render_node(child, &nested, intents, buttons);
+                render_node(child, &nested, intents, buttons, entries);
             }
             container.append(&nested);
         }

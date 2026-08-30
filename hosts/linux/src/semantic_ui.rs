@@ -42,6 +42,13 @@ pub enum Node {
     Field {
         label: String,
         text: String,
+        // Editing affordance: present ONLY together with `editable` on a
+        // writable field (both None => read-only display field). Mirrors the JS
+        // validator's key<->editable coupling.
+        #[serde(default)]
+        key: Option<i64>,
+        #[serde(default)]
+        editable: Option<String>,
     },
     Collection {
         #[serde(default)]
@@ -209,6 +216,29 @@ fn validate_node_value(node: &serde_json::Value, path: &str) -> Result<(), Strin
             }
             if !obj.get("text").is_some_and(|t| t.is_string()) {
                 return Err(format!("{path}.field.text must be a string"));
+            }
+            // key <-> editable coupling + constraints, mirroring the JS validator.
+            let has_key = obj.get("key").is_some();
+            let has_editable = obj.get("editable").is_some();
+            if has_key != has_editable {
+                return Err(format!(
+                    "{path}.field: key and editable must appear together (an editable field carries its descriptor-local key)"
+                ));
+            }
+            if has_editable {
+                if obj.get("editable").and_then(|e| e.as_str()) != Some("text") {
+                    return Err(format!(
+                        "{path}.field.editable must be 'text' (the only editable scalar in this slice)"
+                    ));
+                }
+                match obj.get("key").and_then(integral_number) {
+                    Some(_k) => {}
+                    _ => {
+                        return Err(format!(
+                            "{path}.field.key must be a non-negative integer (a descriptor-local field key)"
+                        ))
+                    }
+                }
             }
         }
         "collection" => {

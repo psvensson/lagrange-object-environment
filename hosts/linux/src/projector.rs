@@ -78,10 +78,27 @@ pub fn project(descriptor: &Value) -> Result<SemanticUi, String> {
         };
         children.push(json!({"kind": "text", "role": "reason", "text": reason}));
     } else {
-        // Fields (slot -> display text), in insertion order.
+        // Fields (slot -> display text), in insertion order. A slot in the
+        // host-neutral `writable` set (threaded as parameters.writable) is
+        // editable: it carries a descriptor-local key + editable:'text' —
+        // mirroring semanticUiForPresentation EXACTLY. Others are read-only.
+        let empty_writable: Vec<Value> = Vec::new();
+        let writable: Vec<&str> = params
+            .get("writable")
+            .and_then(|w| w.as_array())
+            .unwrap_or(&empty_writable)
+            .iter()
+            .filter_map(|s| s.as_str())
+            .collect();
+        let mut field_key: i64 = 0;
         if let Some(fields) = params.get("fields").and_then(|f| f.as_object()) {
             for (slot, val) in fields {
-                children.push(json!({"kind": "field", "label": slot, "text": value_text(val)}));
+                if writable.contains(&slot.as_str()) {
+                    children.push(json!({"kind": "field", "label": slot, "text": value_text(val), "key": field_key, "editable": "text"}));
+                    field_key += 1;
+                } else {
+                    children.push(json!({"kind": "field", "label": slot, "text": value_text(val)}));
+                }
             }
         }
         // References -> a collection of descriptor-local actions.

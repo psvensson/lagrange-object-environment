@@ -11,11 +11,22 @@
  * architectural vocabulary but is NOT yet produced (no existing tool needs it).
  *
  * A SemanticUi document is TRANSIENT realization data, never a durable model:
- * it carries display strings and DESCRIPTOR-LOCAL action keys ONLY — no refs,
+ * it carries display strings and DESCRIPTOR-LOCAL keys ONLY — no refs,
  * subjects, authority, callbacks, DOM/GTK objects, pixel geometry, or
- * executable Commands. The `action.key` preserves the PR #33 security property:
- * a host can say "the user activated item N" but can never invent a semantic
- * identity; the ENVIRONMENT resolves key -> current ref (EnvironmentShell).
+ * executable Commands. The `action.key` (and the editable `field.key`)
+ * preserves the PR #33 security property: a host can say "the user activated
+ * item N" / "the user edited field N" but can never invent a semantic identity;
+ * the ENVIRONMENT resolves key -> current ref/slot (EnvironmentShell).
+ *
+ * EDITING (minimal): a `field` may carry OPTIONAL {key, editable:'text'} — but
+ * ONLY together, and ONLY when the slot is in the host-neutral `writable` set
+ * (the single owner of which is the ImageClientAdapter's mutation field map,
+ * surfaced as adapter.writableSlots). A host edits such a field and commits
+ * (Enter/activate) a RAW-STRING intent {kind:'edit-field', key, text} — never a
+ * parsed value, because text is the only writable scalar in this slice and raw
+ * text has ONE host-neutral interpretation (the canonical text value). The
+ * integer/boolean textual grammar is a follow-up when a numeric/bool field is
+ * actually made editable. count/flag stay READ-ONLY (no key/editable).
  *
  * VALIDATION is owned HERE (one authoritative contract), not re-decided per
  * realizer. It LOUDLY rejects: unknown versions/node kinds, host-specific
@@ -94,6 +105,22 @@ function validateNode(node, path) {
     case 'field': {
       if (typeof node.label !== 'string') fail(`${path}.field.label must be a string`);
       if (typeof node.text !== 'string') fail(`${path}.field.text must be a string`);
+      // Editing affordance: key and editable appear ONLY together (an editable
+      // field needs its descriptor-local key; a key is meaningless without the
+      // editable kind). Both absent => a read-only display field.
+      const hasKey = node.key !== undefined;
+      const hasEditable = node.editable !== undefined;
+      if (hasKey !== hasEditable) {
+        fail(`${path}.field: key and editable must appear together (an editable field carries its descriptor-local key)`);
+      }
+      if (hasEditable) {
+        if (node.editable !== 'text') {
+          fail(`${path}.field.editable must be 'text' (the only editable scalar in this slice), got ${JSON.stringify(node.editable)}`);
+        }
+        if (!Number.isInteger(node.key) || node.key < 0) {
+          fail(`${path}.field.key must be a non-negative integer (a descriptor-local field key)`);
+        }
+      }
       break;
     }
     case 'collection': {
@@ -186,10 +213,20 @@ function semanticUiForPresentation(presentationDescriptor) {
     const reason = `${kind === 'unauthorized-reference' ? 'Not authorized' : 'Unavailable'}: ${objectId}${params.reason ? ` (${params.reason})` : ''}`;
     children.push({kind: 'text', role: 'reason', text: reason});
   } else {
-    // Fields (slot -> display text).
+    // Fields (slot -> display text). A slot in the host-neutral `writable` set
+    // (single owner: the ImageClientAdapter's mutation field map, threaded here
+    // as parameters.writable by the EnvironmentShell) is editable: it carries a
+    // descriptor-local key + editable:'text'. All other slots are read-only
+    // display fields (refs, the read-only count/flag scalars).
     const fields = params.fields ?? {};
+    const writable = Array.isArray(params.writable) ? params.writable : [];
+    let fieldKey = 0;
     for (const slot of Object.keys(fields)) {
-      children.push({kind: 'field', label: slot, text: valueText(fields[slot])});
+      if (writable.includes(slot)) {
+        children.push({kind: 'field', label: slot, text: valueText(fields[slot]), key: fieldKey++, editable: 'text'});
+      } else {
+        children.push({kind: 'field', label: slot, text: valueText(fields[slot])});
+      }
     }
     // References -> a collection of descriptor-local actions.
     const references = Array.isArray(params.references) ? params.references : [];
