@@ -362,21 +362,40 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
     }
   }
 
-  // Wire the shell to the renderer's intent seam: on a DOM {kind:'activate-item',
-  // key} from the NAVIGATOR view's surface, resolve the key and select. Other
-  // intents (e.g. a Component pointer 'activate') are ignored here (CommandRouter
-  // owns those). `navigatorSurfaceHandle` is the navigator view's surface handle;
-  // the shell resolves it via the Compositor's view map. Returns an unsubscribe.
-  function bindDomIntents({adapter, navigatorSurfaceHandle, authority = null, readBlockId} = {}) {
+  // Wire the shell to a host's intent seam (HOST-NEUTRAL: the plain-data
+  // intents {kind:'activate-item'|'edit-field', key, ...} are not DOM-specific;
+  // a browser DOM adapter, the Linux GTK bridge, or any host supplies an
+  // `onIntent` seam and the surface handles). Routes:
+  //   {kind:'activate-item'} from the NAVIGATOR surface -> handleActivateItem
+  //     (selection; the shell's navigator row),
+  //   {kind:'edit-field'} from the INSPECTOR surface -> handleEditField
+  //     (the shell's inspector edit row -> CommandRouter).
+  // Other intents (e.g. a Component pointer 'activate') are ignored here
+  // (CommandRouter owns those). `commandRouter` + `inspectorSurfaceHandle` are
+  // required only when edit-field routing is wanted. Returns an unsubscribe.
+  function bindIntents({adapter, navigatorSurfaceHandle = null, inspectorSurfaceHandle = null, commandRouter = null, commandId = 'set-title', authority = null, readBlockId, onEdited = null, onEditError = null} = {}) {
     if (!adapter || typeof adapter.onIntent !== 'function') {
-      throw new TypeError('bindDomIntents requires an adapter with onIntent');
+      throw new TypeError('bindIntents requires an adapter with onIntent');
     }
     return adapter.onIntent((intent, surfaceHandle) => {
-      if (intent?.kind !== 'activate-item') return;
-      if (surfaceHandle !== navigatorSurfaceHandle) return;
-      // Fire-and-forget; errors route nowhere (the handler is best-effort UI).
-      handleActivateItem({key: intent.key, authority, readBlockId}).catch(() => {});
+      if (intent?.kind === 'activate-item' && surfaceHandle === navigatorSurfaceHandle) {
+        // Fire-and-forget; errors route nowhere (the handler is best-effort UI).
+        handleActivateItem({key: intent.key, authority, readBlockId}).catch(() => {});
+      } else if (intent?.kind === 'edit-field' && surfaceHandle === inspectorSurfaceHandle && commandRouter) {
+        handleEditField({
+          key: intent.key, text: intent.text, commandId, commandRouter,
+          inspectorSurfaceHandle, authority, readBlockId, onEdited, onEditError,
+        }).catch((error) => {
+          if (onEditError) onEditError(error, {reread: () => inspectSelected({authority, readBlockId})});
+        });
+      }
     });
+  }
+
+  // Back-compat alias for the browser DOM host (navigator selection only). The
+  // intents were always host-neutral; this name predates the generalization.
+  function bindDomIntents({adapter, navigatorSurfaceHandle, authority = null, readBlockId} = {}) {
+    return bindIntents({adapter, navigatorSurfaceHandle, authority, readBlockId});
   }
 
   return Object.freeze({
@@ -386,6 +405,7 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
     followSelected,
     handleActivateItem,
     handleEditField,
+    bindIntents,
     bindDomIntents,
     navigatorViewId: NAVIGATOR_VIEW_ID,
     inspectorViewId: INSPECTOR_VIEW_ID,
