@@ -375,8 +375,17 @@ function createCompositor({rendererAdapter} = {}) {
     return null;
   }
 
+  // The inverse read-only lookup: a live viewId -> its opaque surface handle (or
+  // null). The Compositor owns the view->handle map; this lets a host wire a
+  // view's intent stream to its handle without ever persisting the handle
+  // (durableIntent stays handle-free). The handle remains opaque + transient.
+  function surfaceHandleForView(viewId) {
+    const view = views.get(viewId);
+    return view && view.status === 'live' ? view.surfaceHandle : null;
+  }
+
   return Object.freeze({
-    openView, resizeView, presentOn, closeView, destroy, durableIntent, viewStatus, viewForSurfaceHandle,
+    openView, resizeView, presentOn, closeView, destroy, durableIntent, viewStatus, viewForSurfaceHandle, surfaceHandleForView,
     focusView, focusedView, clearFocus, interactWithSurface,
   });
 }

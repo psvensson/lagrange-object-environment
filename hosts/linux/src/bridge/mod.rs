@@ -20,6 +20,12 @@
 //!   JS -> Rust: {"id": N, "op": "<one of the six>", "args": [data]}
 //!   Rust -> JS: {"id": N, "ok": result} | {"id": N, "err": "..."}
 //!   Rust -> JS: {"event": "intent", "surfaceHandle": h, "intent": {...}}
+//!   Rust -> JS (host request): {"cmd": "...", "reqId": M, "args": data}
+//!   JS -> Rust (host response): {"reqId": M, "ok": result} | {"reqId": M, "err": "..."}
+//! The host-request leg is how the GTK-side test drives/asserts against the
+//! worker's JS-core state (open/follow/title/tokenState/externalMutate/...). It
+//! carries only PLAIN DATA (booleans about token state, never a token; object
+//! ids; field values) — the worker computes it, never the bridge.
 //!
 //! THREAD MODEL (the F1 design): the SIX OPS RUN ON THE GTK THREAD, NEVER on a
 //! tokio worker or the reader thread. A bridge READER thread does blocking
@@ -61,6 +67,9 @@ pub struct BridgeHost {
     // interleave (newline-JSON framing depends on it).
     child_stdin: Arc<Mutex<ChildStdin>>,
     op_rx: Receiver<OpRequest>,
+    resp_rx: Receiver<Value>,
+    event_rx: Receiver<Value>,
+    next_req_id: u64,
 }
 
 impl BridgeHost {
@@ -78,6 +87,8 @@ impl BridgeHost {
         let child_stdout = child.stdout.take().ok_or("bridge: no child stdout")?;
 
         let (op_tx, op_rx) = channel::<OpRequest>();
+        let (resp_tx, resp_rx) = channel::<Value>(); // worker {reqId,ok|err} -> host
+        let (event_tx, event_rx) = channel::<Value>(); // worker {event:...} -> host
         let child_stdin = Arc::new(Mutex::new(child_stdin));
         let ack_stdin = Arc::clone(&child_stdin);
 
@@ -127,6 +138,12 @@ impl BridgeHost {
                                     }
                                 }
                             }
+                        } else if msg.get("reqId").is_some() {
+                            // A response to a host request: {reqId, ok|err}.
+                            let _ = resp_tx.send(msg);
+                        } else if msg.get("event").is_some() {
+                            // A worker event (e.g. {event:'ready'}).
+                            let _ = event_tx.send(msg);
                         }
                     }
                     Err(_) => break,
@@ -134,7 +151,7 @@ impl BridgeHost {
             }
         });
 
-        Ok(Self { child, child_stdin, op_rx })
+        Ok(Self { child, child_stdin, op_rx, resp_rx, event_rx, next_req_id: 0 })
     }
 
     /// Execute all pending ops on the GTK thread against the adapter. Called by
@@ -194,6 +211,52 @@ impl BridgeHost {
             .and_then(|_| stdin.write_all(b"\n"))
             .and_then(|_| stdin.flush())
             .map_err(|e| format!("bridge: write to worker: {e}"))
+    }
+
+    /// Issue a host request to the worker and wait (via pump cycles driven by
+    /// the caller) for the matching response. The caller drives the GTK pump
+    /// between polls; this just sends + registers the reqId. Pair with
+    /// [`BridgeHost::take_response`].
+    pub fn call(&mut self, cmd: &str, args: Value) -> Result<u64, String> {
+        let req_id = self.next_req_id;
+        self.next_req_id += 1;
+        let msg = json!({"cmd": cmd, "reqId": req_id, "args": args});
+        self.send(&msg)?;
+        Ok(req_id)
+    }
+
+    /// Take a worker response for `req_id` if one has arrived (non-blocking).
+    /// Returns Some(result-or-err) once. Single-in-flight only (the acceptance
+    /// flow issues one request at a time): any response for a DIFFERENT reqId is
+    /// a protocol error and is surfaced as such rather than silently dropped.
+    pub fn take_response(&self, req_id: u64) -> Option<Result<Value, String>> {
+        match self.resp_rx.try_recv() {
+            Err(_) => None, // empty (or disconnected — treated as no-response-yet here)
+            Ok(msg) => {
+                let id = msg.get("reqId").and_then(|r| r.as_u64());
+                if id != Some(req_id) {
+                    return Some(Err(format!(
+                        "bridge: response for reqId {id:?} while awaiting {req_id} (the bridge is single-in-flight)"
+                    )));
+                }
+                if let Some(err) = msg.get("err") {
+                    Some(Err(err.as_str().unwrap_or("worker error").to_string()))
+                } else {
+                    Some(Ok(msg.get("ok").cloned().unwrap_or(Value::Null)))
+                }
+            }
+        }
+    }
+
+    /// Wait for the worker's {event:'ready'} (non-blocking poll + pump by caller).
+    pub fn take_event(&self, name: &str) -> bool {
+        let mut seen = false;
+        while let Ok(msg) = self.event_rx.try_recv() {
+            if msg.get("event").and_then(|e| e.as_str()) == Some(name) {
+                seen = true;
+            }
+        }
+        seen
     }
 
     /// Relay a GTK intent to the JS core as an event. Called by the host test

@@ -249,6 +249,16 @@ impl LinuxRendererAdapter {
         })
     }
 
+    /// The editable field values of a GTK surface, keyed by descriptor-local
+    /// field key (host-side; NOT a contract op). Empty for a GLB handle.
+    pub fn gtk_editable_texts(&self, handle: &str) -> Result<Vec<(i64, String)>, String> {
+        let entry = self.require_live(handle, "gtk_editable_texts")?;
+        Ok(match &entry.realization {
+            Some(Realization::Gtk { realization, .. }) => realization.editable_texts_keyed(),
+            _ => Vec::new(),
+        })
+    }
+
     /// Host-side frame pump (NOT a contract op): drive a `glb` surface's live
     /// Component through `n` animation frames so it presents, via the runtime
     /// bridge. The Component's async frame handler only advances while the

@@ -92,7 +92,20 @@ impl GtkRealization {
     pub fn visible_text(&self) -> Vec<String> {
         let mut out = Vec::new();
         collect_text(self.root.upcast_ref::<gtk4::Widget>(), &mut out);
+        // Editable field values are visible too (a GtkEntry's current text), but
+        // collect_text only walks labels/buttons — include them.
+        out.extend(self.editable_texts());
         out
+    }
+
+    /// The editable field values keyed by their descriptor-local key (document
+    /// order), for tests that need to distinguish a value by its field.
+    pub fn editable_texts_keyed(&self) -> Vec<(i64, String)> {
+        self.entries
+            .borrow()
+            .iter()
+            .map(|(k, e)| (*k, e.text().to_string()))
+            .collect()
     }
 
     /// Set the text of the editable field with the given descriptor-local key
