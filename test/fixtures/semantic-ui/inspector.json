@@ -13,7 +13,9 @@
       {
         "kind": "field",
         "label": "slot-title",
-        "text": "B"
+        "text": "B",
+        "key": 0,
+        "editable": "text"
       },
       {
         "kind": "field",

@@ -18,7 +18,15 @@
  * DESCRIPTOR-LOCAL ITEM KEY — {kind:'activate-item', key} — NEVER a semantic
  * ref/subject. The ENVIRONMENT resolves key -> ref (EnvironmentShell).
  *
- * Minimal by design: NO widgets, Scroll, editing, or world policy.
+ * EDITING (minimal): an editable `field` (key + editable:'text') renders a
+ * native <input>; committing (Enter/activate ONLY — no blur commit in this
+ * slice) emits a RAW-STRING intent {kind:'edit-field', key, text} carrying the
+ * descriptor-local field key and the unparsed text. The ENVIRONMENT resolves
+ * key -> slot and owns all validation/authority (EnvironmentShell +
+ * CommandRouter). This realizer never parses, never dispatches, never holds a
+ * ref/subject.
+ *
+ * Minimal by design: NO widgets, Scroll, or world policy.
  */
 
 import {semanticUiForPresentation} from '../semantic-ui.js';
@@ -31,7 +39,7 @@ function isToolKind(kind) {
 
 // Render a SemanticUi NODE to a DOM element/fragment. Pure description ->
 // element; no presentation-parameter interpretation here.
-function renderNode(node, listen, onAction) {
+function renderNode(node, listen, onAction, onEdit) {
   switch (node.kind) {
     case 'text': {
       const el = document.createElement(node.role === 'heading' ? 'h3' : 'p');
@@ -44,7 +52,22 @@ function renderNode(node, listen, onAction) {
       const dt = document.createElement('dt');
       dt.textContent = node.label;
       const dd = document.createElement('dd');
-      dd.textContent = node.text;
+      if (node.editable === 'text') {
+        // Editable: a native <input> committing on Enter/activate ONLY (no blur
+        // commit in this slice), emitting a RAW-STRING intent with the
+        // descriptor-local field key. Never a parsed value.
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'lagrange-tool-field-input';
+        input.value = node.text;
+        input.dataset.fieldKey = String(node.key); // descriptor-local key
+        listen(input, 'keydown', (event) => {
+          if (event.key === 'Enter') onEdit(node.key, input.value);
+        });
+        dd.appendChild(input);
+      } else {
+        dd.textContent = node.text;
+      }
       fragment.append(dt, dd);
       return fragment;
     }
@@ -72,7 +95,7 @@ function renderNode(node, listen, onAction) {
 // descriptor-projection so a host/test can drive the SAME rendering path from
 // a checked-in fixture — the cross-host identity mechanism: the browser
 // consumes exactly the bytes the GTK realizer consumes.
-function renderSemanticUiToDom({doc, kind, surfaceHandle, listen, onAction}) {
+function renderSemanticUiToDom({doc, kind, surfaceHandle, listen, onAction, onEdit}) {
   const root = document.createElement('section');
   root.className = `lagrange-tool lagrange-tool-${kind}`;
   root.dataset.surfaceHandle = surfaceHandle;
@@ -93,10 +116,10 @@ function renderSemanticUiToDom({doc, kind, surfaceHandle, listen, onAction}) {
   for (const child of doc.root.children) {
     if (child.kind === 'field') {
       if (!fieldsList) fieldsList = document.createDocumentFragment();
-      fieldsList.appendChild(renderNode(child, listen, onAction));
+      fieldsList.appendChild(renderNode(child, listen, onAction, onEdit));
     } else {
       flushFields();
-      root.appendChild(renderNode(child, listen, onAction));
+      root.appendChild(renderNode(child, listen, onAction, onEdit));
     }
   }
   flushFields();
@@ -123,8 +146,14 @@ function createDomRealizer({mountPoint, emitIntent}) {
     const onAction = (key) => {
       emitIntent(surfaceHandle, Object.freeze({kind: 'activate-item', key}));
     };
+    // RAW-STRING edit intent: {kind:'edit-field', key, text}. The text is the
+    // unparsed input value (text is the only editable scalar; parsing/validation
+    // is owned by the ENVIRONMENT, never here).
+    const onEdit = (key, text) => {
+      emitIntent(surfaceHandle, Object.freeze({kind: 'edit-field', key, text}));
+    };
 
-    const root = renderSemanticUiToDom({doc, kind, surfaceHandle, listen, onAction});
+    const root = renderSemanticUiToDom({doc, kind, surfaceHandle, listen, onAction, onEdit});
 
     let mounted = false;
     return {

@@ -58,10 +58,13 @@ test('navigate a readable object yields an inspector presentation with the recor
       behavior: ref('behavior-1'),
       slots: {'slot-title': {kind: 'text', value: 'A'}, 'slot-target': ref('obj-b')},
       indexed: [pinned('obj-c', '3')],
+      // The authorized read lane returns a versionToken alongside slots/indexed;
+      // the navigator surfaces it as a SIBLING (transient concurrency state).
+      versionToken: 'object-version/v0:token-a',
     },
   };
   const {navigator} = makeNavigator({records});
-  const {presentations, commands, failures} = await navigator.navigate(ref('obj-a'));
+  const {presentations, commands, failures, versionToken} = await navigator.navigate(ref('obj-a'));
 
   assert.equal(presentations.length, 1);
   const insp = presentations[0];
@@ -84,6 +87,30 @@ test('navigate a readable object yields an inspector presentation with the recor
   assert.equal(pinnedC.revision, '3');
   assert.deepEqual(commands, []);
   assert.deepEqual(failures, []);
+  // S2: versionToken is surfaced as a SIBLING field (transient concurrency
+  // state) and NEVER leaks into the Presentation/context — so it cannot reach
+  // the SemanticUi description, the renderer presentationDescriptor, the
+  // Compositor durableIntent, or Perspective persistence.
+  assert.equal(versionToken, 'object-version/v0:token-a');
+  assert.ok(!('versionToken' in insp.context), 'the token is never Presentation context');
+  assert.ok(!('versionToken' in insp), 'the token is never on the Presentation itself');
+});
+
+test('unavailable and unauthorized navigate results carry NO versionToken', async () => {
+  // unavailable: authorized-but-missing read -> unavailable-ref, no token.
+  const missing = makeNavigator({records: {}});
+  const unavailableResult = await missing.navigator.navigate(ref('ghost'));
+  assert.equal(unavailableResult.presentations[0].kind, 'unavailable-reference');
+  assert.ok(!('versionToken' in unavailableResult), 'an unavailable result carries no token');
+
+  // unauthorized: denied read -> unauthorized-ref, no token.
+  const denied = makeNavigator({
+    records: {'obj-a': {slots: {}}},
+    authorityFor: () => false,
+  });
+  const unauthorizedResult = await denied.navigator.navigate(ref('obj-a'));
+  assert.equal(unauthorizedResult.presentations[0].kind, 'unauthorized-reference');
+  assert.ok(!('versionToken' in unauthorizedResult), 'an unauthorized result carries no token');
 });
 
 test('following a ref navigates to the referenced object (object -> inspector -> ref -> inspector)', async () => {

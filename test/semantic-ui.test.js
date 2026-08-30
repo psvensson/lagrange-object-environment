@@ -21,7 +21,7 @@ const ref = (objectId) => ({kind: 'ref', imageId: 'img', objectId});
 // red, and vice versa).
 const CASES = {
   navigator: {kind: 'navigator', subject: ref('obj-root'), parameters: {fields: {'slot-title': {kind: 'text', value: 'Root'}}, references: [ref('obj-b'), ref('obj-c')]}},
-  inspector: {kind: 'inspector', subject: ref('obj-b'), parameters: {fields: {'slot-title': {kind: 'text', value: 'B'}, 'slot-count': {kind: 'int', value: 17}}, references: [ref('obj-c')]}},
+  inspector: {kind: 'inspector', subject: ref('obj-b'), parameters: {fields: {'slot-title': {kind: 'text', value: 'B'}, 'slot-count': {kind: 'int', value: 17}}, writable: ['slot-title'], references: [ref('obj-c')]}},
   unavailable: {kind: 'unavailable-reference', subject: ref('obj-gone'), parameters: {reason: 'not found'}},
   unauthorized: {kind: 'unauthorized-reference', subject: ref('obj-secret'), parameters: {reason: 'denied'}},
 };

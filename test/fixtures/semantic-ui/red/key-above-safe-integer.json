@@ -1,0 +1,21 @@
+{
+  "kind": "semantic-ui",
+  "version": 1,
+  "root": {
+    "kind": "group",
+    "title": "x",
+    "children": [
+      {
+        "kind": "collection",
+        "label": "References",
+        "items": [
+          {
+            "kind": "action",
+            "key": 9007199254740992,
+            "label": "obj-b"
+          }
+        ]
+      }
+    ]
+  }
+}

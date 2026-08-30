@@ -121,14 +121,38 @@ fn fixtures_drive_real_gtk_controls_and_identical_intents() {
     // A non-existent key emits nothing (stale key, like the DOM stale-key path).
     assert!(pane.activate(99).is_none());
 
-    // --- inspector: fields normalized (int -> "17"), one reference.
+    // --- inspector: fields normalized (int -> "17"), one reference. The
+    // writable slot-title is an EDITABLE GtkEntry (the SAME fixture bytes the
+    // DOM consumes); the read-only slot-count stays a label.
     let insp = realize(&parse_semantic_ui(&read_fixture("inspector.json")).expect("inspector validates"));
     let insp_text = insp.visible_text();
     assert!(insp_text.iter().any(|t| t == "Inspector: obj-b"), "{insp_text:?}");
-    assert!(insp_text.iter().any(|t| t == "B"), "{insp_text:?}");
     assert!(insp_text.iter().any(|t| t == "17"), "int field normalized to display text: {insp_text:?}");
     assert_eq!(insp.action_labels(), vec!["obj-c".to_string()]);
     assert_eq!(insp.activate(0), Some(Intent::activate_item(0)));
+    // EDIT: exactly one editable field (slot-title, key 0); slot-count is
+    // read-only (no entry). Committing "B2" via Enter/activate emits the
+    // RAW-STRING intent {kind:'edit-field', key:0, text:'B2'} — identical to the
+    // DOM's intent. A read-only/absent key emits nothing (stale key).
+    assert_eq!(insp.editable_texts(), vec!["B".to_string()], "only the writable field is editable");
+    assert_eq!(
+        insp.edit_field(0, "B2"),
+        Some(Intent::edit_field(0, "B2".to_string())),
+        "Enter/activate commits a raw-string edit intent with the descriptor-local key"
+    );
+    assert!(insp.edit_field(1, "x").is_none(), "no editable field at key 1 (slot-count is read-only)");
+    // CROSS-HOST INTENT BYTES (F2): the GTK edit intent SERIALIZES to the exact
+    // same JSON the browser DOM emits — asserted against the checked-in
+    // canonical intent fixture, not a parallel literal. This pins the intent
+    // shape/kind-string/key across both hosts from one source of truth.
+    let intent = insp.intents.borrow().last().cloned().expect("an edit intent was recorded");
+    let intent_json = serde_json::to_value(&intent).expect("the intent serializes");
+    let canonical: serde_json::Value =
+        serde_json::from_str(&read_fixture("edit-field-intent.json")).expect("the canonical intent fixture parses");
+    assert_eq!(
+        intent_json, canonical,
+        "the GTK edit-field intent serializes to the SAME bytes the DOM emits (edit-field-intent.json)"
+    );
 
     // --- unavailable + unauthorized: reason lines, no refs/actions.
     let un = realize(&parse_semantic_ui(&read_fixture("unavailable.json")).unwrap());

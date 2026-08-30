@@ -1,0 +1,16 @@
+{
+  "kind": "semantic-ui",
+  "version": 1,
+  "root": {
+    "kind": "group",
+    "title": "Inspector: obj-b",
+    "children": [
+      {
+        "kind": "field",
+        "label": "slot-title",
+        "text": "B",
+        "key": 0
+      }
+    ]
+  }
+}

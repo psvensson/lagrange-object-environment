@@ -10,6 +10,8 @@ import {createSelectionModel} from '../src/selection-model.js';
 import {createCompositor} from '../src/compositor.js';
 import {createFakeRendererAdapter} from '../src/fake-renderer-adapter.js';
 import {createObjectNavigator} from '../src/object-navigator.js';
+import {createCommandRouter} from '../src/command-router.js';
+import {Command} from '../src/model.js';
 import {createPresentationRegistry} from '../src/presentation-registry.js';
 import {createCommandRegistry} from '../src/command-registry.js';
 import {
@@ -153,6 +155,205 @@ test('EnvironmentShell end-to-end: select ref -> inspector; external mutation ->
   assert.equal(attaches[attaches.length - 1].detail.presentationDescriptor.parameters.fields['probe-title'].value, 'B-EXTERNAL-EDIT');
 
   follow.stop();
+  await compositor.destroy();
+});
+
+// S4a: the edit-field path against a REAL image — the shell resolves key->slot
+// and attaches the transient token, then routes through the REAL CommandRouter ->
+// CommandRegistry -> CommandDispatcher -> ImageClientAdapter mutation lane. The
+// happy path mutates; a STALE token conflicts. The six-op contract is untouched.
+test('S4a: edit-field routes through CommandRouter to a REAL mutation; a stale transient token conflicts', {skip: !available && 'lagrange-images sibling runtime not available'}, async () => {
+  const runtime = await imagesApi.createRuntime({backend: {mode: 'mock'}});
+  await runtime.images.createImage({id: IMAGE});
+  await imagesApi.installSmalltalkKernel({images: runtime.images, imageId: IMAGE});
+  const adapter = createImageClientAdapter({
+    images: runtime.images,
+    invocations: runtime.invocations,
+    executor: runtime.executor,
+    defineClass: imagesApi.defineClass,
+    installCallableInterfaceV2: imagesApi.installCallableInterfaceV2,
+    installImageCreationBinding: imagesApi.installImageCreationBinding,
+    installImageMutationBinding: imagesApi.installImageMutationBinding,
+    installImageObjectReadBinding: imagesApi.installImageObjectReadBinding,
+    installImageObservationBinding: imagesApi.installImageObservationBinding,
+    findSmalltalkKernel: imagesApi.findSmalltalkKernel,
+    objectRef: imagesApi.objectRef,
+    objectResource: imagesApi.objectResource,
+    parseObjectResource: imagesApi.parseObjectResource,
+    objectVersionToken: imagesApi.objectVersionToken,
+    textValue: imagesApi.textValue,
+    packCompositeValue: imagesApi.packCompositeValue,
+    unpackCompositeValue: imagesApi.unpackCompositeValue,
+    normalizeTypeDeclarations: imagesApi.normalizeTypeDeclarations,
+  });
+  await adapter.ensureSchema(IMAGE, IDS);
+
+  const presentationRegistry = createPresentationRegistry();
+  presentationRegistry.register(createObjectInspectorProvider());
+  presentationRegistry.register(createUnavailableRefProvider());
+  presentationRegistry.register(createUnauthorizedRefProvider());
+  const commandRegistry = createCommandRegistry();
+  // The REAL registered edit Command (NOT built by the shell): it owns the
+  // canonical text mutation and forwards the opaque versionToken the shell
+  // attached to the dispatch context.
+  commandRegistry.register(new Command({
+    id: 'set-title',
+    title: 'Set title',
+    appliesTo: (subject) => Boolean(subject && subject.objectId),
+    invoke: async (subject, {authority, adapter: a, text, versionToken}) => a.mutateObject({
+      imageId: subject.imageId, objectId: subject.objectId,
+      value: {title: text}, authority, blockId: IDS.mutationBlockId, versionToken,
+    }),
+  }));
+  const navigator = createObjectNavigator({
+    adapter, presentationRegistry, commandRegistry, referencesOfValue: imagesApi.referencesOfValue,
+  });
+  const selectionModel = createSelectionModel();
+  const rendererAdapter = createFakeRendererAdapter();
+  const compositor = createCompositor({rendererAdapter});
+  // The shell gets the writable-slot set from the adapter (the single owner).
+  const shell = createEnvironmentShell({navigator, selectionModel, compositor, writableSlots: adapter.writableSlots});
+
+  const classId = classIdFor(IDS.className);
+  const ref = (objectId) => ({kind: 'ref', imageId: IMAGE, objectId});
+  const readAuthority = (objectId) => runtime.authority.issue({
+    principal: 'alice', grants: [{operation: 'object/read', resource: imagesApi.objectResource(IMAGE, objectId)}],
+  });
+  const writeAuthority = (objectId) => runtime.authority.issue({
+    principal: 'alice', grants: [{operation: 'object/write', resource: imagesApi.objectResource(IMAGE, objectId)}],
+  });
+  const createAuthority = (subjectTarget) => runtime.authority.issue({
+    principal: 'alice',
+    grants: [
+      {operation: 'object/create', resource: imagesApi.objectResource(IMAGE, classId)},
+      {operation: 'object/edge-write', resource: imagesApi.objectResource(IMAGE, subjectTarget)},
+    ],
+  });
+  // Root A references B (the acceptance flow's "browse root -> activate
+  // reference"); B is the object we inspect and edit.
+  const created = await adapter.createObject({
+    imageId: IMAGE, classId, title: 'original', subject: ref('smalltalk/nil'), authority: createAuthority('smalltalk/nil'), blockId: IDS.blockId,
+  });
+  const root = await adapter.createObject({
+    imageId: IMAGE, classId, title: 'root', subject: ref(created.objectId), authority: createAuthority(created.objectId), blockId: IDS.blockId,
+  });
+
+  // The REAL CommandRouter: subject from the Compositor view, authority fresh
+  // per dispatch, dispatch through the adapter's authorized seam.
+  const commandRouter = createCommandRouter({
+    compositor,
+    commandRegistry,
+    dispatch: (command, subject, opts) => adapter.dispatch(command, subject, opts),
+    authorityProvider: async ({subject}) => writeAuthority(subject.objectId),
+  });
+
+  // Browse the root, then ACTIVATE the reference to B (selection -> inspector),
+  // the acceptance flow's "activate reference -> inspector follows selection".
+  await shell.openWorkspace(ref(root.objectId), {authority: readAuthority(root.objectId), readBlockId: IDS.readBlockId});
+  await shell.selectObject(ref(created.objectId), {authority: readAuthority(created.objectId), readBlockId: IDS.readBlockId});
+  // The inspector pane is the LAST attachPresentation. Its surface handle is
+  // what CommandRouter resolves the subject from.
+  const attaches = rendererAdapter.calls().filter((c) => c.method === 'attachPresentation');
+  const inspHandle = attaches[attaches.length - 1]?.detail?.surfaceHandle;
+
+  const readTitle = async () => (await adapter.readObject({
+    imageId: IMAGE, objectId: created.objectId, authority: readAuthority(created.objectId), blockId: IDS.readBlockId,
+  }))?.slots?.['probe-title']?.value;
+
+  // --- HAPPY PATH: edit field key 0 (probe-title) -> real mutation -----------
+  const happy = await shell.handleEditField({
+    key: 0, text: 'edited-via-shell', commandId: 'set-title',
+    commandRouter, inspectorSurfaceHandle: inspHandle,
+    authority: readAuthority(created.objectId), readBlockId: IDS.readBlockId,
+  });
+  assert.ok(happy, 'the edit dispatched through CommandRouter');
+  assert.equal(await readTitle(), 'edited-via-shell', 'the image reflects the edit (real authorized mutation)');
+  assert.equal(shell._inspectorToken().token, created.versionToken, 'the displayed token is still the pre-edit one (updated only on reread)');
+
+  // --- STALE TOKEN: an external write advances the version; the shell's held
+  // token is now stale; replaying the edit surfaces a conflict. -------------
+  await adapter.mutateObject({
+    imageId: IMAGE, objectId: created.objectId, value: {title: 'external-advance'},
+    authority: writeAuthority(created.objectId), blockId: IDS.mutationBlockId,
+  });
+  let conflict = null;
+  let conflictReread = null;
+  await shell.handleEditField({
+    key: 0, text: 'stale-edit', commandId: 'set-title',
+    commandRouter, inspectorSurfaceHandle: inspHandle,
+    authority: readAuthority(created.objectId), readBlockId: IDS.readBlockId,
+    onEditError: async (error, {reread}) => {
+      conflict = error;
+      // NO dead-end: recover via a fresh authorized reread (updates the transient
+      // token + shows the current value), so the user can retry.
+      conflictReread = await reread();
+    },
+  });
+  assert.ok(conflict, 'a stale token surfaced an error');
+  assert.equal(conflict.name, 'CommandConflictError', 'a stale transient token -> CommandConflictError (optimistic concurrency)');
+  assert.equal(await readTitle(), 'external-advance', 'the stale edit did NOT overwrite the external write');
+  // The recovery reread refreshed the inspector to the image's CURRENT value and
+  // updated the transient token (no longer the stale one).
+  assert.equal(conflictReread.parameters.fields['probe-title'].value, 'external-advance',
+    'the conflict recovery reread shows the current image value (not the stale edit, not a dead-end)');
+  const tokenAfterConflict = shell._inspectorToken().token;
+  assert.ok(tokenAfterConflict && tokenAfterConflict !== created.versionToken,
+    'the transient token was refreshed by the recovery reread (not the stale token)');
+
+  // The user can now retry the edit successfully with the fresh token.
+  const retry = await shell.handleEditField({
+    key: 0, text: 'retry-after-conflict', commandId: 'set-title',
+    commandRouter, inspectorSurfaceHandle: inspHandle,
+    authority: readAuthority(created.objectId), readBlockId: IDS.readBlockId,
+  });
+  assert.ok(retry, 'the retry after conflict-recovery dispatched');
+  assert.equal(await readTitle(), 'retry-after-conflict', 'the retry succeeded with the refreshed token (the user could continue)');
+
+  // --- DENIED WRITE: distinct from an unauthorized READ; no mutation; no dead-end.
+  const deniedRouter = createCommandRouter({
+    compositor, commandRegistry,
+    dispatch: (command, subject, opts) => adapter.dispatch(command, subject, opts),
+    authorityProvider: async () => runtime.authority.issue({principal: 'mallory', grants: []}), // NO write grant
+  });
+  let denied = null;
+  let deniedReread = null;
+  await shell.handleEditField({
+    key: 0, text: 'denied-edit', commandId: 'set-title',
+    commandRouter: deniedRouter, inspectorSurfaceHandle: inspHandle,
+    authority: readAuthority(created.objectId), readBlockId: IDS.readBlockId,
+    onEditError: async (error, {reread}) => {
+      denied = error;
+      deniedReread = await reread();
+    },
+  });
+  assert.ok(denied, 'a denied write surfaced an error');
+  assert.equal(denied.name, 'CommandAuthorizationError',
+    'a denied WRITE is a CommandAuthorizationError (DISTINCT from an unauthorized-READ presentation)');
+  assert.equal(await readTitle(), 'retry-after-conflict', 'a denied write mutated nothing');
+  assert.equal(deniedReread.parameters.fields['probe-title'].value, 'retry-after-conflict',
+    'the denied-write recovery reread keeps the current value visible (no dead-end)');
+  assert.equal(deniedReread.kind, 'inspector',
+    'the denied WRITE leaves an INSPECTOR presentation (the read still succeeds), NOT an unauthorized-reference — a denied write is distinct from a denied read');
+
+  // --- C1 FALSIFIER: the versionToken NEVER appears in any serialized sink ---
+  // After the full flow (open -> select -> edit -> conflict -> retry -> denied),
+  // walk the Compositor's durableIntent and every presentationDescriptor's
+  // parameters and assert the token string is ABSENT — so it cannot reach the
+  // SemanticUi description, a Perspective persistence, or the renderer boundary.
+  const tokenStrings = [created.versionToken, shell._inspectorToken().token].filter(Boolean);
+  assert.ok(tokenStrings.length > 0, 'the test holds at least one real token to check for leaks');
+  const serializedSinks = [
+    JSON.stringify(compositor.durableIntent()),
+    ...compositor.durableIntent().map((v) => JSON.stringify(v.presentationDescriptor?.parameters ?? {})),
+    JSON.stringify(conflictReread.parameters),
+    JSON.stringify(deniedReread.parameters),
+  ];
+  for (const sink of serializedSinks) {
+    for (const token of tokenStrings) {
+      assert.ok(!sink.includes(token), `the versionToken must NEVER appear in a serialized sink (durableIntent / presentationDescriptor); found in: ${sink.slice(0, 80)}...`);
+    }
+  }
+
   await compositor.destroy();
 });
 

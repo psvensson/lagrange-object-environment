@@ -84,20 +84,23 @@ function createObjectNavigator({adapter, presentationRegistry, commandRegistry, 
   }
 
   /**
-   * inspect(subject, context) -> {presentations, commands, failures}
+   * inspect(subject, context, extras) -> {presentations, commands, failures, ...extras}
    *
    * Synchronous discovery over an ALREADY-MATERIALIZED subject (a ref whose
    * record is in hand, or an unavailable-ref). Providers plug in through the
    * presentationRegistry; applicable Commands come from the commandRegistry
-   * (applicability only, never authority).
+   * (applicability only, never authority). `extras` carries OPTIONAL sibling
+   * metadata that is deliberately NOT Presentation context (e.g. the transient
+   * versionToken) — see navigate.
    */
-  function inspect(subject, context = {}) {
+  function inspect(subject, context = {}, extras = {}) {
     const {presentations, failures} = presentationRegistry.discover(subject, context);
     const {commands, failures: commandFailures} = commandRegistry.discover(subject, context);
     return Object.freeze({
       presentations,
       commands,
       failures: Object.freeze([...failures, ...commandFailures]),
+      ...extras,
     });
   }
 
@@ -148,7 +151,8 @@ function createObjectNavigator({adapter, presentationRegistry, commandRegistry, 
   }
 
   /**
-   * navigate(subject, {authority, readBlockId}) -> Promise<{presentations, commands, failures}>
+   * navigate(subject, {authority, readBlockId})
+   *   -> Promise<{presentations, commands, failures, versionToken?}>
    *
    * The async entry point. Reads the referenced object fresh under explicit
    * authority (a ref is never authority), then returns the discovered result
@@ -158,13 +162,14 @@ function createObjectNavigator({adapter, presentationRegistry, commandRegistry, 
    *    leaf slots (Values keyed by slot id) and its references (raw ref Values
    *    walked from slots + indexed — the only structures the read lane
    *    discloses — revision preserved, never string-split; shape/behavior are
-   *    not followed because the lane does not return them).
-   *  - read denied: the subject is materialized as {kind: 'unauthorized-ref'}
-   *    so the unauthorized-ref provider presents it explicitly (denied-existing
-   *    and denied-nonexistent are indistinguishable).
-   *  - read fails (missing/backend): the subject is materialized as
-   *    {kind: 'unavailable-ref', ...} so the unavailable-ref provider presents
-   *    it explicitly rather than the reference vanishing.
+   *    not followed because the lane does not return them). The read lane's
+   *    versionToken is surfaced as a SIBLING field (transient optimistic-
+   *    concurrency state), NEVER inside Presentation/context — it must not
+   *    leak into the SemanticUi description, the renderer presentationDescriptor,
+   *    the Compositor durableIntent, or Perspective persistence.
+   *  - read denied / fails: the subject is materialized as an
+   *    unauthorized-ref / unavailable-ref so the fallback provider presents it
+   *    explicitly; such results carry NO versionToken.
    */
   async function navigate(subject, {authority = null, readBlockId} = {}) {
     if (!isRef(subject)) {
@@ -196,7 +201,9 @@ function createObjectNavigator({adapter, presentationRegistry, commandRegistry, 
       fields: Object.freeze({...(record.slots ?? {})}),
       references: Object.freeze(referencesOfLaneRecord(record)),
     });
-    return inspect(subject, context);
+    // versionToken is transient concurrency state: a sibling field on the result,
+    // NEVER part of the Presentation/context (see the navigate doc comment).
+    return inspect(subject, context, {versionToken: record.versionToken});
   }
 
   return Object.freeze({inspect, navigate});

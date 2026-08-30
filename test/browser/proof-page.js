@@ -188,7 +188,8 @@ window.__lagrangeProof = {
     const inspectorDescriptor = {
       kind: 'inspector',
       subject: {kind: 'ref', imageId: 'img', objectId: 'obj-root'},
-      parameters: {fields: {'slot-title': {kind: 'text', value: 'Root'}}, references: []},
+      // slot-title is editable (writable); slot-count is a read-only scalar.
+      parameters: {fields: {'slot-title': {kind: 'text', value: 'Root'}, 'slot-count': {kind: 'int', value: 17}}, writable: ['slot-title'], references: []},
     };
     const glbDescriptor = {kind: 'glb', asset: 'main-model'};
     const navHandle = await open(navigatorDescriptor, 200, 200);
@@ -200,6 +201,9 @@ window.__lagrangeProof = {
       readGlb: () => adapter.readRenderedPixels(glbHandle),
       toolRoots: () => Array.from(document.querySelectorAll('#mount .lagrange-tool')),
       referenceButtons: () => Array.from(document.querySelectorAll('#mount .lagrange-tool-references button')),
+      // The PRODUCTION edit path: the real inspector <input> realized by the
+      // adapter's DOM realizer, committing through the adapter's emitIntent seam.
+      inspectorFieldInputs: () => Array.from(document.querySelectorAll('#mount .lagrange-tool-inspector .lagrange-tool-field-input')),
       onIntent: (fn) => adapter.onIntent(fn),
       destroyAll: () => adapter.destroyAll(),
     };
@@ -216,13 +220,13 @@ window.__lagrangeProof = {
     // with the ref's fields + references (root carries refs to B and C).
     const RECORDS = {
       'obj-root': {fields: {'slot-title': {kind: 'text', value: 'Root'}}, references: [ref('obj-b'), ref('obj-c')]},
-      'obj-b': {fields: {'slot-title': {kind: 'text', value: 'B'}}, references: []},
+      'obj-b': {fields: {'slot-title': {kind: 'text', value: 'B'}, 'slot-count': {kind: 'int', value: 17}}, writable: ['slot-title'], references: []},
       'obj-c': {fields: {'slot-title': {kind: 'text', value: 'C'}}, references: []},
     };
     const navigator = {
       async navigate(subject) {
         const rec = RECORDS[subject.objectId] ?? {fields: {}, references: []};
-        return {presentations: [{kind: 'inspector', subject, context: {fields: rec.fields, references: rec.references}}], commands: [], failures: []};
+        return {presentations: [{kind: 'inspector', subject, context: {fields: rec.fields, writable: rec.writable ?? [], references: rec.references}}], commands: [], failures: []};
       },
     };
     const adapter = createBrowserRendererAdapter({
@@ -233,7 +237,9 @@ window.__lagrangeProof = {
     });
     const compositor = createCompositor({rendererAdapter: adapter});
     const selectionModel = createSelectionModel();
-    const shell = createEnvironmentShell({navigator, selectionModel, compositor});
+    // writableSlots threaded so the shell injects parameters.writable into the
+    // inspector descriptor (the S4a path) — making obj-b's title editable in DOM.
+    const shell = createEnvironmentShell({navigator, selectionModel, compositor, writableSlots: ['slot-title']});
     await shell.openWorkspace(ref('obj-root'), {viewDescriptorFor: () => ({kind: 'webgpu-canvas', width: 200, height: 200})});
     // Wire the DOM activate-item intents to selection. The navigator view is
     // opened first, so its surface handle is browser-surface-0.
@@ -242,6 +248,8 @@ window.__lagrangeProof = {
       adapter, compositor, selectionModel, shell,
       navigatorButtons: () => Array.from(document.querySelectorAll('#mount .lagrange-tool-navigator .lagrange-tool-references button')),
       inspectorText: () => document.querySelector('#mount .lagrange-tool-inspector')?.textContent ?? '',
+      inspectorFieldInputs: () => Array.from(document.querySelectorAll('#mount .lagrange-tool-inspector .lagrange-tool-field-input')),
+      onIntent: (fn) => adapter.onIntent(fn),
       inspectorSubject: () => compositor.durableIntent().find((v) => v.viewId === 'inspector-view')?.presentationDescriptor.subject.objectId ?? null,
       selected: () => selectionModel.selectedSubject()?.objectId ?? null,
       focused: () => compositor.focusedView(),
@@ -379,6 +387,7 @@ window.__lagrangeProof = {
     const root = renderSemanticUiToDom({
       doc, kind, surfaceHandle: 'fixture-surface',
       listen, onAction: (key) => intents.push({kind: 'activate-item', key}),
+      onEdit: (key, text) => intents.push({kind: 'edit-field', key, text}),
     });
     mount.appendChild(root);
     return {
@@ -387,9 +396,18 @@ window.__lagrangeProof = {
       heading: root.querySelector('h3')?.textContent ?? null,
       reason: root.querySelector('.lagrange-tool-reason')?.textContent ?? null,
       fields: Array.from(root.querySelectorAll('.lagrange-tool-fields dt')).map((d) => d.textContent),
-      fieldValues: Array.from(root.querySelectorAll('.lagrange-tool-fields dd')).map((d) => d.textContent),
+      // A read-only field's <dd> text; an editable field's <input> value.
+      fieldValues: Array.from(root.querySelectorAll('.lagrange-tool-fields dd')).map((d) => d.querySelector('input')?.value ?? d.textContent),
+      fieldInputs: Array.from(root.querySelectorAll('.lagrange-tool-field-input')).map((i) => i.value),
       buttons: Array.from(root.querySelectorAll('.lagrange-tool-references button')).map((b) => b.textContent),
       clickButton: (i) => { root.querySelectorAll('.lagrange-tool-references button')[i]?.click(); },
+      // Type into the i-th editable input and press Enter (commit).
+      editField: (i, text) => {
+        const input = root.querySelectorAll('.lagrange-tool-field-input')[i];
+        if (!input) return;
+        input.value = text;
+        input.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
+      },
       takeIntents: () => intents.splice(0, intents.length),
       dispose: () => { for (const [el, t, f] of listeners) el.removeEventListener(t, f); root.remove(); },
     };
