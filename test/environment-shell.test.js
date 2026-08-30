@@ -24,7 +24,7 @@ function referencesOfValue(value) {
   return [];
 }
 
-function makeShell({records = {}, readError = null, authorityFor = null} = {}) {
+function makeShell({records = {}, readError = null, authorityFor = null, writableSlots = []} = {}) {
   const presentationRegistry = createPresentationRegistry();
   presentationRegistry.register(createObjectInspectorProvider());
   presentationRegistry.register(createUnavailableRefProvider());
@@ -47,7 +47,7 @@ function makeShell({records = {}, readError = null, authorityFor = null} = {}) {
   const selectionModel = createSelectionModel();
   const rendererAdapter = createFakeRendererAdapter();
   const compositor = createCompositor({rendererAdapter});
-  const shell = createEnvironmentShell({navigator, selectionModel, compositor});
+  const shell = createEnvironmentShell({navigator, selectionModel, compositor, writableSlots});
   return {shell, navigator, selectionModel, compositor, rendererAdapter, readCalls};
 }
 
@@ -172,5 +172,113 @@ test('durable intent is focus/selection/handle-free after select (focus/selectio
     assert.ok(!('focus' in v) && !('focusedView' in v) && !('selection' in v) && !('surfaceHandle' in v), 'durable intent is focus/selection/handle-free');
   }
   assert.deepEqual(intent.map((v) => v.viewId).sort(), ['inspector-view', 'navigator-view']);
+  await compositor.destroy();
+});
+
+// --- S4a: edit-field routing through CommandRouter; transient token lifecycle -
+
+// A mock CommandRouter that captures the intent + context the shell routes, so
+// the test proves the shell resolves key->slot and attaches the transient token,
+// and that CommandRouter (not the shell) owns dispatch.
+function makeCapturingRouter(result = {ok: true}) {
+  const calls = [];
+  return {
+    calls,
+    async consumeIntent(intent, {surfaceHandle, context} = {}) {
+      calls.push({intent, surfaceHandle, context});
+      return result;
+    },
+  };
+}
+
+test('handleEditField resolves the descriptor-local key to a writable slot and routes through CommandRouter with the transient token', async () => {
+  const records = {
+    'obj-root': {slots: {'slot-b': ref('obj-b')}, indexed: [], versionToken: 'tok-root'},
+    'obj-b': {
+      slots: {'probe-title': {kind: 'text', value: 'B'}, 'probe-count': {kind: 'integer', value: '7'}},
+      indexed: [],
+      versionToken: 'tok-b',
+    },
+  };
+  // probe-title is writable; probe-count is read-only.
+  const {shell, compositor} = makeShell({records, writableSlots: ['probe-title']});
+  await shell.openWorkspace(ref('obj-root'), {});
+  await shell.selectObject(ref('obj-b'), {});
+
+  // The transient token is paired with the displayed inspector (obj-b), and is
+  // NOT in the descriptor/durableIntent.
+  assert.deepEqual(shell._inspectorToken(), {token: 'tok-b', objectId: 'obj-b'});
+  const inspView = compositor.durableIntent().find((v) => v.viewId === 'inspector-view');
+  assert.ok(!('versionToken' in (inspView.presentationDescriptor.parameters ?? {})), 'no token in the inspector descriptor');
+  assert.deepEqual(inspView.presentationDescriptor.parameters.writable, ['probe-title'], 'the writable set is threaded to the descriptor');
+
+  const router = makeCapturingRouter({objectId: 'obj-b'});
+  const result = await shell.handleEditField({
+    key: 0, text: 'B-edited', commandRouter: router, inspectorSurfaceHandle: 'insp-surface-0',
+  });
+  assert.deepEqual(result, {objectId: 'obj-b'}, 'the dispatch result is returned');
+  // The shell routed a semantic edit-field intent through CommandRouter, with the
+  // resolved slot + the transient token in the dispatch context (NEVER a descriptor).
+  assert.equal(router.calls.length, 1);
+  assert.deepEqual(router.calls[0].intent, {kind: 'edit-field', key: 0});
+  assert.equal(router.calls[0].surfaceHandle, 'insp-surface-0');
+  assert.equal(router.calls[0].context.slot, 'probe-title', 'key 0 resolved to the writable slot');
+  assert.equal(router.calls[0].context.text, 'B-edited', 'the RAW text passes through unparsed');
+  assert.equal(router.calls[0].context.versionToken, 'tok-b', 'the transient token is attached to the dispatch context');
+  await compositor.destroy();
+});
+
+test('handleEditField: a stale or read-only key is an explicit no-op (never a wrong slot, no dispatch)', async () => {
+  const records = {
+    'obj-root': {slots: {'slot-b': ref('obj-b')}, indexed: [], versionToken: 'tok-root'},
+    'obj-b': {
+      slots: {'probe-title': {kind: 'text', value: 'B'}, 'probe-count': {kind: 'integer', value: '7'}},
+      indexed: [],
+      versionToken: 'tok-b',
+    },
+  };
+  const {shell, compositor} = makeShell({records, writableSlots: ['probe-title']});
+  await shell.openWorkspace(ref('obj-root'), {});
+  await shell.selectObject(ref('obj-b'), {});
+  const router = makeCapturingRouter();
+  // key 1 would name probe-count (read-only) if the shell miscounted writable
+  // fields; key 99 is out of range. Both are no-ops with NO dispatch.
+  assert.equal(await shell.handleEditField({key: 1, text: 'x', commandRouter: router, inspectorSurfaceHandle: 's'}), null);
+  assert.equal(await shell.handleEditField({key: 99, text: 'x', commandRouter: router, inspectorSurfaceHandle: 's'}), null);
+  assert.equal(router.calls.length, 0, 'a stale/read-only key never reaches CommandRouter');
+  await compositor.destroy();
+});
+
+test('the transient token is cleared when the inspected subject changes', async () => {
+  const records = {
+    'obj-root': {slots: {'slot-b': ref('obj-b'), 'slot-c': ref('obj-c')}, indexed: [], versionToken: 'tok-root'},
+    'obj-b': {slots: {'probe-title': {kind: 'text', value: 'B'}}, indexed: [], versionToken: 'tok-b'},
+    'obj-c': {slots: {'probe-title': {kind: 'text', value: 'C'}}, indexed: [], versionToken: 'tok-c'},
+  };
+  const {shell, compositor} = makeShell({records, writableSlots: ['probe-title']});
+  await shell.openWorkspace(ref('obj-root'), {});
+  await shell.selectObject(ref('obj-b'), {});
+  assert.deepEqual(shell._inspectorToken(), {token: 'tok-b', objectId: 'obj-b'});
+  // Switch the inspected subject: the old token is dropped and replaced by the
+  // new subject's token (paired with the successful reread -> presentOn).
+  await shell.selectObject(ref('obj-c'), {});
+  assert.deepEqual(shell._inspectorToken(), {token: 'tok-c', objectId: 'obj-c'});
+  await compositor.destroy();
+});
+
+test('an unreadable inspector (unavailable/unauthorized) carries NO transient token', async () => {
+  const records = {
+    'obj-root': {slots: {'slot-b': ref('obj-b')}, indexed: [], versionToken: 'tok-root'},
+    'obj-b': {slots: {'probe-title': {kind: 'text', value: 'B'}}, indexed: [], versionToken: 'tok-b'},
+  };
+  // obj-c is not in records -> authorized-but-missing -> unavailable-ref.
+  const {shell, compositor} = makeShell({records, writableSlots: ['probe-title']});
+  await shell.openWorkspace(ref('obj-root'), {});
+  await shell.selectObject(ref('obj-b'), {});
+  assert.equal(shell._inspectorToken().token, 'tok-b');
+  // Re-navigate to a subject that becomes unreadable: no token survives.
+  await shell.selectObject(ref('obj-c'), {});
+  assert.deepEqual(shell._inspectorToken(), {token: null, objectId: 'obj-c'},
+    'a failure presentation carries no token (paired only with a successful read)');
   await compositor.destroy();
 });
