@@ -277,15 +277,63 @@ test('S4a: edit-field routes through CommandRouter to a REAL mutation; a stale t
     authority: writeAuthority(created.objectId), blockId: IDS.mutationBlockId,
   });
   let conflict = null;
+  let conflictReread = null;
   await shell.handleEditField({
     key: 0, text: 'stale-edit', commandId: 'set-title',
     commandRouter, inspectorSurfaceHandle: inspHandle,
     authority: readAuthority(created.objectId), readBlockId: IDS.readBlockId,
-    onEditError: (error) => { conflict = error; },
+    onEditError: async (error, {reread}) => {
+      conflict = error;
+      // NO dead-end: recover via a fresh authorized reread (updates the transient
+      // token + shows the current value), so the user can retry.
+      conflictReread = await reread();
+    },
   });
   assert.ok(conflict, 'a stale token surfaced an error');
   assert.equal(conflict.name, 'CommandConflictError', 'a stale transient token -> CommandConflictError (optimistic concurrency)');
   assert.equal(await readTitle(), 'external-advance', 'the stale edit did NOT overwrite the external write');
+  // The recovery reread refreshed the inspector to the image's CURRENT value and
+  // updated the transient token (no longer the stale one).
+  assert.equal(conflictReread.parameters.fields['probe-title'].value, 'external-advance',
+    'the conflict recovery reread shows the current image value (not the stale edit, not a dead-end)');
+  const tokenAfterConflict = shell._inspectorToken().token;
+  assert.ok(tokenAfterConflict && tokenAfterConflict !== created.versionToken,
+    'the transient token was refreshed by the recovery reread (not the stale token)');
+
+  // The user can now retry the edit successfully with the fresh token.
+  const retry = await shell.handleEditField({
+    key: 0, text: 'retry-after-conflict', commandId: 'set-title',
+    commandRouter, inspectorSurfaceHandle: inspHandle,
+    authority: readAuthority(created.objectId), readBlockId: IDS.readBlockId,
+  });
+  assert.ok(retry, 'the retry after conflict-recovery dispatched');
+  assert.equal(await readTitle(), 'retry-after-conflict', 'the retry succeeded with the refreshed token (the user could continue)');
+
+  // --- DENIED WRITE: distinct from an unauthorized READ; no mutation; no dead-end.
+  const deniedRouter = createCommandRouter({
+    compositor, commandRegistry,
+    dispatch: (command, subject, opts) => adapter.dispatch(command, subject, opts),
+    authorityProvider: async () => runtime.authority.issue({principal: 'mallory', grants: []}), // NO write grant
+  });
+  let denied = null;
+  let deniedReread = null;
+  await shell.handleEditField({
+    key: 0, text: 'denied-edit', commandId: 'set-title',
+    commandRouter: deniedRouter, inspectorSurfaceHandle: inspHandle,
+    authority: readAuthority(created.objectId), readBlockId: IDS.readBlockId,
+    onEditError: async (error, {reread}) => {
+      denied = error;
+      deniedReread = await reread();
+    },
+  });
+  assert.ok(denied, 'a denied write surfaced an error');
+  assert.equal(denied.name, 'CommandAuthorizationError',
+    'a denied WRITE is a CommandAuthorizationError (DISTINCT from an unauthorized-READ presentation)');
+  assert.equal(await readTitle(), 'retry-after-conflict', 'a denied write mutated nothing');
+  assert.equal(deniedReread.parameters.fields['probe-title'].value, 'retry-after-conflict',
+    'the denied-write recovery reread keeps the current value visible (no dead-end)');
+  assert.equal(deniedReread.kind, 'inspector',
+    'the denied WRITE leaves an INSPECTOR presentation (the read still succeeds), NOT an unauthorized-reference — a denied write is distinct from a denied read');
 
   await compositor.destroy();
 });
