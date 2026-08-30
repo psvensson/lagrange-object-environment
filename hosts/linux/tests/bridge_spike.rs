@@ -74,7 +74,8 @@ fn bridge_spike() {
     // destroyAll. Every one of those ops is executed HERE on the GTK thread by
     // the pump. If the GLB attach deadlocked the op stream, the pump times out.
     let executed = pump_until_exit(&mut host, &mut adapter, gtk_thread, Duration::from_secs(30));
-    assert!(executed >= 10, "the worker's six-op script executed ({executed} ops)");
+    // The worker's script is exactly 12 six-op calls; assert none were lost.
+    assert_eq!(executed, 12, "the worker's six-op script executed exactly (no silent op loss)");
     // The worker exited 0 (LOOPBACK-OK on stderr): the ops completed in order.
     assert_eq!(host.poll_exit(), Some(0), "the loopback worker exited cleanly (LOOPBACK-OK)");
 

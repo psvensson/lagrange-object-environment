@@ -1,14 +1,11 @@
 /**
  * THROWAWAY 64j-A S0 loopback worker. NOT the acceptance flow. It acts as a
  * STAND-IN for the real JS core: it drives a fixed script of six-op calls
- * through the bridge adapter (validating op-correlation, FIFO ordering, and the
- * GLB-attach path) and prints one JSON status line to STDOUT when done, so the
- * Rust spike test can assert the whole round-trip succeeded. (The bridge reader
- * thread only forwards {id,op,args} messages to the GTK thread; this worker's
- * status line is a plain {status} message the reader ignores, so the test reads
- * the child's stdout directly would be wrong — instead the worker signals done
- * via a 'ping' the host can observe. Simplest: the worker just runs the script
- * and exits 0 on success; the Rust test asserts a clean exit + no bridge error.)
+ * through the bridge adapter (validating op-correlation + FIFO ordering + the
+ * GLB-attach path, all SEQUENTIALLY awaited — not concurrent) and prints
+ * LOOPBACK-OK to stderr + exits 0 on success (LOOPBACK-FAIL + exit 1 on any op
+ * error, e.g. an 'already attached' from a broken presentOn ordering). The Rust
+ * spike test asserts the clean exit + the op count.
  */
 
 import {runBridgeWorker} from './bridge.mjs';
@@ -49,8 +46,8 @@ runBridgeWorker(async (adapter) => {
     // allowlist, which still exercises the block_on attach path).
     const glb = await adapter.createSurface({kind: 'surface', width: 320, height: 200});
     await adapter.attachPresentation(glb, {kind: 'glb', subject: {kind: 'ref', imageId: 'img', objectId: 'obj-model'}, parameters: {assets: {}}});
-    // A resize + a final presentOn, then destroyAll.
-    await adapter.resize(insp, 200, 200);
+    // A resize (the contract's 2-arg shape) + a final presentOn, then destroyAll.
+    await adapter.resize(insp, {width: 200, height: 200});
     await adapter.detachPresentation(insp);
     await adapter.attachPresentation(insp, inspector('B-FINAL'));
     await adapter.destroyAll();

@@ -11,10 +11,17 @@
  * — those stay in the real JS core); the six RendererAdapter ops are exactly
  * six; no durable state/identity originates here. Delete this when 3zb lands.
  *
- * PROTOCOL (op-correlated, strict FIFO, single-in-flight per adapter):
+ * PROTOCOL (op-correlated; ordering enforced on the RUST side):
  *   -> Rust: {id, op, args:[data-representable]}        (one of the SIX ops)
  *   <- Rust: {id, ok: result} | {id, err: string}       (per-op ack)
  *   <- Rust: {event: 'intent', surfaceHandle, intent}   (GTK -> JS, see onIntent)
+ *
+ * ORDERING: this adapter does NOT serialize ops itself (each call() sends
+ * immediately; `pending` may hold several ids). Strict single-in-flight ordering
+ * is enforced by the RUST bridge reader thread, which reads op N+1 only after
+ * writing op N's ack — so ordering survives even a pipelining caller. The real
+ * JS Compositor additionally awaits each op before issuing the next (presentOn's
+ * detach->attach), so in practice at most one op is in flight.
  */
 
 import {createInterface} from 'node:readline';
@@ -31,11 +38,9 @@ const SIX_OPS = Object.freeze([
 /**
  * Create a RendererAdapter-shaped object whose six ops are RPC calls to the
  * Rust host. The real JS Compositor consumes this EXACTLY like any other
- * adapter (async ops returning Promises). Op-correlation: each op gets a unique
- * id; the matching ack resolves its Promise. Single-in-flight is enforced by
- * serializing ops through one queue (a presentOn's detach->attach ordering is
- * preserved because the JS Compositor awaits each op before issuing the next,
- * and this adapter never pipelines).
+ * adapter (async ops returning Promises, incl. the 2-arg resize(handle, {width,
+ * height}) contract shape). Op-correlation: each op gets a unique id; the
+ * matching ack resolves its Promise.
  */
 function createBridgeAdapter({send, onResponse, onEvent}) {
   let nextId = 0;
@@ -66,7 +71,9 @@ function createBridgeAdapter({send, onResponse, onEvent}) {
     createSurface: (viewDescriptor) => call('createSurface', [viewDescriptor]),
     attachPresentation: (handle, presentationDescriptor) => call('attachPresentation', [handle, presentationDescriptor]),
     detachPresentation: (handle) => call('detachPresentation', [handle]),
-    resize: (handle, width, height) => call('resize', [handle, width, height]),
+    // The contract shape is resize(handle, {width, height}) (compositor.js:231);
+    // the bridge flattens it to positional args for the Rust adapter.
+    resize: (handle, {width, height}) => call('resize', [handle, width, height]),
     destroySurface: (handle) => call('destroySurface', [handle]),
     destroyAll: () => call('destroyAll', []),
     // Host-side intent seam (the analogue of the browser adapter's onIntent;
