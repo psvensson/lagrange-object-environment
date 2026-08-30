@@ -357,6 +357,251 @@ test('S4a: edit-field routes through CommandRouter to a REAL mutation; a stale t
   await compositor.destroy();
 });
 
+// olm REGRESSION (deterministic, no busy-poll timing reliance): with follow
+// ACTIVE across an edit, the follow's observation of the edit's OWN committed
+// write must be DEFERRED (not dropped, not raced) until the edit settles, then
+// run as the follow's reread — pairing the token to the current version so an
+// IMMEDIATE second edit succeeds. The race window is opened EXACTLY by a HELD
+// Command (the real mutation commits, then the Command holds before returning,
+// so the self-observation arrives while the edit is still in flight). The
+// onDeferred seam lets the test SYNCHRONIZE on the deferral (not a wall-clock
+// wait that could pass vacuously). The OPPOSITE case (a genuinely external
+// concurrent write) must STILL conflict — the barrier must NOT turn optimistic
+// concurrency into last-writer-wins.
+test('olm: edit-during-active-follow defers the self-observation reread; a second edit succeeds; an external write still conflicts', {skip: !available && 'lagrange-images sibling runtime not available'}, async () => {
+  const runtime = await imagesApi.createRuntime({backend: {mode: 'mock'}});
+  await runtime.images.createImage({id: IMAGE});
+  await imagesApi.installSmalltalkKernel({images: runtime.images, imageId: IMAGE});
+  const adapter = createImageClientAdapter({
+    images: runtime.images, invocations: runtime.invocations, executor: runtime.executor,
+    defineClass: imagesApi.defineClass, installCallableInterfaceV2: imagesApi.installCallableInterfaceV2,
+    installImageCreationBinding: imagesApi.installImageCreationBinding,
+    installImageMutationBinding: imagesApi.installImageMutationBinding,
+    installImageObjectReadBinding: imagesApi.installImageObjectReadBinding,
+    installImageObservationBinding: imagesApi.installImageObservationBinding,
+    findSmalltalkKernel: imagesApi.findSmalltalkKernel, objectRef: imagesApi.objectRef,
+    objectResource: imagesApi.objectResource, parseObjectResource: imagesApi.parseObjectResource,
+    objectVersionToken: imagesApi.objectVersionToken, textValue: imagesApi.textValue,
+    packCompositeValue: imagesApi.packCompositeValue, unpackCompositeValue: imagesApi.unpackCompositeValue,
+    normalizeTypeDeclarations: imagesApi.normalizeTypeDeclarations,
+  });
+  await adapter.ensureSchema(IMAGE, IDS);
+
+  const presentationRegistry = createPresentationRegistry();
+  presentationRegistry.register(createObjectInspectorProvider());
+  presentationRegistry.register(createUnavailableRefProvider());
+  presentationRegistry.register(createUnauthorizedRefProvider());
+  const commandRegistry = createCommandRegistry();
+  // A HELD set-title Command: performs the REAL mutation, then waits on a
+  // test-controlled gate before returning — so the edit stays in flight (the
+  // dispatch unsettled) while the self-observation of the committed write
+  // arrives. `gates` maps text -> {promise, release}.
+  const gates = new Map();
+  commandRegistry.register(new Command({
+    id: 'set-title', title: 'Set title',
+    appliesTo: (subject) => Boolean(subject && subject.objectId),
+    invoke: async (subject, {authority, adapter: a, text, versionToken}) => {
+      const result = await a.mutateObject({
+        imageId: subject.imageId, objectId: subject.objectId,
+        value: {title: text}, authority, blockId: IDS.mutationBlockId, versionToken,
+      });
+      const gate = gates.get(text);
+      if (gate) await gate.promise; // hold AFTER the commit, BEFORE returning
+      return result;
+    },
+  }));
+  const navigator = createObjectNavigator({
+    adapter, presentationRegistry, commandRegistry, referencesOfValue: imagesApi.referencesOfValue,
+  });
+  const selectionModel = createSelectionModel();
+  const rendererAdapter = createFakeRendererAdapter();
+  const compositor = createCompositor({rendererAdapter});
+  const shell = createEnvironmentShell({navigator, selectionModel, compositor, writableSlots: adapter.writableSlots});
+
+  const classId = classIdFor(IDS.className);
+  const ref = (objectId) => ({kind: 'ref', imageId: IMAGE, objectId});
+  const readAuthority = (objectId) => runtime.authority.issue({
+    principal: 'alice', grants: [{operation: 'object/read', resource: imagesApi.objectResource(IMAGE, objectId)}],
+  });
+  const writeAuthority = (objectId) => runtime.authority.issue({
+    principal: 'alice', grants: [{operation: 'object/write', resource: imagesApi.objectResource(IMAGE, objectId)}],
+  });
+  const createAuthority = (subjectTarget) => runtime.authority.issue({
+    principal: 'alice',
+    grants: [
+      {operation: 'object/create', resource: imagesApi.objectResource(IMAGE, classId)},
+      {operation: 'object/edge-write', resource: imagesApi.objectResource(IMAGE, subjectTarget)},
+    ],
+  });
+  const created = await adapter.createObject({
+    imageId: IMAGE, classId, title: 'original', subject: ref('smalltalk/nil'), authority: createAuthority('smalltalk/nil'), blockId: IDS.blockId,
+  });
+  const root = await adapter.createObject({
+    imageId: IMAGE, classId, title: 'root', subject: ref(created.objectId), authority: createAuthority(created.objectId), blockId: IDS.blockId,
+  });
+  const commandRouter = createCommandRouter({
+    compositor, commandRegistry,
+    dispatch: (command, subject, opts) => adapter.dispatch(command, subject, opts),
+    authorityProvider: async ({subject}) => writeAuthority(subject.objectId),
+  });
+  await shell.openWorkspace(ref(root.objectId), {authority: readAuthority(root.objectId), readBlockId: IDS.readBlockId});
+  await shell.selectObject(ref(created.objectId), {authority: readAuthority(created.objectId), readBlockId: IDS.readBlockId});
+  const attaches = rendererAdapter.calls().filter((c) => c.method === 'attachPresentation');
+  const inspHandle = attaches[attaches.length - 1]?.detail?.surfaceHandle;
+  const readTitle = async () => (await adapter.readObject({
+    imageId: IMAGE, objectId: created.objectId, authority: readAuthority(created.objectId), blockId: IDS.readBlockId,
+  }))?.slots?.['probe-title']?.value;
+  const inspectorValue = () => compositor.durableIntent().find((v) => v.viewId === 'inspector-view')
+    ?.presentationDescriptor?.parameters?.fields?.['probe-title']?.value;
+  // Spy on inspector presents: the STRONG barrier falsifier. Under the RACE
+  // (an immediate in-flight reread), the follow would presentOn the inspector
+  // DURING the held edit; under DEFERRAL it must NOT. Counting attachPresentation
+  // CALLS on the inspector surface (not just the resulting value) catches a racy
+  // reread that happens to land on the stale pre-commit value — which a
+  // value-only assertion would miss. The Compositor is frozen, so count via the
+  // fake rendererAdapter's recorded calls (presentOn -> attachPresentation).
+  const inspectorPresentCount = () => rendererAdapter.calls()
+    .filter((c) => c.method === 'attachPresentation' && c.detail?.surfaceHandle === inspHandle).length;
+
+  // The pre-edit transient token (paired by the selectObject reread).
+  const tokenBeforeEdit = shell._inspectorToken().token;
+  assert.ok(tokenBeforeEdit, 'a token is paired after navigation');
+
+  // follow ACTIVE, with the onDeferred seam so the test SYNCHRONIZES on the
+  // deferral (deterministic — not a wall-clock wait).
+  let resolveDeferred;
+  const deferredSeen = new Promise((r) => { resolveDeferred = r; });
+  const follow = shell.followSelected({
+    observe: (imageId, opts) => adapter.observe(imageId, opts),
+    imageId: IMAGE,
+    authority: readAuthority(created.objectId),
+    observationBlockId: IDS.observationBlockId,
+    readBlockId: IDS.readBlockId,
+    onDeferred: () => resolveDeferred(),
+  });
+  await new Promise((r) => setTimeout(r, 50)); // let the lane anchor live-follow
+
+  // --- THE RACE WINDOW: an edit whose Command holds AFTER the commit ---------
+  let releaseGate;
+  gates.set('edit-one', {promise: new Promise((r) => { releaseGate = r; })});
+  const editOne = shell.handleEditField({
+    key: 0, text: 'edit-one', commandId: 'set-title',
+    commandRouter, inspectorSurfaceHandle: inspHandle,
+    authority: readAuthority(created.objectId), readBlockId: IDS.readBlockId,
+  });
+  // Wait until the Command has committed (the gate is now awaited) AND the
+  // follow loop has observed-and-DEFERRED the self-invalidation. onDeferred
+  // fires only when an invalidation arrives while the edit is in flight — so
+  // awaiting it PROVES the deferral happened (not that it never observed).
+  await deferredSeen;
+  // While the edit is STILL in flight (gate held), the follow must NOT have
+  // re-presented the inspector AT ALL. This is the STRONG barrier falsifier: it
+  // counts presentOn CALLS, so a racy reread that lands on the stale pre-commit
+  // value (which a value-only check would miss) is still caught. The count is
+  // taken AFTER deferredSeen (the self-observation was already seen+deferred),
+  // so any in-flight present would be a barrier violation.
+  const presentsDuringEdit = inspectorPresentCount();
+  // Let the busy-poll run a few turns while the gate is still held; if the
+  // barrier raced, the deferred self-observation would drive a presentOn here.
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(inspectorPresentCount(), presentsDuringEdit,
+    'NO inspector presentOn may fire while the edit is in flight (the self-observation is DEFERRED, not raced)');
+  assert.equal(shell._inspectorToken().token, tokenBeforeEdit,
+    'the follow did NOT re-pair the token while the edit was in flight (deferred, not raced)');
+  // Release the held Command: the edit settles; the deferred observation drains
+  // as the follow's reread -> fresh authorized reread -> presentOn.
+  releaseGate();
+  await editOne;
+  assert.equal(await readTitle(), 'edit-one', 'the committed write landed in the image');
+  // The deferred reread updates the inspector to the committed value and pairs
+  // the token to the CURRENT version (N+1). assertEventually absorbs the lane.
+  await assertEventually(async () => {
+    assert.equal(inspectorValue(), 'edit-one', 'the deferred reread presented the committed value');
+    const tok = shell._inspectorToken().token;
+    assert.ok(tok && tok !== tokenBeforeEdit, 'the token advanced to the post-edit version');
+  }, 3000);
+
+  // --- THE STRONG FALSIFIER: an IMMEDIATE second edit succeeds with the fresh
+  // token. If the barrier merely HID the race (token still N), this conflicts.
+  const tokenAfterOne = shell._inspectorToken().token;
+  await shell.handleEditField({
+    key: 0, text: 'edit-two', commandId: 'set-title',
+    commandRouter, inspectorSurfaceHandle: inspHandle,
+    authority: readAuthority(created.objectId), readBlockId: IDS.readBlockId,
+  });
+  await assertEventually(async () => {
+    assert.equal(inspectorValue(), 'edit-two', 'the second edit committed and was presented');
+  }, 3000);
+  assert.equal(await readTitle(), 'edit-two', 'the immediate second edit succeeded with the fresh token (the race is GONE, not hidden)');
+  assert.notEqual(shell._inspectorToken().token, tokenAfterOne, 'the second edit advanced the token again');
+
+  // --- OPPOSITE CASE: a genuinely external concurrent write STILL conflicts --
+  // (the barrier must NOT become last-writer-wins). An external write advances
+  // the version; the shell's held token is now stale; the edit conflicts.
+  await adapter.mutateObject({
+    imageId: IMAGE, objectId: created.objectId, value: {title: 'external-clobber'},
+    authority: writeAuthority(created.objectId), blockId: IDS.mutationBlockId,
+  });
+  let conflict = null;
+  let conflictReread = null;
+  await shell.handleEditField({
+    key: 0, text: 'should-not-land', commandId: 'set-title',
+    commandRouter, inspectorSurfaceHandle: inspHandle,
+    authority: readAuthority(created.objectId), readBlockId: IDS.readBlockId,
+    onEditError: async (error, {reread}) => { conflict = error; conflictReread = await reread(); },
+  });
+  assert.ok(conflict, 'an external concurrent write still surfaced an error');
+  assert.equal(conflict.name, 'CommandConflictError', 'a stale token still conflicts (optimistic concurrency preserved, NOT last-writer-wins)');
+  assert.equal(await readTitle(), 'external-clobber', 'the stale edit did NOT overwrite the external write');
+  assert.equal(conflictReread.parameters.fields['probe-title'].value, 'external-clobber',
+    'the conflict recovery reread shows the current value (the inspector stays usable)');
+
+  // --- SUBJECT-CHANGE-DURING-DEFER: navigate away while an edit is held; the
+  // drain must NOT re-present/re-pair the OLD subject with the edit's stale
+  // context (it must be cancelled — selectObject already reread the new subject).
+  // Select B again first so the held edit + defer target B.
+  await shell.selectObject(ref(created.objectId), {authority: readAuthority(created.objectId), readBlockId: IDS.readBlockId});
+  let resolveDeferred2;
+  const deferredSeen2 = new Promise((r) => { resolveDeferred2 = r; });
+  follow.stop();
+  const follow2 = shell.followSelected({
+    observe: (imageId, opts) => adapter.observe(imageId, opts),
+    imageId: IMAGE,
+    authority: readAuthority(created.objectId),
+    observationBlockId: IDS.observationBlockId,
+    readBlockId: IDS.readBlockId,
+    onDeferred: () => resolveDeferred2(),
+  });
+  await new Promise((r) => setTimeout(r, 50));
+  let releaseGate2;
+  gates.set('edit-three', {promise: new Promise((r) => { releaseGate2 = r; })});
+  const editThree = shell.handleEditField({
+    key: 0, text: 'edit-three', commandId: 'set-title',
+    commandRouter, inspectorSurfaceHandle: inspHandle,
+    authority: readAuthority(created.objectId), readBlockId: IDS.readBlockId,
+  });
+  await deferredSeen2; // B's self-observation was seen + deferred (edit in flight)
+  // Navigate AWAY to the root while the edit is held. selectObject bypasses the
+  // lane and rereads the NEW subject immediately, pairing its token.
+  await shell.selectObject(ref(root.objectId), {authority: readAuthority(root.objectId), readBlockId: IDS.readBlockId});
+  const presentsAfterNav = inspectorPresentCount();
+  releaseGate2();
+  await editThree;
+  // The drain must SKIP its reread (the subject moved on): NO further inspector
+  // presentOn after the navigation's own. Without the in-closure guard, the
+  // enqueued drain would fire a redundant reread/present here.
+  await new Promise((r) => setTimeout(r, 150)); // let any (bad) drain present land
+  assert.equal(inspectorPresentCount(), presentsAfterNav,
+    'the drain must SKIP its reread after a subject change (no redundant inspector presentOn)');
+  assert.equal(shell._inspectorToken().objectId, root.objectId,
+    'the token subject remains the root (the deferred B-observation was moot)');
+  assert.equal(await readTitle(), 'edit-three', 'the held edit still committed to B in the image');
+
+  follow2.stop();
+  follow.stop();
+  await compositor.destroy();
+});
+
 async function assertEventually(fn, timeoutMs) {
   const start = Date.now();
   for (;;) {
