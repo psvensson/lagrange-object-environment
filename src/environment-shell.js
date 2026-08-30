@@ -85,6 +85,37 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
     inspectorTokenSubjectId = objectId;
   }
 
+  // --- EDIT/OBSERVATION ORDERING BARRIER (the olm fix; single-owner) ---------
+  // The shell owns BOTH the transient token pairing AND the observation->reread
+  // coupling, so it alone owns their ordering. Without a barrier, followSelected's
+  // busy-poll observes an edit's OWN committed write and its reread re-pairs the
+  // token to N+1 over the in-flight edit's captured token (N) -> a FRESH token
+  // conflicts (Bead olm). The barrier DEFERS (never drops) the follow's reread
+  // until the edit settles, then runs it as the follow's reread — preserving
+  // mutation -> observation -> reread.
+  //
+  // editInFlight: a COUNT (not a boolean) so two overlapping edits can't have the
+  //   first completion clear the guard while the second is still active. NOTE:
+  //   overlapping edits on the SAME object are EXPECTED to conflict on the
+  //   second's CAS (correct optimistic concurrency) — the count protects the
+  //   TOKEN PAIRING, it does NOT serialize edits.
+  // rereadLane: a serialized promise chain. BOTH the follow's reread and the
+  //   deferred drain enqueue onto it, so a follow reread can never interleave its
+  //   token pairing with a drain (or another reread) already in flight.
+  // deferredObservation: a ONE-SLOT marker {objectId} (the follow generator is
+  //   self-serializing, so at most one event is ever being processed). Set when an
+  //   invalidation arrives while an edit is in flight; drained on success-settle,
+  //   cleared on error-settle (the error arm's reread() is the recovery owner).
+  let editInFlight = 0;
+  let rereadLane = Promise.resolve();
+  let deferredObservation = null;
+  // Enqueue a reread onto the serialized lane; returns the lane's promise.
+  function enqueueReread(fn) {
+    const run = rereadLane.then(fn, fn); // run even if a prior reread rejected
+    rereadLane = run.catch(() => {}); // the lane itself never stays rejected
+    return run;
+  }
+
   // Open the two-pane workspace: navigate the authorized root, present the
   // navigator pane (the root's references) and the inspector pane (the root
   // itself). Both views are opened through the Compositor (which owns the
@@ -161,7 +192,7 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
   // ref under per-call authority and presentOn the inspector. There is NO
   // shadow UI-side copy of the object's state — an invalidation triggers a
   // fresh authorized reread. Returns a stop() that aborts the subscription.
-  function followSelected({observe, imageId, authority, observationBlockId, readBlockId, onUpdate = null, onError = null, signal = null}) {
+  function followSelected({observe, imageId, authority, observationBlockId, readBlockId, onUpdate = null, onError = null, onDeferred = null, signal = null}) {
     if (typeof observe !== 'function') {
       throw new TypeError('followSelected requires an observe(imageId, options) function');
     }
@@ -181,8 +212,22 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
           // imageId, defense-in-depth against a broadened lane contract).
           if (change?.objectId !== selected.objectId) continue;
           if (selected.imageId && change?.imageId && change.imageId !== selected.imageId) continue;
-          // Re-navigate under per-call authority (a fresh authorized reread).
-          const descriptor = await inspectSelected({authority, readBlockId});
+          // EDIT/OBSERVATION BARRIER (olm): if an edit is in flight, DEFER the
+          // reread (never drop it) until the edit settles. The deferred marker is
+          // one slot (the generator is self-serializing). The drain runs after the
+          // edit's success path as the follow's reread, preserving
+          // mutation -> observation -> reread.
+          if (editInFlight > 0) {
+            deferredObservation = {objectId: change.objectId};
+            // Per-follow observability seam (NOT shell-level shared state): lets a
+            // test synchronize on the deferral deterministically. Fires only when
+            // an invalidation is actually deferred, never when it is merely absent.
+            if (onDeferred) onDeferred(change);
+            continue; // defer; the follow generator proceeds to the next event
+          }
+          // Re-navigate under per-call authority (a fresh authorized reread),
+          // serialized on the lane so it can't interleave with a deferred drain.
+          const descriptor = await enqueueReread(() => inspectSelected({authority, readBlockId}));
           if (onUpdate) onUpdate(descriptor, change);
         }
       } catch (error) {
@@ -249,25 +294,71 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
       }
     }
     if (slot === null) return null; // stale/non-writable key
-    // The transient token is valid ONLY if the currently-displayed inspector is
-    // still the object it was captured for (it is cleared on subject change).
-    const selected = selectionModel.selectedSubject();
-    const versionToken = (selected && selected.objectId === inspectorTokenSubjectId)
-      ? inspectorVersionToken
-      : null;
+    // EDIT BARRIER (olm): take the barrier AFTER the stale-key early-return (a
+    // no-op edit never dispatches, so it must not leak the count) and BEFORE
+    // capturing the transient token (the ordering point is "edit begins"). The
+    // barrier is held across the ENTIRE `await consumeIntent` + the onEdited/
+    // onEditError callback: the commit window (the CAS commits inside
+    // consumeIntent, before its promise resolves) is exactly where this function
+    // is suspended and the follow loop would otherwise re-pair the token.
+    editInFlight += 1;
+    let succeeded = false;
     try {
-      const result = await commandRouter.consumeIntent(
-        {kind: 'edit-field', key},
-        {surfaceHandle: inspectorSurfaceHandle, context: {commandId, slot, text, versionToken}},
-      );
-      if (onEdited) await onEdited(result);
-      return result;
-    } catch (error) {
-      // The error arm NEVER leaves a dead-end: offer a fresh authorized reread so
-      // the inspector reflects the image's current value (the user can retry).
-      if (onEditError) await onEditError(error, {reread: () => inspectSelected({authority, readBlockId})});
-      else throw error;
-      return null;
+      // The transient token is valid ONLY if the currently-displayed inspector is
+      // still the object it was captured for (it is cleared on subject change).
+      const selected = selectionModel.selectedSubject();
+      const versionToken = (selected && selected.objectId === inspectorTokenSubjectId)
+        ? inspectorVersionToken
+        : null;
+      try {
+        const result = await commandRouter.consumeIntent(
+          {kind: 'edit-field', key},
+          {surfaceHandle: inspectorSurfaceHandle, context: {commandId, slot, text, versionToken}},
+        );
+        if (onEdited) await onEdited(result);
+        succeeded = true;
+        return result;
+      } catch (error) {
+        // The error arm NEVER leaves a dead-end: offer a fresh authorized reread so
+        // the inspector reflects the image's current value (the user can retry).
+        if (onEditError) await onEditError(error, {reread: () => inspectSelected({authority, readBlockId})});
+        else throw error;
+        return null;
+      }
+    } finally {
+      editInFlight -= 1;
+      if (editInFlight === 0 && deferredObservation !== null) {
+        if (succeeded) {
+          // DRAIN-ON-SUCCESS: the deferred invalidation was self-observation of
+          // the edit's own committed write. Run the follow's reread NOW, on the
+          // serialized lane (so it can't interleave with a subsequent follow
+          // reread). This pairs the token to the current version and is the
+          // mutation -> observation -> reread acceptance property.
+          const deferredObjectId = deferredObservation.objectId;
+          deferredObservation = null;
+          // Fire-and-forget onto the lane; the follow loop's next event will
+          // observe nothing new (the cursor advanced) and idle. Errors here are
+          // the follow path's concern (onError), not the edit's.
+          enqueueReread(() => {
+            // Re-check the subject INSIDE the enqueued reread (not just at
+            // enqueue time): a selectObject during the defer window runs its OWN
+            // inspectSelected for the NEW subject (bypassing the lane) and pairs
+            // its token. If the subject has moved on by the time this drain runs,
+            // the deferred observation for the OLD subject is moot — skip it
+            // rather than re-present/re-pair the new subject with stale context.
+            const now = selectionModel.selectedSubject();
+            if (!now || now.objectId !== deferredObjectId) return null;
+            return inspectSelected({authority, readBlockId});
+          }).catch(() => {});
+        } else {
+          // CLEAR-ON-ERROR: the edit did not commit (denied) or conflicted on an
+          // external write. The error arm's reread() (if the caller takes it) is
+          // the recovery owner; a declined reread is re-observed by the follow
+          // loop's next poll. Draining here would double-reread against the error
+          // arm's recovery.
+          deferredObservation = null;
+        }
+      }
     }
   }
 
