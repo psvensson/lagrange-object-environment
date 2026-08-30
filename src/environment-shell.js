@@ -4,10 +4,17 @@
  * authorized root/reference NAVIGATOR pane beside a generic INSPECTOR pane,
  * arranged in a split composition.
  *
- * OWNERSHIP (narrow, fenced): the shell owns EXACTLY ONE coupling — "when the
- * semantic selection changes, choose/update the inspector view's Presentation."
- * Nothing else owns that today (SelectionModel owns selection state; the
- * Compositor owns views; neither couples them). The shell does NOT:
+ * OWNERSHIP (narrow, fenced): the shell owns TWO descriptor-local couplings:
+ *  (1) "when the semantic selection changes, choose/update the inspector view's
+ *      Presentation" (nothing else owns it: SelectionModel owns selection state;
+ *      the Compositor owns views; neither couples them);
+ *  (2) "resolve an INSPECTOR-local {kind:'edit-field', key, text} against the
+ *      CURRENT inspector descriptor (key -> writable slot) and attach the current
+ *      TRANSIENT versionToken, then route through CommandRouter" (the edit-field
+ *      row in docs/ownership.md). It does NOT dispatch, build Commands, or own
+ *      value semantics — CommandRouter retains semantic-intent -> Command/
+ *      authority/dispatch ownership.
+ * The shell does NOT:
  *  - read the image directly (every read goes through ObjectNavigator.navigate,
  *    which owns the unauthorized-ref/unavailable-ref materialization);
  *  - own authority (threaded per-call, never stored);
@@ -15,6 +22,8 @@
  *  - own the composition tree, focus, or rendering.
  * It is a HEADLESS, renderer-independent core: it consumes ObjectNavigator /
  * SelectionModel / Compositor through their public APIs and never imports DOM.
+ * The displayed inspector's versionToken is held as TRANSIENT concurrency state
+ * (paired with each successful read->presentOn; never in any descriptor).
  *
  * THE SEMANTIC LOOP:
  *   known root ref
