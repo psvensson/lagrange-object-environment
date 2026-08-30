@@ -39,6 +39,15 @@ pub mod projector;
 pub mod semantic_gtk;
 pub mod semantic_ui;
 
+// THROWAWAY 64j-A bridge host (Rust side of the Node<->Rust bridge). NOT part
+// of the Linux client architecture and NOT a stable API: it exists ONLY to
+// falsify the SEMANTIC host-portability claim (the unmodified JS core driving
+// the real LinuxRendererAdapter) and is DELETED when Bead 3zb embeds a JS
+// runtime in-process. Do NOT build production code on this module; it spawns a
+// Node child process and is a peer-process transport, not an embedded runtime.
+#[doc(hidden)]
+pub mod bridge;
+
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
