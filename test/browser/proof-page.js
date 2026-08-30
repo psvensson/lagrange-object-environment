@@ -237,7 +237,9 @@ window.__lagrangeProof = {
     });
     const compositor = createCompositor({rendererAdapter: adapter});
     const selectionModel = createSelectionModel();
-    const shell = createEnvironmentShell({navigator, selectionModel, compositor});
+    // writableSlots threaded so the shell injects parameters.writable into the
+    // inspector descriptor (the S4a path) — making obj-b's title editable in DOM.
+    const shell = createEnvironmentShell({navigator, selectionModel, compositor, writableSlots: ['slot-title']});
     await shell.openWorkspace(ref('obj-root'), {viewDescriptorFor: () => ({kind: 'webgpu-canvas', width: 200, height: 200})});
     // Wire the DOM activate-item intents to selection. The navigator view is
     // opened first, so its surface handle is browser-surface-0.

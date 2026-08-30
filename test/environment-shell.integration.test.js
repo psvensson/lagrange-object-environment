@@ -335,6 +335,25 @@ test('S4a: edit-field routes through CommandRouter to a REAL mutation; a stale t
   assert.equal(deniedReread.kind, 'inspector',
     'the denied WRITE leaves an INSPECTOR presentation (the read still succeeds), NOT an unauthorized-reference — a denied write is distinct from a denied read');
 
+  // --- C1 FALSIFIER: the versionToken NEVER appears in any serialized sink ---
+  // After the full flow (open -> select -> edit -> conflict -> retry -> denied),
+  // walk the Compositor's durableIntent and every presentationDescriptor's
+  // parameters and assert the token string is ABSENT — so it cannot reach the
+  // SemanticUi description, a Perspective persistence, or the renderer boundary.
+  const tokenStrings = [created.versionToken, shell._inspectorToken().token].filter(Boolean);
+  assert.ok(tokenStrings.length > 0, 'the test holds at least one real token to check for leaks');
+  const serializedSinks = [
+    JSON.stringify(compositor.durableIntent()),
+    ...compositor.durableIntent().map((v) => JSON.stringify(v.presentationDescriptor?.parameters ?? {})),
+    JSON.stringify(conflictReread.parameters),
+    JSON.stringify(deniedReread.parameters),
+  ];
+  for (const sink of serializedSinks) {
+    for (const token of tokenStrings) {
+      assert.ok(!sink.includes(token), `the versionToken must NEVER appear in a serialized sink (durableIntent / presentationDescriptor); found in: ${sink.slice(0, 80)}...`);
+    }
+  }
+
   await compositor.destroy();
 });
 
