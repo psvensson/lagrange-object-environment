@@ -922,6 +922,11 @@ function createImageClientAdapter(client) {
     observe,
     observePull,
     dispatch,
+    // The SINGLE owner of the probe's writable-slot set (the slots the mutation
+    // lane maps). count/flag are deliberately absent — read-only. The SemanticUi
+    // projector derives a field's editability from THIS list (S3), never from a
+    // duplicate of the mutation field map.
+    writableSlots: Object.freeze(PROBE_MUTATION_FIELDS.map((f) => f.slot)),
     refToEdgeString: (ref, imageId) => refToEdgeString(ref, imageId),
   });
   return api;

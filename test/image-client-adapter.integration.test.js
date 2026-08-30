@@ -223,6 +223,27 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
     assert.deepEqual(readDefaults.slots['probe-count'], {kind: 'integer', value: '0'});
     assert.deepEqual(readDefaults.slots['probe-flag'], {kind: 'boolean', value: false});
 
+    // READ-ONLY proof (S1 invariant): count/flag are NOT in the mutation lane's
+    // writable surface, and a title mutation leaves them untouched. The adapter
+    // exposes the single-owner writable-slot set; S3 derives editability from it.
+    assert.deepEqual([...adapter.writableSlots].sort(), ['probe-title'],
+      'only probe-title is writable; count/flag are read-only');
+    await adapter.mutateObject({
+      imageId: IMAGE, objectId: created.objectId, value: {title: 'My probe (renamed)'},
+      authority: grant(runtime, 'object/write', imagesApi.objectResource(IMAGE, created.objectId)),
+      blockId: IDS.mutationBlockId,
+    });
+    const afterRename = await adapter.readObject({
+      imageId: IMAGE, objectId: created.objectId,
+      authority: grant(runtime, 'object/read', imagesApi.objectResource(IMAGE, created.objectId)),
+      blockId: IDS.readBlockId,
+    });
+    assert.equal(afterRename.slots['probe-title'].value, 'My probe (renamed)');
+    assert.deepEqual(afterRename.slots['probe-count'], {kind: 'integer', value: '7'},
+      'a title mutation preserves the read-only count (unmapped slots are never written)');
+    assert.deepEqual(afterRename.slots['probe-flag'], {kind: 'boolean', value: true},
+      'a title mutation preserves the read-only flag');
+
     // Observation over the AUTHORIZED LANE: live-follow from the current end
     // replays no backlog, then a fresh create appears as a metadata-only
     // invalidation — identity + kind + opaque cursor, no record payload, no
@@ -591,9 +612,8 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
     const b64 = (bytes) => Buffer.from(bytes).toString('base64');
 
     // Two durable asset objects, each carrying a byte payload (base64) in the
-    // 'probe-title' text slot — the probe shape allows only probe-title/subject,
-    // so the durable bytes live there and resolveAssetBytes reads them via
-    // ref.slot = 'probe-title'.
+    // 'probe-title' text slot — the durable bytes live there and
+    // resolveAssetBytes reads them via ref.slot = 'probe-title'.
     const assetSlots = (bytesVal) => ({
       'probe-title': imagesApi.textValue(bytesVal),
       'probe-subject': imagesApi.objectRef(IMAGE, 'smalltalk/nil'),
