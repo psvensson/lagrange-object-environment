@@ -259,6 +259,17 @@ impl BridgeHost {
         seen
     }
 
+    /// Drain ALL pending worker events (non-blocking), returning them so the
+    /// caller can classify each (e.g. 'ready' vs 'preflight-error') without
+    /// losing any. Used by the acceptance preflight handshake.
+    pub fn drain_events(&self) -> Vec<Value> {
+        let mut out = Vec::new();
+        while let Ok(msg) = self.event_rx.try_recv() {
+            out.push(msg);
+        }
+        out
+    }
+
     /// Relay a GTK intent to the JS core as an event. Called by the host test
     /// after driving a GTK control (activate_gtk_action / edit_gtk_field).
     pub fn emit_intent(&mut self, surface_handle: &str, intent: &Intent) -> Result<(), String> {

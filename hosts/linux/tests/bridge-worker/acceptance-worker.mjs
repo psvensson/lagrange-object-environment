@@ -50,7 +50,35 @@ const {createObjectInspectorProvider, createUnavailableRefProvider, createUnauth
 // env for portability; default is the sibling checkout.
 const RUNTIME_URL = process.env.LAGRANGE_IMAGES_URL
   ?? pathToFileURL(new URL('../../../../../lagrange-images/src/runtime.js', import.meta.url).pathname).href;
-const imagesApi = await import(RUNTIME_URL);
+
+// 64j PREFLIGHT (non-vacuous acceptance): the native-JS-core portability gate
+// must HARD-FAIL when the sibling runtime is missing or unimportable — NEVER
+// interpret an import failure as an acceptable skip (unlike the ordinary
+// integration suite's skip-when-absent). On failure the worker emits a
+// structured {event:'preflight-error'} and exits non-zero BEFORE signalling
+// readiness, so the host fails fast with a named reason (not an opaque timeout).
+function preflightFail(reason) {
+  process.stdout.write(`${JSON.stringify({event: 'preflight-error', reason})}\n`);
+  console.error(`ACCEPTANCE-PREFLIGHT-ERROR: ${reason}`);
+  process.exit(2);
+}
+const imagesApi = await import(RUNTIME_URL).catch((error) => {
+  preflightFail(`the sibling lagrange-images runtime failed to import (${RUNTIME_URL}): ${error?.message ?? error}`);
+  return null; // unreachable (preflightFail exits), satisfies the type checker
+});
+// A successfully-imported module is not enough: the 64j proof drives the REAL
+// public API, so the entry points it uses must actually be present.
+const REQUIRED_RUNTIME_EXPORTS = [
+  'createRuntime', 'installSmalltalkKernel', 'defineClass', 'installCallableInterfaceV2',
+  'installImageCreationBinding', 'installImageMutationBinding', 'installImageObjectReadBinding',
+  'installImageObservationBinding', 'findSmalltalkKernel', 'objectRef', 'objectResource',
+  'parseObjectResource', 'objectVersionToken', 'textValue', 'packCompositeValue',
+  'unpackCompositeValue', 'normalizeTypeDeclarations', 'referencesOfValue',
+];
+const missing = REQUIRED_RUNTIME_EXPORTS.filter((name) => typeof imagesApi[name] === 'undefined');
+if (missing.length > 0) {
+  preflightFail(`the sibling lagrange-images runtime imported but is missing required public-API exports: ${missing.join(', ')}`);
+}
 
 const IMAGE = 'native-loop-image';
 const IDS = Object.freeze({
@@ -343,6 +371,36 @@ requestHandlers.set('editDenied', async ({key, text}) => {
   return {error: captured};
 });
 
+// A GENUINE stale-token conflict under active follow: advance the version
+// EXTERNALLY, then drive an edit through handleEditField WITHOUT yielding to the
+// follow loop in between — so the shell captures the pre-external (stale) token.
+// This is the deterministic conflict: handleEditField reads the held token
+// synchronously at entry, before any follow reread can refresh it. Optimistic
+// concurrency must REJECT the stale edit (NOT last-writer-wins); the recovery
+// reread shows the current (external) value.
+requestHandlers.set('staleConflictEdit', async ({externalTitle, key, text}) => {
+  await session.adapter.mutateObject({
+    imageId: IMAGE, objectId: session.created.objectId, value: {title: externalTitle},
+    authority: session.writeAuthority(session.created.objectId), blockId: IDS.mutationBlockId,
+  });
+  // NO await of the follow loop here: handleEditField captures the still-stale
+  // token synchronously. (The follow loop runs on the JS event loop between
+  // awaits; by not yielding, we keep the token stale for this edit.)
+  let captured = null;
+  let rereadValue = null;
+  await session.shell.handleEditField({
+    key, text, commandId: 'set-title', commandRouter: session.commandRouter,
+    inspectorSurfaceHandle: session.inspectorSurfaceHandle,
+    authority: session.readAuthority(session.created.objectId), readBlockId: IDS.readBlockId,
+    onEditError: async (error, {reread}) => {
+      captured = {name: error.name};
+      const d = await reread();
+      rereadValue = d?.parameters?.fields?.['probe-title']?.value ?? null;
+    },
+  });
+  return {error: captured, rereadValue};
+});
+
 // Stop the observation->reread lane (used to isolate the edit from the
 // follow race; the integration test stops follow before editing).
 requestHandlers.set('unfollow', async () => {
@@ -351,6 +409,37 @@ requestHandlers.set('unfollow', async () => {
     session.follow = null;
   }
   return {following: false};
+});
+
+// C1 FALSIFIER (native loop): the versionToken must NEVER appear in any sink
+// that crosses (or could cross) the bridge — the Compositor's durableIntent,
+// every presentationDescriptor's parameters, and the GTK-visible text. The token
+// itself must NEVER cross the bridge, so this handler computes the leak check
+// ENTIRELY worker-side and returns ONLY booleans (never the token). It checks
+// the CURRENT token plus the created object's token (both real tokens).
+requestHandlers.set('c1Check', async ({gtkVisibleText = []} = {}) => {
+  const current = session.shell._inspectorToken().token;
+  const createdToken = session.created.versionToken;
+  const tokenStrings = [...new Set([current, createdToken].filter(Boolean))];
+  // Sinks that would cross the bridge: the durable intent (the Perspective-shaped
+  // data), each presentation descriptor's parameters (what attachPresentation
+  // sends to the host), and the GTK-visible text the host read back.
+  const sinks = [
+    JSON.stringify(session.compositor.durableIntent()),
+    ...session.compositor.durableIntent().map((v) => JSON.stringify(v.presentationDescriptor?.parameters ?? {})),
+    JSON.stringify(gtkVisibleText),
+  ];
+  let leaks = 0;
+  for (const sink of sinks) {
+    for (const token of tokenStrings) {
+      if (sink.includes(token)) leaks += 1;
+    }
+  }
+  return {
+    tokensChecked: tokenStrings.length, // >0 proves we actually checked real tokens
+    sinksChecked: sinks.length,
+    leaks, // MUST be 0
+  };
 });
 
 // Graceful shutdown.
