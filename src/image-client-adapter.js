@@ -32,11 +32,15 @@ import {decodePerspective, encodePerspectiveRecord, encodePresentations} from '.
 const PROBE_SHAPE_SLOTS = Object.freeze([
   {id: 'probe-title', name: 'title'},
   {id: 'probe-subject', name: 'subject'},
+  {id: 'probe-count', name: 'count'},
+  {id: 'probe-flag', name: 'flag'},
 ]);
 
 // The callable-interface/v2 record type for the probe: title is a leaf string,
 // subject is an edge target id travelling as a string (the lane canonicalizes
-// it to a ref host-side). Declared once so the interface and the call agree.
+// it to a ref host-side), count/flag are the canonical scalar Values (integer
+// s32, boolean bool) that prove browsing already handles heterogeneous scalars.
+// Declared once so the interface and the call agree.
 const PROBE_TYPE_NAME = 'probe';
 const PROBE_TYPE_DECLARATIONS = Object.freeze({
   [PROBE_TYPE_NAME]: Object.freeze({
@@ -44,6 +48,8 @@ const PROBE_TYPE_DECLARATIONS = Object.freeze({
     fields: Object.freeze([
       Object.freeze({name: 'title', type: 'string'}),
       Object.freeze({name: 'subject', type: 'string'}),
+      Object.freeze({name: 'count', type: 's32'}),
+      Object.freeze({name: 'flag', type: 'bool'}),
     ]),
   }),
 });
@@ -51,7 +57,12 @@ const PROBE_TYPE_DECLARATIONS = Object.freeze({
 // The probe mutation lane (image-mutation-binding/v1, ADR 0042/0010): writes a
 // leaf slot on an EXISTING object under object/write + an optimistic-concurrency
 // version token. Only the leaf title is mutable here (v1 slot writes are
-// leaf-only); the type carries just the mutable field.
+// leaf-only). The substrate requires every mutation record field be MAPPED to a
+// slot (image-mutation-binding.js assertFieldMappingCovers), so the record
+// carries ONLY the writable title — count/flag are NOT in the mutation type at
+// all. They are real browseable scalars on the object (created via the creation
+// lane) but deliberately read-only: there is no writable path to them in this
+// slice. This is the minimal honest S1 — no clobber risk, no read-modify-write.
 const PROBE_MUTATION_TYPE_NAME = 'probe-mutation';
 const PROBE_MUTATION_TYPE_DECLARATIONS = Object.freeze({
   [PROBE_MUTATION_TYPE_NAME]: Object.freeze({
@@ -61,6 +72,7 @@ const PROBE_MUTATION_TYPE_DECLARATIONS = Object.freeze({
     ]),
   }),
 });
+// Only probe-title is writable: the mutation binding maps the title field alone.
 const PROBE_MUTATION_FIELDS = Object.freeze([
   Object.freeze({name: 'title', slot: 'probe-title'}),
 ]);
@@ -334,6 +346,8 @@ function createImageClientAdapter(client) {
         fields: [
           {name: 'title', slot: 'probe-title', edge: false},
           {name: 'subject', slot: 'probe-subject', edge: true},
+          {name: 'count', slot: 'probe-count', edge: false},
+          {name: 'flag', slot: 'probe-flag', edge: false},
         ],
         bindingId,
         blockId,
@@ -426,12 +440,14 @@ function createImageClientAdapter(client) {
    * {objectId, versionToken}. Authority (object/create on the class, plus
    * object/edge-write on the subject target) is passed through per call.
    */
-  async function createObject({imageId, classId, title, subject, authority, blockId}) {
+  async function createObject({imageId, classId, title, subject, count = 0, flag = false, authority, blockId}) {
     const subjectString = refToEdgeString(subject, imageId);
     const types = normalizeTypeDeclarations(PROBE_TYPE_DECLARATIONS);
+    // The creation record is OOM-complete (every declared field present), so the
+    // adapter owns the canonical scalar defaults for count/flag when omitted.
     const activation = await invocations.invokeBlock(objectRef(imageId, blockId), [
       textValue(classId),
-      packCompositeValue({title, subject: subjectString}, PROBE_TYPE_NAME, types),
+      packCompositeValue({title, subject: subjectString, count, flag}, PROBE_TYPE_NAME, types),
     ]);
     const result = await executor.execute(activation, {authority});
     const token = result?.value;

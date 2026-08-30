@@ -158,6 +158,8 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
       slots: {
         'probe-title': imagesApi.textValue('target'),
         'probe-subject': imagesApi.objectRef(IMAGE, 'smalltalk/nil'),
+        'probe-count': imagesApi.integerValue(0),
+        'probe-flag': imagesApi.booleanValue(false),
       },
     });
 
@@ -174,6 +176,8 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
       classId,
       title: 'My probe',
       subject: {kind: 'ref', imageId: IMAGE, objectId: 'subject-target'},
+      count: 7,
+      flag: true,
       authority,
       blockId: IDS.blockId,
     });
@@ -193,6 +197,31 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
       imageId: IMAGE,
       objectId: 'subject-target',
     });
+    // S1: the probe carries REAL browseable scalar Values. count/flag round-trip
+    // as canonical integer/boolean and are READ-ONLY (not in the mutation lane);
+    // only probe-title is writable. Canonical integer carries value as a decimal
+    // string (BigInt-safe); the projector's valueText renders it as '7'.
+    assert.deepEqual(read.slots['probe-count'], {kind: 'integer', value: '7'});
+    assert.deepEqual(read.slots['probe-flag'], {kind: 'boolean', value: true});
+
+    // Defaults: count/flag omitted -> seeded 0/false (the creation record is
+    // OOM-complete; the adapter owns the canonical scalar defaults).
+    const createdDefaults = await adapter.createObject({
+      imageId: IMAGE,
+      classId,
+      title: 'Defaults probe',
+      subject: {kind: 'ref', imageId: IMAGE, objectId: 'subject-target'},
+      authority,
+      blockId: IDS.blockId,
+    });
+    const readDefaults = await adapter.readObject({
+      imageId: IMAGE,
+      objectId: createdDefaults.objectId,
+      authority: grant(runtime, 'object/read', imagesApi.objectResource(IMAGE, createdDefaults.objectId)),
+      blockId: IDS.readBlockId,
+    });
+    assert.deepEqual(readDefaults.slots['probe-count'], {kind: 'integer', value: '0'});
+    assert.deepEqual(readDefaults.slots['probe-flag'], {kind: 'boolean', value: false});
 
     // Observation over the AUTHORIZED LANE: live-follow from the current end
     // replays no backlog, then a fresh create appears as a metadata-only
@@ -512,6 +541,8 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
       slots: {
         'probe-title': imagesApi.textValue('target'),
         'probe-subject': imagesApi.objectRef(IMAGE, 'smalltalk/nil'),
+        'probe-count': imagesApi.integerValue(0),
+        'probe-flag': imagesApi.booleanValue(false),
       },
     });
 
@@ -566,6 +597,8 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
     const assetSlots = (bytesVal) => ({
       'probe-title': imagesApi.textValue(bytesVal),
       'probe-subject': imagesApi.objectRef(IMAGE, 'smalltalk/nil'),
+      'probe-count': imagesApi.integerValue(0),
+      'probe-flag': imagesApi.booleanValue(false),
     });
     await runtime.images.putObject(IMAGE, {
       id: 'asset-a',
@@ -618,6 +651,8 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
       slots: {
         'probe-title': imagesApi.textValue('not-bytes'),
         'probe-subject': imagesApi.objectRef(IMAGE, 'smalltalk/nil'),
+        'probe-count': imagesApi.integerValue(0),
+        'probe-flag': imagesApi.booleanValue(false),
       },
     });
     await assert.rejects(
@@ -650,6 +685,8 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
         slots: {
           'probe-title': imagesApi.textValue(title),
           'probe-subject': imagesApi.objectRef(IMAGE, 'smalltalk/nil'),
+          'probe-count': imagesApi.integerValue(0),
+          'probe-flag': imagesApi.booleanValue(false),
         },
       });
     }
@@ -683,6 +720,8 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
         slots: {
           'probe-title': imagesApi.textValue(title),
           'probe-subject': imagesApi.objectRef(IMAGE, 'smalltalk/nil'),
+          'probe-count': imagesApi.integerValue(0),
+          'probe-flag': imagesApi.booleanValue(false),
         },
       }, {expectedVersion: existing._version});
     }
