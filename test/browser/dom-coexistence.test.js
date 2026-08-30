@@ -115,6 +115,37 @@ test('CI: DOM tool realizations + a GLB Component coexist behind one adapter (in
   }
 });
 
+// F3: the PRODUCTION DOM edit path — the real adapter's DOM realizer builds the
+// inspector <input>, and Enter commits through the adapter's REAL emitIntent
+// seam (not a test-harness copy of the intent literal).
+test('CI: the production DOM edit path emits a raw-string edit-field intent through the real adapter seam', {skip: !available && 'no Chrome available'}, async () => {
+  const {server, browser, page} = await launch();
+  try {
+    const result = await page.evaluate(async () => {
+      const S = await window.__lagrangeProof.openCoexistenceSession();
+      const intents = [];
+      S.onIntent((intent) => intents.push(intent));
+      // The inspector's writable slot-title is an <input>; slot-count is not.
+      const inputs = S.inspectorFieldInputs();
+      const inputValues = inputs.map((i) => i.value);
+      if (inputs[0]) {
+        inputs[0].value = 'Root-edited';
+        inputs[0].dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
+      }
+      await S.destroyAll();
+      return {inputValues, intents};
+    });
+    // Exactly one editable input (the writable slot-title, value 'Root').
+    assert.deepEqual(result.inputValues, ['Root'], 'only the writable field renders an <input> in the real adapter');
+    // Enter committed a RAW-STRING edit-field intent through the production seam.
+    assert.deepEqual(result.intents, [{kind: 'edit-field', key: 0, text: 'Root-edited'}],
+      'the production DOM realizer emits a raw-string edit-field intent via the adapter emitIntent seam');
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});
+
 test('CI: the real navigator -> selection -> inspector loop drives through real DOM', {skip: !available && 'no Chrome available'}, async () => {
   const {server, browser, page} = await launch();
   try {
@@ -213,6 +244,9 @@ test('CI: the browser realizer renders the checked-in SemanticUi fixtures (all f
       insp.editField(0, 'B2');
       out.inspEditIntent = insp.takeIntents();
       insp.dispose();
+      // The canonical cross-host intent fixture (the SAME bytes the GTK test
+      // asserts its serialized intent against).
+      out.canonicalEditIntent = await (await fetch('../fixtures/semantic-ui/edit-field-intent.json')).json();
       // unavailable + unauthorized: heading + an explicit reason line, no refs.
       const un = await window.__lagrangeProof.renderSemanticUiFixture('../fixtures/semantic-ui/unavailable.json', 'unavailable-reference');
       out.unavailable = {heading: un.heading, reason: un.reason, buttons: un.buttons};
@@ -240,6 +274,11 @@ test('CI: the browser realizer renders the checked-in SemanticUi fixtures (all f
     assert.deepEqual(result.insp.fieldInputs, ['B'], 'only the writable field renders an <input>');
     assert.deepEqual(result.inspEditIntent, [{kind: 'edit-field', key: 0, text: 'B2'}],
       'Enter on the editable input emits a raw-string edit-field intent (descriptor-local key, no ref)');
+    // CROSS-HOST INTENT BYTES (F2): the DOM edit intent deep-equals the SAME
+    // canonical fixture the GTK test asserts its serialized intent against — one
+    // source of truth for the intent shape/kind-string/key across both hosts.
+    assert.deepEqual(result.inspEditIntent[0], result.canonicalEditIntent,
+      'the DOM edit-field intent matches the canonical cross-host bytes (edit-field-intent.json)');
     // unavailable + unauthorized (the previously-uncovered kinds)
     assert.equal(result.unavailable.heading, 'unavailable-reference');
     assert.equal(result.unavailable.reason, 'Unavailable: obj-gone (not found)');

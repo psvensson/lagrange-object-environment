@@ -141,6 +141,18 @@ fn fixtures_drive_real_gtk_controls_and_identical_intents() {
         "Enter/activate commits a raw-string edit intent with the descriptor-local key"
     );
     assert!(insp.edit_field(1, "x").is_none(), "no editable field at key 1 (slot-count is read-only)");
+    // CROSS-HOST INTENT BYTES (F2): the GTK edit intent SERIALIZES to the exact
+    // same JSON the browser DOM emits — asserted against the checked-in
+    // canonical intent fixture, not a parallel literal. This pins the intent
+    // shape/kind-string/key across both hosts from one source of truth.
+    let intent = insp.intents.borrow().last().cloned().expect("an edit intent was recorded");
+    let intent_json = serde_json::to_value(&intent).expect("the intent serializes");
+    let canonical: serde_json::Value =
+        serde_json::from_str(&read_fixture("edit-field-intent.json")).expect("the canonical intent fixture parses");
+    assert_eq!(
+        intent_json, canonical,
+        "the GTK edit-field intent serializes to the SAME bytes the DOM emits (edit-field-intent.json)"
+    );
 
     // --- unavailable + unauthorized: reason lines, no refs/actions.
     let un = realize(&parse_semantic_ui(&read_fixture("unavailable.json")).unwrap());

@@ -70,13 +70,17 @@ const FORBIDDEN_KEYS: &[&str] = &[
     "y", "width", "height", "left", "top", "coordinates", "bounds", "geometry",
 ];
 
-// Return the integral value of a JSON number, matching JS Number.isInteger
-// semantics: accepts `1`, `1.0`, `1e3`, `-0` (all integral); rejects `1.5`,
-// `-1.0`, non-numbers. serde's as_i64/as_u64 alone would reject float-typed
-// tokens even when integral, which would drift from the JS validator.
+// Return the value of a JSON number that is a non-negative SAFE integer,
+// matching JS Number.isSafeInteger semantics: accepts `1`, `1.0`, `1e3`, `-0`;
+// rejects `1.5`, `-1.0`, non-numbers, AND any magnitude above 2^53-1 (f64 loses
+// integer precision there, and the Rust i64 cast would saturate / the value
+// would not round-trip identically cross-host). serde's as_i64/as_u64 alone
+// would reject float-typed tokens even when integral, which would drift from
+// the JS validator.
+const MAX_SAFE_INTEGER_F64: f64 = 9007199254740991.0; // 2^53 - 1 (JS Number.MAX_SAFE_INTEGER)
 fn integral_number(v: &serde_json::Value) -> Option<u64> {
     let f = v.as_f64()?;
-    if f.is_finite() && f.fract() == 0.0 && f >= 0.0 {
+    if f.is_finite() && f.fract() == 0.0 && f >= 0.0 && f <= MAX_SAFE_INTEGER_F64 {
         Some(f as u64)
     } else {
         None

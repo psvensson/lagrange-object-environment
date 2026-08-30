@@ -188,7 +188,8 @@ window.__lagrangeProof = {
     const inspectorDescriptor = {
       kind: 'inspector',
       subject: {kind: 'ref', imageId: 'img', objectId: 'obj-root'},
-      parameters: {fields: {'slot-title': {kind: 'text', value: 'Root'}}, references: []},
+      // slot-title is editable (writable); slot-count is a read-only scalar.
+      parameters: {fields: {'slot-title': {kind: 'text', value: 'Root'}, 'slot-count': {kind: 'int', value: 17}}, writable: ['slot-title'], references: []},
     };
     const glbDescriptor = {kind: 'glb', asset: 'main-model'};
     const navHandle = await open(navigatorDescriptor, 200, 200);
@@ -200,6 +201,9 @@ window.__lagrangeProof = {
       readGlb: () => adapter.readRenderedPixels(glbHandle),
       toolRoots: () => Array.from(document.querySelectorAll('#mount .lagrange-tool')),
       referenceButtons: () => Array.from(document.querySelectorAll('#mount .lagrange-tool-references button')),
+      // The PRODUCTION edit path: the real inspector <input> realized by the
+      // adapter's DOM realizer, committing through the adapter's emitIntent seam.
+      inspectorFieldInputs: () => Array.from(document.querySelectorAll('#mount .lagrange-tool-inspector .lagrange-tool-field-input')),
       onIntent: (fn) => adapter.onIntent(fn),
       destroyAll: () => adapter.destroyAll(),
     };

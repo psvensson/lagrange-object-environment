@@ -23,14 +23,17 @@ use std::rc::Rc;
 use crate::semantic_ui::{Node, SemanticUi};
 
 /// A plain-data intent emitted by a control — identical shape to the browser's
-/// `{kind:'activate-item', key}` or `{kind:'edit-field', key, text}`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `{kind:'activate-item', key}` or `{kind:'edit-field', key, text}`. Serialized
+/// to the EXACT same JSON the DOM emits (text omitted when absent), so a test
+/// can assert cross-host intent BYTES, not just parallel per-host literals.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Intent {
     pub kind: String,
     pub key: i64,
     /// The RAW-STRING payload of an edit-field intent (None for activate-item).
     /// Never a parsed value: text is the only editable scalar in this slice, and
     /// raw text has one host-neutral interpretation (the canonical text value).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
 }
 

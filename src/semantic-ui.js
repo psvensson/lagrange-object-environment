@@ -117,8 +117,12 @@ function validateNode(node, path) {
         if (node.editable !== 'text') {
           fail(`${path}.field.editable must be 'text' (the only editable scalar in this slice), got ${JSON.stringify(node.editable)}`);
         }
-        if (!Number.isInteger(node.key) || node.key < 0) {
-          fail(`${path}.field.key must be a non-negative integer (a descriptor-local field key)`);
+        // Safe-integer cap (not just integral): a descriptor-local key must
+        // survive the cross-host round-trip IDENTICALLY. Rust i64 saturate /
+        // reject above 2^63, and f64 loses integer precision above 2^53, so the
+        // key domain is non-negative SAFE integers on BOTH validators.
+        if (!Number.isSafeInteger(node.key) || node.key < 0) {
+          fail(`${path}.field.key must be a non-negative safe integer (a descriptor-local field key)`);
         }
       }
       break;
@@ -131,8 +135,9 @@ function validateNode(node, path) {
     }
     case 'action': {
       if (typeof node.label !== 'string') fail(`${path}.action.label must be a string`);
-      if (!Number.isInteger(node.key) || node.key < 0) {
-        fail(`${path}.action.key must be a non-negative integer (a descriptor-local item key)`);
+      // Safe-integer cap (same cross-host identity rule as field.key).
+      if (!Number.isSafeInteger(node.key) || node.key < 0) {
+        fail(`${path}.action.key must be a non-negative safe integer (a descriptor-local item key)`);
       }
       break;
     }
