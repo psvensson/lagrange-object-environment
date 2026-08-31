@@ -120,6 +120,47 @@ impl Harness {
         }
     }
 
+    /// Pump + poll the worker's tokenState until the shell's token is paired with
+    /// `object_id` AND fresh, or fail after a deadline. CAUSAL: waits for the
+    /// shell to actually pair the token for the inspected object (not for some
+    /// GTK text to appear, which can be satisfied by stale/entry text).
+    fn wait_token_paired(&mut self, object_id: &str, timeout: Duration) -> Value {
+        let start = std::time::Instant::now();
+        loop {
+            let ts = self.call("tokenState", json!({})).expect("tokenState");
+            let paired = ts.get("objectId").and_then(|s| s.as_str()) == Some(object_id)
+                && ts.get("hasToken").and_then(|b| b.as_bool()) == Some(true)
+                && ts.get("tokenIsFresh").and_then(|b| b.as_bool()) == Some(true);
+            if paired {
+                return ts;
+            }
+            if start.elapsed() > timeout {
+                panic!("the shell's token was not paired+fresh for {object_id} within {timeout:?}; last tokenState: {ts}");
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// Pump + poll the worker's `title` (the IMAGE state via readObject) until it
+    /// equals `want`, or fail after a deadline. CAUSAL: waits for the edit's
+    /// mutation to actually COMMIT to the image (an async handleEditField may not
+    /// have committed when a single read happens). Unlike the GTK-entry text
+    /// (which holds the typed value before commit), this distinguishes a real
+    /// commit from a non-commit.
+    fn wait_image_title(&mut self, want: &str, timeout: Duration) -> Value {
+        let start = std::time::Instant::now();
+        loop {
+            let t = self.call("title", json!({})).expect("title");
+            if t.get("title").and_then(|s| s.as_str()) == Some(want) {
+                return t;
+            }
+            if start.elapsed() > timeout {
+                panic!("the image title did not become {want:?} within {timeout:?} (the edit did not commit); last title: {t}");
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
     /// Pump until the GTK pane's visible text contains a node matching `want`,
     /// or fail after a deadline. `want` matched as a substring (e.g. the
     /// "Inspector: <id>" heading) or exactly (e.g. a field value).
@@ -182,9 +223,11 @@ fn native_js_core_loop() {
     // The inspector's editable title field shows the original value.
     let insp_text = h.adapter.gtk_visible_text(&insp_handle).expect("insp text");
     assert!(insp_text.iter().any(|t| t == "original"), "inspector shows B's title: {insp_text:?}");
-    // The shell's transient token is now paired with B (proved via a boolean,
-    // NEVER the token itself crossing the bridge).
-    let token_state = h.call("tokenState", json!({})).expect("tokenState");
+    // The shell's transient token is now paired with B (proved via booleans, NEVER
+    // the token itself crossing the bridge). CAUSAL: poll until the shell has
+    // ACTUALLY paired the token for B (a single read could race the navigation's
+    // presentOn/token-pairing and see a null token — the MODE-A flake).
+    let token_state = h.wait_token_paired(&created_id, Duration::from_secs(10));
     assert_eq!(token_state.get("objectId").and_then(|s| s.as_str()), Some(created_id.as_str()));
     assert_eq!(token_state.get("hasToken").and_then(|b| b.as_bool()), Some(true));
     assert_eq!(token_state.get("tokenIsFresh").and_then(|b| b.as_bool()), Some(true),
@@ -202,7 +245,7 @@ fn native_js_core_loop() {
     // externally-written value. This is the observation leg of the loop.
     h.call("externalMutate", json!({"title": "observed-externally"})).expect("external mutate");
     h.wait_gtk_text(&insp_handle, "observed-externally", Duration::from_secs(10));
-    let obs_title = h.call("title", json!({})).expect("title after observation");
+    let obs_title = h.wait_image_title("observed-externally", Duration::from_secs(10));
     assert_eq!(obs_title.get("title").and_then(|s| s.as_str()), Some("observed-externally"),
         "the observation reread reflects the image's current value (not a shadow cache)");
     // The reread also re-paired the shell's transient token to the current version.
@@ -222,15 +265,14 @@ fn native_js_core_loop() {
     let edit_intent = h.adapter.edit_gtk_field(&insp_handle, 0, "edited-natively").expect("edit seam").expect("an edit intent");
     assert_eq!(edit_intent, Intent::edit_field(0, "edited-natively".to_string()));
     h.host.emit_intent(&insp_handle, &edit_intent).expect("relay edit intent");
-    // The deferred reread presentOn -> the GTK inspector shows the committed value
-    // (NOT merely the typed text still sitting in the entry). This is the strong
-    // signal: it distinguishes a real commit+reread from a non-commit. First let
-    // the edit settle (the mutation commits, the olm barrier defers then drains
-    // the self-observation reread).
+    // The IMAGE state (read via the worker's readObject) is the STRONG signal that
+    // distinguishes a real commit from a non-commit — the GTK entry holds the
+    // typed text BEFORE commit, so it cannot discriminate. CAUSAL: poll the image
+    // title until the edit's mutation has actually COMMITTED (handleEditField is
+    // async; a single read could race the commit — the MODE-B flake).
+    h.wait_image_title("edited-natively", Duration::from_secs(10));
+    // The deferred reread presentOn -> the GTK inspector shows the committed value.
     h.wait_gtk_text(&insp_handle, "edited-natively", Duration::from_secs(10));
-    // The IMAGE state (read via the worker's readObject) confirms the mutation.
-    let title = h.call("title", json!({})).expect("read title");
-    assert_eq!(title.get("title").and_then(|s| s.as_str()), Some("edited-natively"));
     // The deferred reread re-paired the transient token to the post-edit version
     // (proves the race is GONE — the barrier did not leave the token stale). Poll
     // until the fire-and-forget drain lands.
@@ -241,11 +283,17 @@ fn native_js_core_loop() {
     // --- FLOW 4 (stale-token conflict/recovery, follow ACTIVE) ----------------
     // Optimistic concurrency is preserved (the olm barrier is NOT last-writer-
     // wins): a genuinely external write must STILL conflict. staleConflictEdit
-    // advances the version EXTERNALLY then drives handleEditField without yielding
-    // to the follow loop, so the shell captures the pre-external (stale) token ->
-    // CommandConflictError. The recovery reread shows the CURRENT value.
+    // advances the version EXTERNALLY then drives handleEditField; it PROVES
+    // (worker-side, boolean only, via the held-token/current-version comparison)
+    // that the edit used the STALE pre-external token -> CommandConflictError.
+    // The recovery reread shows the CURRENT value.
     let conflict = h.call("staleConflictEdit", json!({"externalTitle": "external-advance", "key": 0, "text": "stale-edit"}))
         .expect("stale conflict edit");
+    assert_eq!(
+        conflict.get("usedStaleToken").and_then(|b| b.as_bool()),
+        Some(true),
+        "the conflicting edit must have used the STALE pre-external token (non-vacuous conflict, not a timing artifact): {conflict}"
+    );
     assert_eq!(
         conflict.get("error").and_then(|e| e.get("name")).and_then(|n| n.as_str()),
         Some("CommandConflictError"),
@@ -259,7 +307,7 @@ fn native_js_core_loop() {
     // The recovery reread's presentOn flows over the bridge -> the GTK inspector
     // shows the current value (no dead-end; the user can continue).
     h.wait_gtk_text(&insp_handle, "external-advance", Duration::from_secs(10));
-    let after_conflict = h.call("title", json!({})).expect("title after conflict");
+    let after_conflict = h.wait_image_title("external-advance", Duration::from_secs(10));
     assert_eq!(after_conflict.get("title").and_then(|s| s.as_str()), Some("external-advance"),
         "the stale edit did NOT clobber the external write");
 
@@ -270,7 +318,7 @@ fn native_js_core_loop() {
         Some("CommandAuthorizationError"),
         "a denied WRITE -> CommandAuthorizationError (distinct from an unauthorized read)"
     );
-    let after_denied = h.call("title", json!({})).expect("title after denied");
+    let after_denied = h.wait_image_title("external-advance", Duration::from_secs(10));
     assert_eq!(after_denied.get("title").and_then(|s| s.as_str()), Some("external-advance"),
         "a denied write mutated nothing");
     // The inspector is still usable (shows the current value; no dead-end).

@@ -372,20 +372,35 @@ requestHandlers.set('editDenied', async ({key, text}) => {
 });
 
 // A GENUINE stale-token conflict under active follow: advance the version
-// EXTERNALLY, then drive an edit through handleEditField WITHOUT yielding to the
-// follow loop in between — so the shell captures the pre-external (stale) token.
-// This is the deterministic conflict: handleEditField reads the held token
-// synchronously at entry, before any follow reread can refresh it. Optimistic
+// EXTERNALLY, then drive an edit through handleEditField. The shell reads its
+// held token at entry; we PROVE (worker-side, boolean only) that the edit used
+// the STALE pre-external token — not merely that a conflict happened. Optimistic
 // concurrency must REJECT the stale edit (NOT last-writer-wins); the recovery
 // reread shows the current (external) value.
 requestHandlers.set('staleConflictEdit', async ({externalTitle, key, text}) => {
+  // Capture the shell's CURRENT held token (the pre-external one) so we can PROVE
+  // (worker-side, boolean only) that the edit below used the STALE token — not
+  // merely that a conflict happened to occur. The token itself never crosses.
+  const preExternalToken = session.shell._inspectorToken().token;
   await session.adapter.mutateObject({
     imageId: IMAGE, objectId: session.created.objectId, value: {title: externalTitle},
     authority: session.writeAuthority(session.created.objectId), blockId: IDS.mutationBlockId,
   });
-  // NO await of the follow loop here: handleEditField captures the still-stale
-  // token synchronously. (The follow loop runs on the JS event loop between
-  // awaits; by not yielding, we keep the token stale for this edit.)
+  // The image's CURRENT version token AFTER the external write (a fresh read).
+  const afterExternal = await session.adapter.readObject({
+    imageId: IMAGE, objectId: session.created.objectId,
+    authority: session.readAuthority(session.created.objectId), blockId: IDS.readBlockId,
+  });
+  const currentToken = afterExternal?.versionToken ?? null;
+  // The shell reads its held token SYNCHRONOUSLY at handleEditField entry (no
+  // monkey-patch needed): the token it will attach is the one held RIGHT NOW.
+  const tokenAtEditEntry = session.shell._inspectorToken().token;
+  // usedStaleToken: the edit used the pre-external held token, which differs from
+  // the image's current version (so it is genuinely stale). This is the
+  // non-vacuous proof — not a timing assumption.
+  const usedStaleToken = tokenAtEditEntry !== null
+    && tokenAtEditEntry === preExternalToken
+    && preExternalToken !== currentToken;
   let captured = null;
   let rereadValue = null;
   await session.shell.handleEditField({
@@ -398,7 +413,7 @@ requestHandlers.set('staleConflictEdit', async ({externalTitle, key, text}) => {
       rereadValue = d?.parameters?.fields?.['probe-title']?.value ?? null;
     },
   });
-  return {error: captured, rereadValue};
+  return {error: captured, rereadValue, usedStaleToken};
 });
 
 // Stop the observation->reread lane (used to isolate the edit from the
