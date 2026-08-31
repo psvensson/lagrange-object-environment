@@ -64,6 +64,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: lagrange-object-environment
+      # The 64j native JS-core acceptance (native_js_loop) drives the REAL
+      # lagrange-images runtime from the sibling checkout (consumed through its
+      # public API only). Check it out as a sibling so the acceptance's
+      # non-vacuous preflight finds it (a missing sibling is an acceptance
+      # FAILURE, never a skip).
+      - name: Check out lagrange-images (sibling, for the 64j native acceptance runtime)
+        uses: actions/checkout@v4
+        with:
+          repository: psvensson/lagrange-images
+          path: lagrange-images
       # Pin the toolchain explicitly: rust-toolchain.toml lives at hosts/linux/
       # (nested), so the action (running at repo root) might not select it;
       # wasmtime 47 needs >= 1.94. Keep this in sync with
@@ -85,5 +97,5 @@ jobs:
       # under Xvfb (the L1 offscreen GPU tests are unaffected by a display).
       # GTK is main-thread-only, so the GTK widget test is a single #[test].
       - name: Native Linux host proof (L1 Component graphics + L2b GTK semantic UI)
-        working-directory: hosts/linux
+        working-directory: lagrange-object-environment/hosts/linux
         run: xvfb-run -a -s "-screen 0 1280x1024x24" cargo test

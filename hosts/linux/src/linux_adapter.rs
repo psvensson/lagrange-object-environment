@@ -203,6 +203,20 @@ impl LinuxRendererAdapter {
         })
     }
 
+    /// Host-side intent seam (NOT a contract op; the native analogue of typing
+    /// into a DOM <input> + Enter): set the text of the editable field with the
+    /// given descriptor-local key on this surface's GTK realization and commit
+    /// it (Enter/activate), returning the emitted `{kind:'edit-field', key,
+    /// text}` intent. Returns None for a non-GTK handle, a stale key, or a
+    /// read-only field.
+    pub fn edit_gtk_field(&self, handle: &str, key: i64, text: &str) -> Result<Option<Intent>, String> {
+        let entry = self.require_live(handle, "edit_gtk_field")?;
+        Ok(match &entry.realization {
+            Some(Realization::Gtk { realization, .. }) => realization.edit_field(key, text),
+            _ => None,
+        })
+    }
+
     /// The descriptor behind a GTK surface's current realization (host-side;
     /// NOT a contract op): the fixture resolves key->ref against this via
     /// `descriptor_references`, replicating how `EnvironmentShell` reads the
@@ -231,6 +245,16 @@ impl LinuxRendererAdapter {
         let entry = self.require_live(handle, "gtk_action_labels")?;
         Ok(match &entry.realization {
             Some(Realization::Gtk { realization, .. }) => realization.action_labels(),
+            _ => Vec::new(),
+        })
+    }
+
+    /// The editable field values of a GTK surface, keyed by descriptor-local
+    /// field key (host-side; NOT a contract op). Empty for a GLB handle.
+    pub fn gtk_editable_texts(&self, handle: &str) -> Result<Vec<(i64, String)>, String> {
+        let entry = self.require_live(handle, "gtk_editable_texts")?;
+        Ok(match &entry.realization {
+            Some(Realization::Gtk { realization, .. }) => realization.editable_texts_keyed(),
             _ => Vec::new(),
         })
     }

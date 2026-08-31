@@ -160,6 +160,42 @@ test('bindDomIntents routes a DOM activate-item from the navigator surface to se
   await compositor.destroy();
 });
 
+test('bindIntents routes an edit-field intent from the inspector surface to handleEditField (the host-neutral hookup)', async () => {
+  const records = {
+    'obj-root': {slots: {'slot-b': ref('obj-b')}, indexed: [], versionToken: 'tok-root'},
+    'obj-b': {slots: {'probe-title': {kind: 'text', value: 'B'}, 'probe-count': {kind: 'integer', value: '7'}}, indexed: [], versionToken: 'tok-b'},
+  };
+  const {shell, compositor} = makeShell({records, writableSlots: ['probe-title']});
+  await shell.openWorkspace(ref('obj-root'), {});
+  await shell.selectObject(ref('obj-b'), {});
+  // A minimal adapter intent seam stub + a capturing CommandRouter.
+  const handlers = new Set();
+  const adapter = {onIntent: (fn) => { handlers.add(fn); return () => handlers.delete(fn); }};
+  const calls = [];
+  const commandRouter = {consumeIntent: async (intent, opts) => { calls.push({intent, opts}); return {ok: true}; }};
+  shell.bindIntents({
+    adapter, navigatorSurfaceHandle: 'nav-surface', inspectorSurfaceHandle: 'insp-surface',
+    commandRouter, authority: null, readBlockId: undefined,
+  });
+  // An edit-field intent from the INSPECTOR surface routes to handleEditField,
+  // which resolves key->slot + attaches the transient token and calls the router.
+  for (const fn of handlers) fn({kind: 'edit-field', key: 0, text: 'B-edited'}, 'insp-surface');
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(calls.length, 1, 'the edit-field intent reached the CommandRouter');
+  assert.deepEqual(calls[0].intent, {kind: 'edit-field', key: 0});
+  assert.equal(calls[0].opts.surfaceHandle, 'insp-surface');
+  assert.equal(calls[0].opts.context.slot, 'probe-title', 'key 0 resolved to the writable slot');
+  assert.equal(calls[0].opts.context.text, 'B-edited', 'the raw text passes through');
+  assert.equal(calls[0].opts.context.versionToken, 'tok-b', 'the transient token is attached');
+  // An edit-field intent from a DIFFERENT surface is ignored.
+  for (const fn of handlers) fn({kind: 'edit-field', key: 0, text: 'x'}, 'other-surface');
+  // An activate-item intent from the NAVIGATOR surface still routes to selection.
+  for (const fn of handlers) fn({kind: 'activate-item', key: 0}, 'nav-surface');
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(calls.length, 1, 'a wrong-surface edit-field and the navigator activate-item do NOT reach the edit router');
+  await compositor.destroy();
+});
+
 test('durable intent is focus/selection/handle-free after select (focus/selection are transient)', async () => {
   const records = {'obj-root': {slots: {'slot-b': ref('obj-b')}, indexed: []}};
   const {shell, compositor} = makeShell({records});
