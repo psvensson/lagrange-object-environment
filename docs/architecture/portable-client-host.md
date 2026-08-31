@@ -1,33 +1,56 @@
 # Portable client host boundary
 
-Status: working reference for ADR 0013. Owner: this doc + ADR 0013. No subsystem code owner (a distinct semantic-UI contract owner is an output of the follow-up native-host work, not presumed here).
+Status: working reference for ADR 0013 + ADR 0014.
 
-ADR 0013 makes **"no browser required"** an architectural invariant and names the browser the **reference host**. This document records the portable-vs-host-specific classification and the two realization routes.
+ADR 0013 makes **"no browser required"** an architectural invariant and names the browser the **reference host**. ADR 0014 adds the stronger execution rule: **WASM Components + WIT are the normal portable client execution boundary.** Native per-language embeddings are bounded fallbacks, not the architecture for adding languages.
 
 ## The model
 
-```
-              Lagrange Image
-                    │
-          semantic environment          (JS reference core — headless, host-independent)
-                    │
-     Subject / Presentation / Command / Perspective / Composition / Selection
-                    │
-          host-neutral, data-representable contracts   ← the portability boundary
-                    │
-              RendererAdapter  (6 ops, opaque handles, data-representable)
-              ┌─────┴──────────────┐
-        Web browser            Native host (Linux, then Android)
-              │                      │
-   ┌──────────┴───────┐    ┌─────────┴────────────┐
- SemanticUI → DOM    SemanticUI → GTK / Compose / native controls
- Graphics  → WebGPU  Graphics  → wgpu / Vulkan / Metal  (wasi:webgpu + wasi-gfx)
-        (jco instantiation)   (Wasmtime host providing the same WIT imports)
-              └──────────┬────────────┘
-                  WASM Components (same Component CORE BINARY; host supplies imports)
+```text
+                         Lagrange Images
+               durable objects / Projects / history
+                 authorized semantic capabilities
+                              │
+                              │ WIT-shaped public capabilities
+                              ▼
+                   Environment Component
+             existing JS semantic core where viable
+                 packaged/componentized as WASM
+                              │
+            Subject / Presentation / Command /
+            Perspective / Composition / Selection
+                              │
+                  host capability imports
+                ┌─────────────┼─────────────┐
+                │             │             │
+          renderer/UI       input       other host
+             WIT/data      events       capabilities
+                │
+       RendererAdapter semantics
+       (six lifecycle ops remain the
+        proven renderer ownership model)
+                │
+        ┌───────┴────────┐
+        │                │
+   Browser host      Linux native host
+        │                │
+ SemanticUI → DOM   SemanticUI → GTK
+ Graphics → WebGPU  Graphics → native wasi:webgpu/wasi-gfx
+        │                │
+        └───────┬────────┘
+                │
+       WASM Components / WIT
 ```
 
-WASM exists to provide **portable, sandboxed executable Presentations and extensions** — code living in an Image that travels with the Image and executes safely wherever the Image is inhabited — not to make a web application.
+The native host remains responsible for concrete OS resources: GTK/Compose/DOM controls, surfaces, GPU devices/queues, windowing, text shaping, accessibility, clipboard/IME and other platform services. "WASM in the center" means portable semantic execution converges on Components/WIT; it does **not** mean the OS host itself is implemented in WASM.
+
+## Why this changed
+
+The first native semantic proof (PR #40 / Bead 64j) intentionally used a throwaway Node subprocess so the real, unmodified JavaScript environment core could drive the real Linux `RendererAdapter` quickly. It proved the important semantic claim: the core is host-portable and the six-op renderer boundary did not need widening.
+
+The follow-up embed census showed the downside of making a JavaScript VM the permanent architecture: running the whole client-side JS composition root also drags substantial `lagrange-images` implementation machinery into the host process (binary codecs, cursor crypto, token machinery and other Node-oriented implementation details). Repeating that pattern for Go, Java or other languages would create bespoke host/runtime bridges.
+
+ADR 0014 therefore moves the preferred boundary upward: the environment should consume **public authorized Images capabilities** and execute portably as a Component where current tooling permits. Language toolchains may differ, but the host-facing architecture should converge on WASM/WIT rather than one FFI/runtime per source language.
 
 ## Portable vs host-specific
 
@@ -39,36 +62,131 @@ WASM exists to provide **portable, sandboxed executable Presentations and extens
 | Perspective (durable layout) | yes | no |
 | Composition (tree, viewIds) | yes | no |
 | Selection | yes | no |
+| Environment execution | WASM Component + WIT preferred | Wasmtime / browser Component host; bounded fallback embed only if tooling blocks |
+| Images interaction | public authorized semantic capability | concrete Images runtime/storage implementation stays below |
 | Focus semantics | mostly | concrete focus mechanism per host |
 | Semantic tool UI | yes (the description) | DOM / GTK / Compose realization |
-| Component lifecycle (start/stop/resize/dispose) | yes | runtime embedding (jco vs Wasmtime) |
-| GPU API | `wasi:webgpu` | WebGPU / wgpu / Vulkan / Metal |
+| Component lifecycle | yes | runtime embedding (browser/Jco vs native Wasmtime) |
+| GPU API | `wasi:webgpu` / WIT | WebGPU / wgpu / Vulkan / Metal |
 | Surface / window | abstract | browser canvas / native window / Android Surface |
 | Clipboard / IME / accessibility | semantic contract | platform implementation |
 | Renderer surface handles | no (opaque to the contract) | yes |
 
-The boundary is **data-representable**: any concept that must cross hosts is plain data (JSON/WIT-value), enforced at the `RendererAdapter` seam (`src/compositor.js` `assertDataRepresentable`). A DOM node, GPU object, or callback cannot cross — it fails loudly.
+Any portable host boundary must be **data-representable**. The existing `RendererAdapter` seam already enforces this property. Future WIT interfaces must preserve the same ownership discipline: DOM nodes, GTK widgets, GPU objects, authorities and concurrency tokens do not become portable identity.
 
-## Two realization routes
+## Three kinds of Component use
 
-1. **Graphics-Component realizer** (existing): Presentation Component → `wasi:webgpu` → host GPU/surface. For graphics/simulation/visualization. The portable artifact is the **Component core binary + host-provided WIT imports**; the checked-in jco JS glue is the *browser* instantiation, and a native host implements the imports itself.
+### 1. Environment Component
 
-2. **Semantic-UI realizer** (the DOM lane generalized): a Presentation → a small **semantic description** (`text / action / choice / field / collection / group`) → a host-native realization. **Semantic, not a widget toolkit** — *what the user can do*, never pixel layout. The current DOM realizer (`src/browser-renderer/dom-realizer.js`) is the browser realization; GTK and Compose are the planned native realizations. The host owns appearance and platform conventions (text shaping, IME, clipboard, screen-reader, focus visuals).
+The environment's semantic orchestration is the new preferred Component target:
 
-## JavaScript
+```text
+existing Environment JS
+        │
+   componentize/package
+        ▼
+environment.component.wasm
+        │
+        ├── import authorized Images capabilities
+        ├── import renderer capabilities
+        └── receive/consume host input/change events
+```
 
-The environment core is implemented in JavaScript and is headless/host-independent today (the browser coupling is contained in `src/browser-renderer/` behind the adapter seam). JS is the **reference implementation of the contracts**, not their definition. Long-term options (ADR 0013 §5): (A) embed a JS runtime in a native host, (B) port the core to Rust/native, (C) make the core itself a WASM Component. **(C)** is the long-term goal; not pursued now.
+The goal is to preserve the existing tested JS semantics rather than rewrite them merely to change the hosting mechanism.
+
+### 2. Graphics Components
+
+Existing direction from ADR 0011/0013:
+
+```text
+Presentation Component
+      -> wasi:webgpu / wasi-gfx
+      -> host GPU/surface
+```
+
+The portable artifact is the Component core binary + host-provided WIT imports. Browser glue is one instantiation route; native Wasmtime supplies the imports directly.
+
+### 3. Language-produced Components
+
+Future source languages should converge on the same execution architecture where their toolchains permit:
+
+```text
+Go / Rust / JavaScript / Java / ...
+            │
+      language toolchain
+            ▼
+      WASM Component
+            │
+            ▼
+        Lagrange WIT
+```
+
+A language's compiler/runtime adapter may be specific to that language. The **host semantic architecture must not become language-specific**.
+
+## JavaScript and the fallback rule
+
+JavaScript remains the current reference implementation of the environment semantics. ADR 0014 changes only the preferred hosting direction.
+
+The next investigation is **WASM-first**:
+
+1. derive the smallest WIT-shaped host/Images boundary from the already-proven PR #40 loop;
+2. componentize a real existing JS slice;
+3. run it under the existing native Wasmtime host;
+4. prove a genuinely asynchronous path (authorized read -> renderer -> observation/change -> reread -> update), not only a synchronous Hello World;
+5. expand toward the complete PR #40 acceptance if the toolchain supports the required imports/events/lifecycle.
+
+If current JS Component tooling cannot faithfully express that async path, an embedded JS runtime may be used temporarily. That fallback must stay behind the same plain-data/WIT-shaped ownership boundary, avoid broad Node compatibility, and carry an explicit removal criterion. It must not become the precedent for Go, Java or future languages.
+
+## Images boundary
+
+The environment should not need to host the whole `lagrange-images` JavaScript composition root merely to perform ordinary client work.
+
+Desired direction:
+
+```text
+Environment Component
+       │
+       │ public authorized capability
+       ▼
+Lagrange Images owner
+       ├── storage representation
+       ├── binary codecs
+       ├── version tokens
+       ├── observation cursor crypto
+       └── authority enforcement
+```
+
+Images semantics remain below this repository. If componentization exposes a missing public semantic capability, that is a substrate/API finding: add/fix the capability at its owner rather than reproduce private storage, codec, crypto or authority semantics in the environment.
 
 ## Host progression
 
-Browser (reference) → **Linux native** (Tier 1/2) → **Android** (Tier 3). The first native proof is minimal: `navigator`/`inspector` as native controls + the **same GLB Component core binary** via native `wasi:webgpu`/`wasi-gfx`. It empirically falsifies host portability. Android follows once the boundary has survived two genuinely different hosts.
+Browser (reference) -> **Linux native** -> Android.
 
-## Falsification (named risks)
+The Linux proof has now progressed beyond ADR 0013's original plan:
 
-- The pinned `wasi:webgpu@0.3.0-rc.2` / `wasi-gfx:surface@0.2.0` versions may not yet be implemented by a native host runtime — verify the **pinned versions**, not just the proposal families.
-- The Component's `async start` / async host imports ride JSPI via the jco shim today — mapping them onto Wasmtime's async host functions **without** the jco shim is a real portability risk.
-- The investigation is wrong if the `RendererAdapter`/WIT/Compositor contracts turn out browser-coupled in a way that forces a redesign (current evidence: they are not — the seam is data-representable and the WIT imports are host-provided).
+- the same graphics Component core runs natively under Wasmtime;
+- SemanticUi drives real GTK controls;
+- one `LinuxRendererAdapter` holds native semantic UI + Component graphics behind the unchanged six-op contract;
+- PR #40 proved the real JavaScript semantic core can drive that native host end-to-end through throwaway transport.
 
-## Out of scope (for now)
+The next portability question is therefore **execution packaging**, not renderer semantics: can the semantic core itself move behind the Component/WIT boundary without acquiring a bespoke native-language runtime architecture?
 
-A native Linux host implementation; the semantic-UI contract's final shape and owner; any expansion of DOM-specific semantics above the adapter seam (ADR 0013 forbids it). Each is a follow-up Bead gated on ADR 0013.
+## Falsification
+
+The WASM-first direction is wrong or prematurely blocked if the real acceptance demonstrates one of these, and the exact RED must be recorded:
+
+- current JS guest Component tooling cannot express the required asynchronous imported calls/events/streams/lifecycle faithfully;
+- the proposed WIT boundary duplicates Command, authority, navigation, version-token or observation ownership rather than exposing existing owners;
+- a seventh renderer semantic operation becomes genuinely necessary;
+- componentizing the existing core requires host-specific semantic forks;
+- the environment must understand private Images storage/codec/crypto details rather than consuming a public capability.
+
+A tooling RED may justify a bounded temporary JS embed. It does **not** justify changing the long-term architecture to one native runtime bridge per language.
+
+## Current out of scope
+
+- freezing a large general-purpose Environment WIT world before the real async slice proves it;
+- rewriting the environment in Rust solely to avoid JavaScript;
+- broad Node compatibility inside the Linux host;
+- per-language native client runtimes as the normal support path;
+- moving GTK/Compose/DOM or OS resource ownership into WASM.
