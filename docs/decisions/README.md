@@ -14,4 +14,5 @@ The first decisions intentionally constrain semantics while leaving visual desig
 10. [0010 — Command invocation passes authority through; the environment never holds it](0010-command-invocation-authority-passthrough.md)
 11. [0011 — Portable Component graphics are ordinary presentations](0011-component-backed-graphics-presentations.md)
 12. [0012 — A Perspective is a small object graph — a Perspective plus child presentation objects](0012-perspective-as-object-graph.md)
-13. [0013 — The browser is a reference host, not the client platform — "no browser required"](0013-portable-client-host.md)
+13. [0013 — The browser is a reference host, not the client platform — "no browser required"](0013-portable-client-host.md) *(client-runtime direction superseded by 0014; host/rendering decisions remain in force)*
+14. [0014 — WASM/WIT is the central portable client execution boundary](0014-wasm-centered-client-execution.md)
