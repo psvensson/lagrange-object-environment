@@ -139,6 +139,12 @@ impl JsEnvActor {
                     let _drive = owner.runtime().drive();
                     tokio::task::spawn_local(_drive);
 
+                    // Woken by the guest setTimeout/clearTimeout (via the
+                    // __jsenv_timer_changed host fn) so the loop recomputes the
+                    // next-due timer even when parked with no pending timers (the
+                    // slice-3B missed-wakeup liveness fix).
+                    let timer_notify = owner.timer_notify();
+
                     // Handshake: report this thread's id as the owner.
                     let _ = ready_tx.send(Ok(std::thread::current().id()));
 
@@ -155,20 +161,32 @@ impl JsEnvActor {
                         fire_due_timers(&owner).await;
                         let next_due_ms = next_timer_due_ms(&owner).await;
 
+                        // Wait for the next command, the next timer's due time,
+                        // OR a timer-registry change (a setTimeout registered by a
+                        // continuation resumed from a capability oneshot) —
+                        // whichever comes first. The timer_notify branch is the
+                        // missed-wakeup fix: without it a timer registered while
+                        // the loop is parked (esp. in the no-pending-timers branch)
+                        // would never fire until an unrelated command arrived.
                         let cmd = if let Some(due_ms) = next_due_ms {
-                            // Wait for the next command OR the next timer's due
-                            // time, whichever comes first.
                             let now_ms = epoch_ms();
                             let wait = due_ms.saturating_sub(now_ms);
                             tokio::select! {
                                 cmd = rx.recv() => cmd,
                                 _ = tokio::time::sleep(std::time::Duration::from_millis(wait)) => {
-                                    // Timer due: loop back to fire it.
-                                    continue;
+                                    continue; // Timer due: loop back to fire it.
+                                }
+                                _ = timer_notify.notified() => {
+                                    continue; // Registry changed: recompute next_due.
                                 }
                             }
                         } else {
-                            rx.recv().await
+                            tokio::select! {
+                                cmd = rx.recv() => cmd,
+                                _ = timer_notify.notified() => {
+                                    continue; // A timer appeared: recompute next_due.
+                                }
+                            }
                         };
 
                         let Some(cmd) = cmd else { break }; // channel closed

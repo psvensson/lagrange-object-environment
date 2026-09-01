@@ -151,6 +151,78 @@ async fn timeout_fires_automatically_via_actor_pump() {
     actor.shutdown().await;
 }
 
+/// MISSED-WAKEUP proof (slice-3B review Finding 2): a setTimeout registered by a
+/// CONTINUATION that resumes AFTER the command that started it already returned
+/// must still fire — with ZERO further JS commands in flight (any harness
+/// eval_async would itself turn the command loop and mask the bug). The guest
+/// `__jsenv_timer_changed` host fn wakes the owner loop to recompute next_due.
+///
+/// Setup: a fire-and-forget script awaits a suspending host call (`__jsenv_delay`,
+/// an Async fn that yields to the drive loop), and in its continuation registers
+/// a setTimeout whose callback signals a RUST-side `Arc<AtomicBool>` (NOT a JS
+/// global — reading a JS global would need a command). The test polls the atomic
+/// with Rust-side sleeps only. Without the timer_notify wakeup, the command loop
+/// parks with no pending timers and the timer never fires -> the test times out.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn timer_registered_by_resumed_continuation_fires_with_no_commands() {
+    use rquickjs::prelude::Async;
+    use rquickjs::Function;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+
+    let actor = JsEnvActor::spawn(EmbeddedLoader::new()).expect("spawn actor");
+    let done = Arc::new(AtomicBool::new(false));
+
+    // Install __jsenv_delay(ms) (Async: yields to the drive loop) and
+    // __jsenv_signal_done() (sync: sets the Rust-side atomic).
+    {
+        let done = Arc::clone(&done);
+        actor
+            .with_context(move |ctx| {
+                let delay = Function::new(
+                    ctx.clone(),
+                    Async(move |ms: f64| async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(ms as u64)).await;
+                    }),
+                )
+                .map_err(|e| rquickjs::Error::from(e))?;
+                ctx.globals().set("__jsenv_delay", delay)?;
+                let signal = Function::new(ctx.clone(), move || {
+                    done.store(true, Ordering::SeqCst);
+                })
+                .map_err(|e| rquickjs::Error::from(e))?;
+                ctx.globals().set("__jsenv_signal_done", signal)?;
+                Ok(())
+            })
+            .await
+            .expect("install host fns");
+    }
+
+    // Fire-and-forget: await the suspending host call, then in the CONTINUATION
+    // register the timer. `eval` returns as soon as the first await parks, so the
+    // timer is registered LATER (by the drive task), after this command returned.
+    actor
+        .eval(
+            r#"(async () => { await __jsenv_delay(30); setTimeout(() => { __jsenv_signal_done(); }, 5); })()"#,
+        )
+        .await
+        .expect("start suspending script");
+
+    // Poll the RUST-side atomic with Rust sleeps ONLY — zero JS commands, so the
+    // command loop is never prodded. The only thing that can fire the timer is
+    // the timer_notify wakeup.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !done.load(Ordering::SeqCst) {
+        if std::time::Instant::now() > deadline {
+            panic!("timer registered by a resumed continuation never fired (missed wakeup)");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    actor.shutdown().await;
+}
+
 /// clearTimeout removes a pending timer so the pump does not fire it; and a
 /// dropped owner leaves no pending host timer that could fire after free.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

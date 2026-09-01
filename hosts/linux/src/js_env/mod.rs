@@ -154,6 +154,12 @@ fn strip_js_suffix(name: &str) -> String {
 pub struct JsEnvOwner {
     runtime: AsyncRuntime,
     context: AsyncContext,
+    /// Signaled by the guest `setTimeout`/`clearTimeout` (via the
+    /// `__jsenv_timer_changed` host fn) so the owner's command loop wakes to
+    /// recompute the next-due timer — even when a timer is registered by a
+    /// continuation resumed from a capability oneshot while the loop was parked
+    /// with no pending timers (the slice-3B missed-wakeup liveness fix).
+    timer_notify: std::sync::Arc<tokio::sync::Notify>,
 }
 
 impl JsEnvOwner {
@@ -164,9 +170,20 @@ impl JsEnvOwner {
         let runtime = AsyncRuntime::new()?;
         runtime.set_loader(loader.clone_resolver(), loader).await;
         let context = AsyncContext::full(&runtime).await?;
-        let owner = Self { runtime, context };
+        let owner = Self {
+            runtime,
+            context,
+            timer_notify: std::sync::Arc::new(tokio::sync::Notify::new()),
+        };
         owner.install_host_globals().await?;
         Ok(owner)
+    }
+
+    /// The Notify the guest timer registry signals on every setTimeout /
+    /// clearTimeout. The actor's command loop selects on this to recompute the
+    /// next-due timer (see the field doc).
+    pub fn timer_notify(&self) -> std::sync::Arc<tokio::sync::Notify> {
+        std::sync::Arc::clone(&self.timer_notify)
     }
 
     /// Access the context for running JS on the owner thread. CRATE-PRIVATE:
@@ -204,9 +221,10 @@ impl JsEnvOwner {
     /// setTimeout/clearTimeout. Promise/queueMicrotask/atob/btoa are native and
     /// need no installation. `process` is intentionally NOT defined.
     async fn install_host_globals(&self) -> Result<()> {
+        let timer_notify = self.timer_notify();
         self.with(|ctx| {
             install_abort_controller(&ctx)?;
-            install_timers(&ctx)?;
+            install_timers(&ctx, timer_notify)?;
             Ok::<_, Error>(())
         })
         .await?;
@@ -314,7 +332,20 @@ globalThis.AbortController = class AbortController {
 /// (epoch-ms via `SystemTime::now()`), NOT a monotonic `Instant` (arbitrary
 /// epoch) — or read `Date.now()` inside the guest fire path. Mixing domains
 /// silently misfires the `due <= now` comparison.
-fn install_timers(ctx: &Ctx) -> Result<()> {
+fn install_timers(ctx: &Ctx, timer_notify: std::sync::Arc<tokio::sync::Notify>) -> Result<()> {
+    // A sync host fn the guest setTimeout/clearTimeout call after mutating the
+    // registry, so the owner's command loop wakes to recompute the next-due
+    // timer. Without this the loop can park in `rx.recv()` with no pending
+    // timers and miss a timer registered by a continuation resumed from a
+    // capability oneshot (the slice-3B missed-wakeup liveness fix).
+    {
+        use rquickjs::Function;
+        let notify = timer_notify;
+        let f = Function::new(ctx.clone(), move || {
+            notify.notify_one();
+        })?;
+        ctx.globals().set("__jsenv_timer_changed", f)?;
+    }
     ctx.eval::<(), _>(
         r#"
 globalThis.__jsenv_timers = new Map();   // id -> {due, fn}
@@ -323,10 +354,12 @@ globalThis.setTimeout = function setTimeout(fn, ms, ...args) {
   const id = globalThis.__jsenv_next_timer_id++;
   const due = Date.now() + (typeof ms === 'number' ? ms : 0);
   globalThis.__jsenv_timers.set(id, { due, fn: () => fn(...args) });
+  globalThis.__jsenv_timer_changed();
   return id;
 };
 globalThis.clearTimeout = function clearTimeout(id) {
   globalThis.__jsenv_timers.delete(id);
+  globalThis.__jsenv_timer_changed();
 };
 // Owner-pump entry: fire every timer whose due <= now, in due order. Returns
 // the number fired. Runs ON the owner thread (called from the owner pump).
