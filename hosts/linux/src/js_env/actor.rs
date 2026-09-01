@@ -61,7 +61,7 @@ use std::thread::JoinHandle;
 use rquickjs::{Error, Result};
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 
-use super::{EmbeddedLoader, JsEnvOwner};
+use super::JsEnvOwner;
 
 /// A command sent to the owner thread. Each carries a completion channel so the
 /// caller can wait CAUSALLY for the owner to finish (no sleeps).
@@ -109,8 +109,13 @@ impl JsEnvActor {
     /// Spawn the dedicated JS-runtime owner thread with the given loader. The
     /// thread constructs the runtime/context, installs host globals, spawns
     /// `drive()` on its `LocalSet`, and runs the command loop. Returns once the
-    /// owner thread is ready (causal handshake).
-    pub fn spawn(loader: EmbeddedLoader) -> std::result::Result<Self, String> {
+    /// owner thread is ready (causal handshake). Generic over the loader (the
+    /// Environment closure uses `EmbeddedLoader`; the lagrange-images portable
+    /// runtime uses a path-preserving repo-tree loader for B0 / 3zb-B).
+    pub fn spawn<L>(loader: L) -> std::result::Result<Self, String>
+    where
+        L: rquickjs::loader::Resolver + rquickjs::loader::Loader + Clone + Send + 'static,
+    {
         let (tx, mut rx) = tokio_mpsc::unbounded_channel::<OwnerCommand>();
         let (ready_tx, ready_rx) = std_mpsc::channel::<std::result::Result<std::thread::ThreadId, String>>();
 

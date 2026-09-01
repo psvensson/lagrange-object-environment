@@ -60,7 +60,7 @@ pub mod renderer_port;
 /// The loader is deliberately boring: a fixed map from a canonical module name
 /// to the checked-in source bytes. It is NOT a resolver/search path/package
 /// framework — if a name is not in the map, loading fails loudly.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct EmbeddedLoader {
     /// canonical module name -> ESM source bytes (checked-in, embedded).
     modules: HashMap<String, &'static str>,
@@ -164,12 +164,17 @@ pub struct JsEnvOwner {
 }
 
 impl JsEnvOwner {
-    /// Build the owner with the embedded-source loader and the minimal host
-    /// globals installed. Async because AsyncRuntime/AsyncContext construction
-    /// is async in rquickjs.
-    pub async fn new(loader: EmbeddedLoader) -> Result<Self> {
+    /// Build the owner with the given module loader/resolver and the minimal
+    /// host globals installed. Generic over the loader: the Environment closure
+    /// uses `EmbeddedLoader`; the lagrange-images portable-runtime closure (B0 /
+    /// 3zb-B) uses a path-preserving repo-tree loader. Async because
+    /// AsyncRuntime/AsyncContext construction is async in rquickjs.
+    pub async fn new<L>(loader: L) -> Result<Self>
+    where
+        L: Resolver + Loader + Clone + 'static,
+    {
         let runtime = AsyncRuntime::new()?;
-        runtime.set_loader(loader.clone_resolver(), loader).await;
+        runtime.set_loader(loader.clone(), loader).await;
         let context = AsyncContext::full(&runtime).await?;
         let owner = Self {
             runtime,
@@ -234,28 +239,8 @@ impl JsEnvOwner {
 }
 
 // The loader is used as BOTH resolver and loader (set_loader takes them
-// separately). EmbeddedLoader is cheap to share; we hand out a resolver view.
-impl EmbeddedLoader {
-    fn clone_resolver(&self) -> EmbeddedResolver {
-        EmbeddedResolver
-    }
-}
-
-/// The resolver half (kept separate so `set_loader` can own both). Resolution is
-/// pure (name normalization), so it shares no state with the loader's map.
-pub struct EmbeddedResolver;
-
-impl Resolver for EmbeddedResolver {
-    fn resolve<'js>(
-        &mut self,
-        _ctx: &Ctx<'js>,
-        base: &str,
-        name: &str,
-        _attributes: Option<ImportAttributes<'js>>,
-    ) -> Result<String> {
-        Ok(normalize_module_name(base, name))
-    }
-}
+// separately); JsEnvOwner::new clones it into both slots. EmbeddedLoader
+// implements Resolver directly (resolution is pure name normalization).
 
 /// Install `AbortController`/`AbortSignal` with correct listener semantics:
 /// `addEventListener('abort', fn)`, `removeEventListener('abort', fn)`, and
