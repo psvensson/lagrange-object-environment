@@ -21,6 +21,20 @@ raw-window-handle = "0.6"
 env_logger = "0.11"
 log = "0.4"
 
+# 3zb-A bounded Environment-side rquickjs embed (ADR 0014 fallback; JS WASM
+# Component/WIT is preferred but upstream-blocked on async guest imports —
+# ComponentizeJS #335). Features per the adversarial plan review: `loader` (ESM
+# module loading via a custom embedded-source Loader), `futures` (Rust async fn
+# -> JS Promise the guest awaits), `parallel` (REQUIRED so a host capability can
+# resolve a JS-awaitable promise from a non-JS-owner thread; implies a tokio
+# executor — already present above), `macro` (ergonomic host-function defs).
+# The embed provides ONLY the tiny host-global surface the census proved the Env
+# closure needs (AbortController/AbortSignal, setTimeout/clearTimeout; Promise/
+# queueMicrotask/atob/btoa are QuickJS-native). NO Buffer/node:crypto/fs/process
+# shim, NO Node personality. Explicit deletion criterion: remove when JS guest
+# async imports land. NOT a per-language-bridge precedent.
+rquickjs = { version = "0.12.2", features = ["loader", "futures", "parallel", "macro"] }
+
 # L2b: the GTK semantic-UI realizer consumes a SemanticUi/v1 document (the SAME
 # checked-in fixtures the browser DOM realizer consumes) and builds real GTK4
 # controls. serde/serde_json deserialize the host-neutral description.

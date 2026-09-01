@@ -48,6 +48,12 @@ pub mod semantic_ui;
 #[doc(hidden)]
 pub mod bridge;
 
+// 3zb-A bounded Environment-side rquickjs embed (ADR 0014 fallback). Runtime
+// shell only in slice 1; see js_env/mod.rs for scope, invariants, and the
+// deletion criterion. NOT a Node runtime and NOT a per-language-bridge
+// precedent.
+pub mod js_env;
+
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
