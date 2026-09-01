@@ -144,7 +144,34 @@ impl JsEnvActor {
 
                     // Command loop: process commands; drive() runs concurrently on
                     // the LocalSet so JS continuations progress between commands.
-                    while let Some(cmd) = rx.recv().await {
+                    // The loop ALSO wakes to fire due guest setTimeout timers (the
+                    // 3B correction: image-observation depends on guest setTimeout;
+                    // the shell tests only fired timers manually). The guest timer
+                    // registry uses Date.now() (epoch-ms); the owner reads the same
+                    // clock domain via SystemTime.
+                    loop {
+                        // Fire any timers already due, then compute when the next
+                        // is due (None = no pending timers -> wait indefinitely).
+                        fire_due_timers(&owner).await;
+                        let next_due_ms = next_timer_due_ms(&owner).await;
+
+                        let cmd = if let Some(due_ms) = next_due_ms {
+                            // Wait for the next command OR the next timer's due
+                            // time, whichever comes first.
+                            let now_ms = epoch_ms();
+                            let wait = due_ms.saturating_sub(now_ms);
+                            tokio::select! {
+                                cmd = rx.recv() => cmd,
+                                _ = tokio::time::sleep(std::time::Duration::from_millis(wait)) => {
+                                    // Timer due: loop back to fire it.
+                                    continue;
+                                }
+                            }
+                        } else {
+                            rx.recv().await
+                        };
+
+                        let Some(cmd) = cmd else { break }; // channel closed
                         match cmd {
                             OwnerCommand::Eval { source, done } => {
                                 let r = owner.with(|ctx| ctx.eval::<(), _>(source.as_str())).await;
@@ -358,6 +385,50 @@ async fn deliver_push_on_owner(owner: &JsEnvOwner, payload: String) -> Result<()
             let promise: rquickjs::Promise = handler.call((payload,))?;
             promise.into_future::<()>().await?;
             Ok::<_, Error>(())
+        })
+        .await
+}
+
+/// The current time in epoch-ms (the SAME clock domain as the guest's
+/// `Date.now()`, which the timer registry uses for `due`).
+fn epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Fire every guest timer whose `due <= now` on the owner thread. Called by the
+/// command loop before waiting, so timers registered by prior commands fire even
+/// with no new command arriving.
+async fn fire_due_timers(owner: &JsEnvOwner) {
+    let now = epoch_ms();
+    owner
+        .with(move |ctx| {
+            let fire: rquickjs::Function = ctx
+                .globals()
+                .get("__jsenv_fire_due")
+                .unwrap_or_else(|_| ctx.eval("() => 0").unwrap());
+            let _: i64 = fire.call((now as f64,)).unwrap_or(0);
+        })
+        .await;
+}
+
+/// The earliest pending timer's `due` (epoch-ms), or None if no timers pending.
+/// The command loop uses this to wake in time to fire the next timer.
+async fn next_timer_due_ms(owner: &JsEnvOwner) -> Option<u64> {
+    owner
+        .with(|ctx| {
+            let next: rquickjs::Function = ctx
+                .globals()
+                .get("__jsenv_next_due")
+                .unwrap_or_else(|_| ctx.eval("() => null").unwrap());
+            let v: rquickjs::Value = next.call(()).unwrap_or(rquickjs::Value::new_null(ctx.clone()));
+            if v.is_null() || v.is_undefined() {
+                None
+            } else {
+                v.as_float().map(|f| f as u64)
+            }
         })
         .await
 }
