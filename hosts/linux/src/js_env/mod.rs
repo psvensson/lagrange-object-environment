@@ -52,6 +52,7 @@ use rquickjs::{AsyncContext, AsyncRuntime, Ctx, Error, Module, Result};
 use rquickjs::loader::{ImportAttributes, Loader, Resolver};
 
 pub mod actor;
+pub mod images_capability;
 pub mod renderer_port;
 
 /// The canonical module name for an Environment source file.

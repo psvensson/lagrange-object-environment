@@ -30,6 +30,11 @@ const PRODUCTION_FILES: &[&str] = &[
     "js_env/mod.rs",
     "js_env/actor.rs",
     "js_env/renderer_port.rs",
+    // 3zb-A slice-3B TEST Images capability (scripted outcomes, NO substrate
+    // semantics). Same drift risk: it must never reference Node/subprocess/the
+    // throwaway worker, and — being the stand-in for the port — must NOT become
+    // a shadow lagrange-images (no real substrate import).
+    "js_env/images_capability.rs",
 ];
 
 /// Needles that would indicate a Node/subprocess dependency leaking into
@@ -55,6 +60,12 @@ const FORBIDDEN_NEEDLES: &[&str] = &[
     "acceptance-worker",
     "loopback-worker",
     "LAGRANGE_IMAGES_URL",
+    // A real lagrange-images SUBSTRATE import in production Rust (the crate is
+    // `lagrange_images`, underscore). The js_env TEST capability must NOT become
+    // a shadow Images — it must never reference the real substrate crate. The
+    // bare word "lagrange-images" (hyphen) appears in legitimate doc comments, so
+    // we target the underscore crate identifier only.
+    "lagrange_images",
 ];
 
 fn src_dir() -> PathBuf {
