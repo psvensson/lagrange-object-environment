@@ -29,6 +29,7 @@ const PRODUCTION_FILES: &[&str] = &[
     // a subprocess, the throwaway worker, or lagrange-images.
     "js_env/mod.rs",
     "js_env/actor.rs",
+    "js_env/renderer_port.rs",
 ];
 
 /// Needles that would indicate a Node/subprocess dependency leaking into

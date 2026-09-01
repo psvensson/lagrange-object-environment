@@ -274,6 +274,30 @@ impl JsEnvSender {
             Err(e) => Err(format!("owner dropped response: {e}")),
         }
     }
+
+    /// Async variant of the actor's `eval_async`, available on the clonable
+    /// sender so a non-JS-owner async task can drive JS while another thread
+    /// (e.g. the GTK main thread) does other work. Same command, same causal
+    /// completion.
+    pub async fn eval_async(&self, source: &str) -> Result<String> {
+        let (done, rx) = oneshot::channel();
+        self.tx
+            .send(OwnerCommand::EvalAsync { source: source.to_string(), done })
+            .map_err(|_| Error::new_from_js("sender", "owner thread gone"))?;
+        rx.await.map_err(|_| Error::new_from_js("sender", "owner dropped response"))?
+    }
+
+    /// Async variant of `with_context` on the clonable sender.
+    pub async fn with_context<F>(&self, f: F) -> Result<()>
+    where
+        F: FnOnce(&rquickjs::Ctx) -> Result<()> + Send + 'static,
+    {
+        let (done, rx) = oneshot::channel();
+        self.tx
+            .send(OwnerCommand::WithContext { f: Box::new(f), done })
+            .map_err(|_| Error::new_from_js("sender", "owner thread gone"))?;
+        rx.await.map_err(|_| Error::new_from_js("sender", "owner dropped response"))?
+    }
 }
 
 /// Evaluate a JS snippet that yields a Promise (or a plain value) and drive it
@@ -290,17 +314,23 @@ async fn eval_async_on_owner(owner: &JsEnvOwner, source: &str) -> Result<String>
             // Here we always wrap as an expression-position async IIFE that
             // returns the source's value when it is an expression, else expects
             // the source to `return` explicitly.
-            let wrapped = if source.contains(';') || source.contains('\n') {
-                // Statement body: require an explicit trailing expression by
-                // wrapping as an IIFE that returns the body's completion via
-                // `eval` semantics is unreliable; instead require the source to
-                // end with `return ...` — but to keep tests terse we append
-                // nothing and rely on the caller using a trailing expression.
-                // The robust choice: wrap as `(async () => { <source> })()` and
-                // let the source control its own return.
-                format!("(async () => {{ {} }})()", source)
-            } else {
+            // Discriminate expression vs statement body. An EXPRESSION source —
+            // an async IIFE `(async()=>{...})()`, an object literal `({...})`,
+            // `import(...)`, `Promise.resolve(...)` — starts with `(` or is a
+            // single line; its value is the result. A STATEMENT body (starts
+            // with `const`/`let`/`return`/`globalThis`/etc.) is wrapped in an
+            // async IIFE and must produce its value via an explicit trailing
+            // `return`. Wrapping an async-IIFE EXPRESSION as a statement block
+            // would call it but discard its promise (resolving to `undefined`).
+            let trimmed = source.trim_start();
+            let is_expression = trimmed.starts_with('(')
+                || trimmed.starts_with("import(")
+                || trimmed.starts_with("Promise.")
+                || !trimmed.contains([';', '\n']);
+            let wrapped = if is_expression {
                 format!("Promise.resolve({})", source)
+            } else {
+                format!("(async () => {{ {} }})()", source)
             };
             let promise: rquickjs::Promise = ctx.eval(wrapped.as_str())?;
             let resolved: rquickjs::Value = promise.into_future::<rquickjs::Value>().await?;
