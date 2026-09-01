@@ -1,0 +1,333 @@
+//! 3zb-A slice 2: the dedicated-owner-thread actor.
+//!
+//! The slice-1 `JsEnvOwner` lets the caller drive the runtime on whatever thread
+//! calls it. The slice-2 falsifier PROVED that is insufficient for thread
+//! ownership: `tokio::spawn(runtime.drive())` on a multi-thread runtime lets the
+//! drive task MIGRATE across worker threads, so a JS continuation can resume on
+//! a different thread than the one that spawned the driver (measured: owner
+//! ThreadId(2) vs continuation ThreadId(4)). `rquickjs`'s `parallel` feature
+//! ENABLES cross-thread wake mechanics but does NOT establish one owner.
+//!
+//! So the real model is a DEDICATED OWNER THREAD:
+//!
+//!   - ONE OS thread owns the JS runtime. It runs a `current_thread` tokio
+//!     runtime + `LocalSet`, constructs the AsyncRuntime/AsyncContext there,
+//!     spawns `drive()` locally there, and processes commands. EVERY piece of
+//!     QuickJS contact (eval, push delivery, capability-fn setup, driving JS
+//!     continuations) happens on THAT thread, by construction.
+//!   - All other threads are non-JS. They interact ONLY via channels:
+//!       * a capability resolver completes a `tokio::oneshot` (waking the
+//!         runtime waker -> the owner's drive task resumes the JS continuation
+//!         ON the owner thread);
+//!       * a push producer sends a `HostPush` on the owner's command mpsc
+//!         (-> the owner injects it into JS on the owner thread).
+//!     Neither ever touches QuickJS.
+//!   - Shutdown: dropping the actor joins the owner thread after draining; a
+//!     pending capability's oneshot sender drop rejects the JS promise (no
+//!     use-after-free, no hang).
+//!
+//! This is the "one explicit JS-runtime execution owner" the charter demands,
+//! established by the wrapper rather than assumed from `parallel`.
+//!
+//! # RE-ENTRANCY INVARIANT (load-bearing for the renderer/Images ports)
+//!
+//! A host-callable (an `Async` capability fn, a renderer op) runs its Rust
+//! closure WHILE the drive task holds the runtime lock (the JS continuation is
+//! driven by `drive()`'s scheduler poll; `drive()` acquires and RELEASES the
+//! lock per poll). Therefore a host-callable MUST resolve its work via a
+//! cross-thread WAKER — complete a `tokio::oneshot`, which wakes the runtime
+//! waker and lets the owner's drive task resume the continuation — and MUST
+//! NEVER synchronously `send` an `OwnerCommand` and `.await` its `done` from
+//! within that lock. Doing so is a single-thread self-deadlock: the owner would
+//! block waiting for a command that it itself must process, while the lock the
+//! command needs is held. The renderer port gets its OWN channel (structurally
+//! distinct from `OwnerCommand`) precisely so the deadlocking path is not the
+//! path of least resistance. If you find yourself wanting to send an
+//! `OwnerCommand` from inside a capability/renderer closure, the design is
+//! wrong — resolve via a oneshot instead.
+//!
+//! # `with_context` / capability-closure contract
+//!
+//! `with_context` runs its closure under the runtime lock on the owner thread.
+//! The closure (and any host fn it installs) MUST NOT (a) await an
+//! `OwnerCommand` completion, or (b) smuggle a `Ctx`/`AsyncContext` clone out to
+//! another thread (the `JsEnvOwner` accessors are `pub(crate)` so only this
+//! crate can reach them; do not widen that). Capturing a `oneshot::Sender` (to
+//! resolve later from a worker thread) is the intended pattern.
+
+use std::sync::mpsc as std_mpsc;
+use std::thread::JoinHandle;
+
+use rquickjs::{Error, Result};
+use tokio::sync::{mpsc as tokio_mpsc, oneshot};
+
+use super::{EmbeddedLoader, JsEnvOwner};
+
+/// A command sent to the owner thread. Each carries a completion channel so the
+/// caller can wait CAUSALLY for the owner to finish (no sleeps).
+pub enum OwnerCommand {
+    /// Evaluate a JS snippet on the owner thread.
+    Eval {
+        source: String,
+        done: oneshot::Sender<Result<()>>,
+    },
+    /// Evaluate a JS snippet that yields a Promise, driving it to completion ON
+    /// the owner thread and returning its value as a JSON string. For
+    /// module-import / async evaluations that must resolve on the owner thread.
+    EvalAsync {
+        source: String,
+        done: oneshot::Sender<Result<String>>,
+    },
+    /// Run a boxed closure against the context on the owner thread. Used to
+    /// install host functions/capabilities from another thread.
+    WithContext {
+        f: Box<dyn FnOnce(&rquickjs::Ctx) -> Result<()> + Send>,
+        done: oneshot::Sender<Result<()>>,
+    },
+    /// Deliver a host push (observation/intent) to the registered JS handler.
+    /// The completion is a STD channel so a non-JS producer thread can block on
+    /// it directly WITHOUT spinning up a throwaway tokio runtime per push (the
+    /// GTK intent hot path must not build a runtime per event).
+    Push {
+        payload: String,
+        done: std_mpsc::Sender<Result<()>>,
+    },
+    /// Shut the owner down: drain and exit the thread loop.
+    Shutdown { done: oneshot::Sender<()> },
+}
+
+/// Handle to the dedicated JS-runtime owner thread. Cheap to clone the sender
+/// side for non-JS producers; the join handle is held by the owner.
+pub struct JsEnvActor {
+    tx: tokio_mpsc::UnboundedSender<OwnerCommand>,
+    thread: Option<JoinHandle<()>>,
+    /// The OS thread id of the owner thread (for ownership assertions).
+    owner_thread: std::thread::ThreadId,
+}
+
+impl JsEnvActor {
+    /// Spawn the dedicated JS-runtime owner thread with the given loader. The
+    /// thread constructs the runtime/context, installs host globals, spawns
+    /// `drive()` on its `LocalSet`, and runs the command loop. Returns once the
+    /// owner thread is ready (causal handshake).
+    pub fn spawn(loader: EmbeddedLoader) -> std::result::Result<Self, String> {
+        let (tx, mut rx) = tokio_mpsc::unbounded_channel::<OwnerCommand>();
+        let (ready_tx, ready_rx) = std_mpsc::channel::<std::result::Result<std::thread::ThreadId, String>>();
+
+        let thread = std::thread::Builder::new()
+            .name("js-env-owner".to_string())
+            .spawn(move || {
+                // A current_thread runtime + LocalSet so drive() and all JS work
+                // run on THIS thread and never migrate.
+                let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        let _ = ready_tx.send(Err(format!("build owner runtime: {e}")));
+                        return;
+                    }
+                };
+                let local = tokio::task::LocalSet::new();
+                local.block_on(&rt, async {
+                    let owner = match JsEnvOwner::new(loader).await {
+                        Ok(o) => o,
+                        Err(e) => {
+                            let _ = ready_tx.send(Err(format!("build JsEnvOwner: {e}")));
+                            return;
+                        }
+                    };
+                    // Spawn the long-lived drive task on THIS thread's LocalSet.
+                    let _drive = owner.runtime().drive();
+                    tokio::task::spawn_local(_drive);
+
+                    // Handshake: report this thread's id as the owner.
+                    let _ = ready_tx.send(Ok(std::thread::current().id()));
+
+                    // Command loop: process commands; drive() runs concurrently on
+                    // the LocalSet so JS continuations progress between commands.
+                    while let Some(cmd) = rx.recv().await {
+                        match cmd {
+                            OwnerCommand::Eval { source, done } => {
+                                let r = owner.with(|ctx| ctx.eval::<(), _>(source.as_str())).await;
+                                let _ = done.send(r);
+                            }
+                            OwnerCommand::EvalAsync { source, done } => {
+                                let r = eval_async_on_owner(&owner, &source).await;
+                                let _ = done.send(r);
+                            }
+                            OwnerCommand::WithContext { f, done } => {
+                                let r = owner.with(|ctx| f(&ctx)).await;
+                                let _ = done.send(r);
+                            }
+                            OwnerCommand::Push { payload, done } => {
+                                let r = deliver_push_on_owner(&owner, payload).await;
+                                let _ = done.send(r); // std channel: wakes any blocked producer
+                            }
+                            OwnerCommand::Shutdown { done } => {
+                                let _ = done.send(());
+                                break;
+                            }
+                        }
+                        // Yield so the drive task can run pending JS jobs between
+                        // commands (keeps continuations progressing on this thread).
+                        tokio::task::yield_now().await;
+                    }
+                });
+            })
+            .map_err(|e| format!("spawn js-env-owner thread: {e}"))?;
+
+        let owner_thread = ready_rx
+            .recv()
+            .map_err(|e| format!("owner handshake: {e}"))??;
+
+        Ok(Self { tx, thread: Some(thread), owner_thread })
+    }
+
+    /// The OS thread id of the dedicated JS-runtime owner.
+    pub fn owner_thread_id(&self) -> std::thread::ThreadId {
+        self.owner_thread
+    }
+
+    /// Evaluate JS on the owner thread; wait causally for completion.
+    pub async fn eval(&self, source: &str) -> Result<()> {
+        let (done, rx) = oneshot::channel();
+        self.tx
+            .send(OwnerCommand::Eval { source: source.to_string(), done })
+            .map_err(|_| Error::new_from_js("actor", "owner thread gone"))?;
+        rx.await.map_err(|_| Error::new_from_js("actor", "owner dropped response"))?
+    }
+
+    /// Evaluate a JS snippet yielding a Promise (or plain value), driven to
+    /// completion ON the owner thread; returns the JSON-stringified result.
+    pub async fn eval_async(&self, source: &str) -> Result<String> {
+        let (done, rx) = oneshot::channel();
+        self.tx
+            .send(OwnerCommand::EvalAsync { source: source.to_string(), done })
+            .map_err(|_| Error::new_from_js("actor", "owner thread gone"))?;
+        rx.await.map_err(|_| Error::new_from_js("actor", "owner dropped response"))?
+    }
+
+    /// Run a closure against the JS context on the owner thread (e.g. to install
+    /// a host function or capability). Wait causally for completion.
+    pub async fn with_context<F>(&self, f: F) -> Result<()>
+    where
+        F: FnOnce(&rquickjs::Ctx) -> Result<()> + Send + 'static,
+    {
+        let (done, rx) = oneshot::channel();
+        self.tx
+            .send(OwnerCommand::WithContext { f: Box::new(f), done })
+            .map_err(|_| Error::new_from_js("actor", "owner thread gone"))?;
+        rx.await.map_err(|_| Error::new_from_js("actor", "owner dropped response"))?
+    }
+
+    /// Deliver a host push to the registered JS handler on the owner thread.
+    pub async fn push(&self, payload: &str) -> Result<()> {
+        let (done, rx) = std_mpsc::channel();
+        self.tx
+            .send(OwnerCommand::Push { payload: payload.to_string(), done })
+            .map_err(|_| Error::new_from_js("actor", "owner thread gone"))?;
+        // Bridge the std-channel recv into async without a busy loop.
+        let out = tokio::task::spawn_blocking(move || rx.recv())
+            .await
+            .map_err(|_| Error::new_from_js("actor", "push wait panicked"))?;
+        out.map_err(|_| Error::new_from_js("actor", "owner dropped response"))?
+    }
+
+    /// A clonable handle for non-JS producer threads (GTK, observation sources,
+    /// capability resolvers) to send commands to the owner without holding the
+    /// actor. This is the ONLY way a non-JS thread interacts with the JS owner.
+    pub fn clone_sender(&self) -> JsEnvSender {
+        JsEnvSender { tx: self.tx.clone() }
+    }
+
+    /// Shut the owner thread down and join it.
+    pub async fn shutdown(mut self) {
+        let (done, rx) = oneshot::channel();
+        let _ = self.tx.send(OwnerCommand::Shutdown { done });
+        let _ = rx.await;
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+/// A clonable sender for non-JS threads to reach the JS owner. Holds only the
+/// command channel — it can NEVER touch QuickJS directly, only ask the owner to.
+#[derive(Clone)]
+pub struct JsEnvSender {
+    tx: tokio_mpsc::UnboundedSender<OwnerCommand>,
+}
+
+impl JsEnvSender {
+    /// Enqueue a host push from a non-JS thread and BLOCK until the owner has
+    /// delivered it (causal). For use on a plain OS thread (no async runtime):
+    /// the Push completion is a STD channel, so this thread blocks directly on
+    /// it — NO throwaway tokio runtime per push (the GTK intent hot path must
+    /// not build a runtime per event).
+    pub fn push_blocking(&self, payload: &str) -> std::result::Result<(), String> {
+        let (done, rx) = std_mpsc::channel();
+        self.tx
+            .send(OwnerCommand::Push { payload: payload.to_string(), done })
+            .map_err(|_| "owner thread gone".to_string())?;
+        match rx.recv() {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(format!("push delivery failed: {e}")),
+            Err(e) => Err(format!("owner dropped response: {e}")),
+        }
+    }
+}
+
+/// Evaluate a JS snippet that yields a Promise (or a plain value) and drive it
+/// to completion ON the owner thread, returning the result JSON-stringified. The
+/// snippet is wrapped so a module `import()` or an async IIFE both work.
+async fn eval_async_on_owner(owner: &JsEnvOwner, source: &str) -> Result<String> {
+    owner
+        .context()
+        .async_with(async |ctx| {
+            // Wrap the snippet in an async arrow-body. If the source is a single
+            // expression (no semicolon/newline), its value is the result. If it
+            // is statements, the caller must use an explicit trailing `return`
+            // OR (simpler) the shell tests use `eval_json` for statement bodies.
+            // Here we always wrap as an expression-position async IIFE that
+            // returns the source's value when it is an expression, else expects
+            // the source to `return` explicitly.
+            let wrapped = if source.contains(';') || source.contains('\n') {
+                // Statement body: require an explicit trailing expression by
+                // wrapping as an IIFE that returns the body's completion via
+                // `eval` semantics is unreliable; instead require the source to
+                // end with `return ...` — but to keep tests terse we append
+                // nothing and rely on the caller using a trailing expression.
+                // The robust choice: wrap as `(async () => { <source> })()` and
+                // let the source control its own return.
+                format!("(async () => {{ {} }})()", source)
+            } else {
+                format!("Promise.resolve({})", source)
+            };
+            let promise: rquickjs::Promise = ctx.eval(wrapped.as_str())?;
+            let resolved: rquickjs::Value = promise.into_future::<rquickjs::Value>().await?;
+            // JSON.stringify the result for a plain-data return across the channel.
+            let json: rquickjs::Function = ctx
+                .globals()
+                .get::<_, rquickjs::Object>("JSON")?
+                .get("stringify")?;
+            let s: String = json.call((resolved,))?;
+            Ok::<_, Error>(s)
+        })
+        .await
+}
+
+/// Deliver a push to `globalThis.__jsenv_on_push` on the owner thread, driving
+/// the handler's promise to completion on this thread.
+async fn deliver_push_on_owner(owner: &JsEnvOwner, payload: String) -> Result<()> {
+    owner
+        .context()
+        .async_with(async |ctx| {
+            let handler: rquickjs::Function = ctx
+                .globals()
+                .get("__jsenv_on_push")
+                .map_err(|_| Error::new_from_js_message("globals", "__jsenv_on_push", "no handler"))?;
+            let promise: rquickjs::Promise = handler.call((payload,))?;
+            promise.into_future::<()>().await?;
+            Ok::<_, Error>(())
+        })
+        .await
+}

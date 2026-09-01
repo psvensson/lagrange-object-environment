@@ -51,6 +51,8 @@ use std::collections::HashMap;
 use rquickjs::{AsyncContext, AsyncRuntime, Ctx, Error, Module, Result};
 use rquickjs::loader::{ImportAttributes, Loader, Resolver};
 
+pub mod actor;
+
 /// The canonical module name for an Environment source file.
 ///
 /// The loader is deliberately boring: a fixed map from a canonical module name
@@ -166,30 +168,36 @@ impl JsEnvOwner {
         Ok(owner)
     }
 
-    /// Access the context for running JS on the owner thread.
-    pub fn context(&self) -> &AsyncContext {
+    /// Access the context for running JS on the owner thread. CRATE-PRIVATE:
+    /// `AsyncContext` is `Clone + Send + Sync` under `parallel`, so a public
+    /// accessor would let ANY thread clone it and poll `drive()`/`with()` —
+    /// re-opening the multi-thread-migration bug the slice-2 falsifier killed.
+    /// The ONLY public path to QuickJS is `actor::JsEnvActor`'s command channel
+    /// (one owner by CONSTRUCTION, not by convention). Only the actor (same
+    /// crate) may reach these.
+    pub(crate) fn context(&self) -> &AsyncContext {
         &self.context
     }
 
     /// Access the runtime (e.g. to drive the job queue from the owner thread).
-    pub fn runtime(&self) -> &AsyncRuntime {
+    /// CRATE-PRIVATE for the same single-owner reason as `context()`.
+    pub(crate) fn runtime(&self) -> &AsyncRuntime {
         &self.runtime
     }
 
-    /// Run a closure against the JS context. MUST be called on the owner thread.
-    pub async fn with<F, R>(&self, f: F) -> R
+    /// Run a closure against the JS context. CRATE-PRIVATE: MUST be called on
+    /// the owner thread. One owner is enforced BY CONSTRUCTION: these accessors
+    /// are `pub(crate)`, so the ONLY public path to QuickJS is
+    /// `actor::JsEnvActor`'s dedicated-owner-thread command channel. (The
+    /// slice-2 review's "code-reviewed invariant, not a type bound" gap is now
+    /// closed — it IS a visibility bound.)
+    pub(crate) async fn with<F, R>(&self, f: F) -> R
     where
         F: for<'js> FnOnce(Ctx<'js>) -> R + rquickjs::markers::ParallelSend,
         R: rquickjs::markers::ParallelSend,
     {
         self.context.with(f).await
     }
-
-    // NOTE: awaiting JS promises uses `owner.context().async_with(...)` directly
-    // (rquickjs does not publicly export the `AsyncFnOnce` bound needed to wrap
-    // it generically). The ownership discipline — only the owner thread enters
-    // the runtime — is a code-reviewed invariant of this module, not a type
-    // bound. Slice 2 makes the single-owner pump concrete.
 
     /// Install the minimal host globals: AbortController/AbortSignal and
     /// setTimeout/clearTimeout. Promise/queueMicrotask/atob/btoa are native and

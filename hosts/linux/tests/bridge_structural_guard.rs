@@ -28,6 +28,7 @@ const PRODUCTION_FILES: &[&str] = &[
     // adversarial plan review's mandatory fix). It must never reference Node,
     // a subprocess, the throwaway worker, or lagrange-images.
     "js_env/mod.rs",
+    "js_env/actor.rs",
 ];
 
 /// Needles that would indicate a Node/subprocess dependency leaking into
@@ -38,9 +39,15 @@ const FORBIDDEN_NEEDLES: &[&str] = &[
     "std::process",
     "process::Command",
     "Command::new",
-    ".spawn(",
-    "Stdio::",
+    // A process spawn. The dedicated JS-owner OS thread uses
+    // `std::thread::Builder::spawn`, which is a THREAD, not a subprocess — so we
+    // target Command/child process spawns, not any `.spawn(`. (`.spawn(` alone
+    // would false-positive the legitimate owner-thread spawn in js_env/actor.rs.)
+    ".spawn(\"node\"",
     "Command::new(\"node\")",
+    ".stdout(Stdio",
+    ".stdin(Stdio",
+    ".stderr(Stdio",
     "\"node\"",          // invoking the node runtime by name
     "node_modules",
     "bridge-worker",    // the throwaway worker path
@@ -85,6 +92,7 @@ fn production_src_has_no_node_or_subprocess_dependency() {
 fn guard_detection_is_not_vacuous() {
     let forbidden_examples = [
         "let child = std::process::Command::new(\"node\").spawn();",
+        "let mut cmd = process::Command::new(\"sh\");",
         "// loads hosts/linux/tests/bridge-worker/acceptance-worker.mjs",
         "let url = env!(\"LAGRANGE_IMAGES_URL\");",
     ];
@@ -92,13 +100,19 @@ fn guard_detection_is_not_vacuous() {
         let hit = FORBIDDEN_NEEDLES.iter().any(|needle| line.contains(needle));
         assert!(hit, "guard FAILED to flag a forbidden line: {line:?}");
     }
-    // And the inverse: a benign SemanticUi `match node {` arm must NOT be flagged
-    // (the guard targets runtime deps, not the bare word).
-    let benign = "match node { SemanticNode::Group(..) => {} }";
-    assert!(
-        !FORBIDDEN_NEEDLES.iter().any(|needle| benign.contains(needle)),
-        "guard false-positives on the SemanticUi `node` binding: {benign:?}"
-    );
+    // And the inverse: benign lines must NOT be flagged — a SemanticUi `node`
+    // binding AND the dedicated JS-owner OS thread spawn (a thread, not a
+    // subprocess).
+    for benign in [
+        "match node { SemanticNode::Group(..) => {} }",
+        "let t = std::thread::Builder::new().name(\"js-env-owner\").spawn(move || {",
+        "tokio::task::spawn_local(_drive);",
+    ] {
+        assert!(
+            !FORBIDDEN_NEEDLES.iter().any(|needle| benign.contains(needle)),
+            "guard false-positives on a benign line: {benign:?}"
+        );
+    }
 }
 
 #[test]
