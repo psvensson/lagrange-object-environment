@@ -71,19 +71,49 @@ wgpu-types = "29"
 [patch."https://github.com/wasi-gfx/wasi-gfx-runtime.git"]
 surface-wasmtime = { path = "vendor/surface-wasmtime" }
 
-# 0fg CANDIDATE pin: run the 3zb-A liveness suite against the engine that fixes
-# the QuickJS-NG module-linker SIGSEGV. Released rquickjs 0.12.2 bundles
-# QuickJS-NG 0.15.1, which segfaults linking the real lagrange-images closure
-# (cyclic re-export of an imported binding; upstream fix commit ef7a3a7, first
-# shipped in QuickJS-NG 0.16.0). No released rquickjs carries a green engine
-# (master still pins 0.15.1 via fd0a0210), so the smallest reproducible pin is
-# the EXACT upstream PR #723 head revision (quickjs-ng 2c620e4), never a
-# floating branch. Validation: hosts/linux js_env suite must stay green
-# (esp. the two command-quiet liveness regressions) before this lands.
+# 0fg pin: the 3zb-A/3zb-B suites must run against the engine that fixes the
+# QuickJS-NG module-linker SIGSEGV. Released rquickjs 0.12.2 bundles QuickJS-NG
+# 0.15.1, which segfaults linking the real lagrange-images closure (cyclic
+# re-export of an imported binding; upstream fix commit ef7a3a7, first shipped
+# in QuickJS-NG 0.16.0). No released rquickjs carries a green engine (master
+# still pins 0.15.1 via fd0a0210), so the pin is the EXACT revision
+# 810b2b66... (which vendors quickjs-ng 2c620e4), never a floating branch.
+#
+# READ BEFORE "FIXING" THE URL BELOW (Bead 2rk). The URL is a PROJECT-OWNED
+# MIRROR, deliberately, and the commit it serves is byte-identical to upstream.
+# Revision 810b2b66... is the head of the still-open PR DelSkayn/rquickjs#723,
+# whose branch lives in the THIRD-PARTY fork richarddd/rquickjs; the revision is
+# on NO branch of DelSkayn/rquickjs and was reachable only as
+# refs/pull/723/head. A force-push, a deleted fork or a closed PR could orphan
+# it, and GitHub's retention of orphaned PR commits is best-effort -- a GC'd
+# commit breaks `cargo fetch` on every fresh clone and every CI run. So:
+#
+#   * do NOT "restore" https://github.com/DelSkayn/rquickjs.git here;
+#   * do NOT pin a branch or tag name -- the exact rev is the contract, and a
+#     ref is a moving target (this is the same class of defect);
+#   * do NOT change the revision to quickjs-ng's v0.16.2 tag (1ab8676f):
+#     2c620e4 is what Bead 0fg actually validated green.
+#
+# The mirror carries only this one commit, on a protected branch + tag
+# (deletion and force-push are blocked by repository rulesets), and is retired
+# by Bead s3b when a released rquickjs ships the fix -- at which point this
+# whole [patch.crates-io] block is deleted and the mirror is archived.
+#
+# Second leg, recorded so it is not re-investigated: rquickjs vendors the engine
+# as a git SUBMODULE (.gitmodules: sys/quickjs -> quickjs-ng/quickjs, pinned at
+# 2c620e4), which cargo fetches too, and sys/build.rs compiles the C sources
+# from that checkout -- so reachability has TWO legs. Leg 2 needs no repointing:
+# 2c620e4 is ordinary ancestor history of quickjs-ng master, not a PR branch.
+# It is NOT mirrored in-tree because editing .gitmodules would change the tree
+# and therefore the pinned commit SHA. A project-owned recovery mirror exists at
+# psvensson/quickjs-ng-pin, reachable WITHOUT editing any source via
+# `CARGO_NET_GIT_FETCH_WITH_CLI=true` plus a gitconfig
+# `url.<mirror>.insteadOf https://github.com/quickjs-ng/quickjs.git`
+# (libgit2 does not honor insteadOf, so the git-CLI fetch path is required).
 [patch.crates-io]
-rquickjs = { git = "https://github.com/DelSkayn/rquickjs.git", rev = "810b2b661ebee5f632e664fc93084f0f21258341" }
-rquickjs-core = { git = "https://github.com/DelSkayn/rquickjs.git", rev = "810b2b661ebee5f632e664fc93084f0f21258341" }
-rquickjs-sys = { git = "https://github.com/DelSkayn/rquickjs.git", rev = "810b2b661ebee5f632e664fc93084f0f21258341" }
-rquickjs-macro = { git = "https://github.com/DelSkayn/rquickjs.git", rev = "810b2b661ebee5f632e664fc93084f0f21258341" }
+rquickjs = { git = "https://github.com/psvensson/rquickjs-pin.git", rev = "810b2b661ebee5f632e664fc93084f0f21258341" }
+rquickjs-core = { git = "https://github.com/psvensson/rquickjs-pin.git", rev = "810b2b661ebee5f632e664fc93084f0f21258341" }
+rquickjs-sys = { git = "https://github.com/psvensson/rquickjs-pin.git", rev = "810b2b661ebee5f632e664fc93084f0f21258341" }
+rquickjs-macro = { git = "https://github.com/psvensson/rquickjs-pin.git", rev = "810b2b661ebee5f632e664fc93084f0f21258341" }
 
 [workspace]

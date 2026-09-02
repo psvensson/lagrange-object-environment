@@ -96,6 +96,13 @@ jobs:
       # gtk4::init(), which requires a display — run the whole native suite
       # under Xvfb (the L1 offscreen GPU tests are unaffected by a display).
       # GTK is main-thread-only, so the GTK widget test is a single #[test].
+      # --locked is load-bearing (Bead 2rk): the rquickjs pin is served from a
+      # PROJECT-OWNED MIRROR whose whole purpose is that no build depends on an
+      # orphanable third-party PR-head commit. Without --locked, cargo would
+      # silently rewrite Cargo.lock in the CI workspace and go green even if the
+      # committed lock still named the old upstream URL — so CI would pass while
+      # every `--locked` consumer kept fetching the URL this pin exists to stop
+      # depending on. --locked makes that a hard CI failure instead.
       - name: Native Linux host proof (L1 Component graphics + L2b GTK semantic UI)
         working-directory: lagrange-object-environment/hosts/linux
-        run: xvfb-run -a -s "-screen 0 1280x1024x24" cargo test
+        run: xvfb-run -a -s "-screen 0 1280x1024x24" cargo test --locked

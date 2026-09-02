@@ -2318,7 +2318,7 @@ dependencies = [
 [[package]]
 name = "rquickjs"
 version = "0.12.2"
-source = "git+https://github.com/DelSkayn/rquickjs.git?rev=810b2b661ebee5f632e664fc93084f0f21258341#810b2b661ebee5f632e664fc93084f0f21258341"
+source = "git+https://github.com/psvensson/rquickjs-pin.git?rev=810b2b661ebee5f632e664fc93084f0f21258341#810b2b661ebee5f632e664fc93084f0f21258341"
 dependencies = [
  "rquickjs-core",
  "rquickjs-macro",
@@ -2327,7 +2327,7 @@ dependencies = [
 [[package]]
 name = "rquickjs-core"
 version = "0.12.2"
-source = "git+https://github.com/DelSkayn/rquickjs.git?rev=810b2b661ebee5f632e664fc93084f0f21258341#810b2b661ebee5f632e664fc93084f0f21258341"
+source = "git+https://github.com/psvensson/rquickjs-pin.git?rev=810b2b661ebee5f632e664fc93084f0f21258341#810b2b661ebee5f632e664fc93084f0f21258341"
 dependencies = [
  "async-lock",
  "hashbrown 0.17.1",
@@ -2338,7 +2338,7 @@ dependencies = [
 [[package]]
 name = "rquickjs-macro"
 version = "0.12.2"
-source = "git+https://github.com/DelSkayn/rquickjs.git?rev=810b2b661ebee5f632e664fc93084f0f21258341#810b2b661ebee5f632e664fc93084f0f21258341"
+source = "git+https://github.com/psvensson/rquickjs-pin.git?rev=810b2b661ebee5f632e664fc93084f0f21258341#810b2b661ebee5f632e664fc93084f0f21258341"
 dependencies = [
  "convert_case",
  "fnv",
@@ -2354,7 +2354,7 @@ dependencies = [
 [[package]]
 name = "rquickjs-sys"
 version = "0.12.2"
-source = "git+https://github.com/DelSkayn/rquickjs.git?rev=810b2b661ebee5f632e664fc93084f0f21258341#810b2b661ebee5f632e664fc93084f0f21258341"
+source = "git+https://github.com/psvensson/rquickjs-pin.git?rev=810b2b661ebee5f632e664fc93084f0f21258341#810b2b661ebee5f632e664fc93084f0f21258341"
 dependencies = [
  "cc",
 ]
