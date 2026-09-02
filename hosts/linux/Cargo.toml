@@ -59,6 +59,8 @@ wasmtime = { version = "47", features = ["component-model", "async"] }
 wasmtime-wasi = "47"
 wgpu-core = "29"
 wgpu-types = "29"
+aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
+getrandom = "0.2"
 
 # The pinned revision's surface-wasmtime made the surface TYPES public
 # ("export custom surface types") but left `mod surface` private, so the

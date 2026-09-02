@@ -52,6 +52,7 @@ pub mod bridge;
 // shell only in slice 1; see js_env/mod.rs for scope, invariants, and the
 // deletion criterion. NOT a Node runtime and NOT a per-language-bridge
 // precedent.
+pub mod images_composition;
 pub mod js_env;
 
 use std::collections::HashMap;

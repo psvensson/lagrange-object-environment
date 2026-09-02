@@ -68,6 +68,7 @@ use rquickjs::{AsyncContext, AsyncRuntime, Ctx, Error, Exception, Function, Modu
 use rquickjs::loader::{ImportAttributes, Loader, Resolver};
 
 pub mod actor;
+pub mod host_crypto;
 pub mod images_capability;
 pub mod renderer_port;
 
@@ -251,6 +252,7 @@ impl JsEnvOwner {
             install_timers(&ctx, timer_notify)?;
             install_text_coders(&ctx)?;
             install_structured_clone(&ctx)?;
+            host_crypto::install_host_crypto(&ctx)?;
             Ok::<_, Error>(())
         })
         .await?;
