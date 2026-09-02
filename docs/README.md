@@ -3,7 +3,7 @@
 The documents here define the object-environment boundary before they define a visual style or toolkit.
 
 - [Architecture](architecture.md) — layers and ownership
-- [Portable client host boundary](architecture/portable-client-host.md) — "no browser required": the browser is the reference host (ADR 0013); portable-vs-host-specific classification and the two realization routes
+- [Portable client host boundary](architecture/portable-client-host.md) — "no browser required" plus the WASM/WIT-centered client execution direction (ADRs 0013/0014); native per-language embeddings are bounded fallbacks, not the language-support architecture
 - [RendererAdapter contract](contracts/renderer-adapter.md) — the host-portability boundary between the environment and a host's renderer
 - [Core concepts](concepts.md) — Image, Project, Presentation, Command, Perspective and Session
 - [Projects and collaborative work](projects-and-collaboration.md) — organization, history UX, Git projection and multi-author work
