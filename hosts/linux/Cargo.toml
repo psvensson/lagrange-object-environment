@@ -94,10 +94,18 @@ surface-wasmtime = { path = "vendor/surface-wasmtime" }
 #   * do NOT change the revision to quickjs-ng's v0.16.2 tag (1ab8676f):
 #     2c620e4 is what Bead 0fg actually validated green.
 #
-# The mirror carries only this one commit, on a protected branch + tag
-# (deletion and force-push are blocked by repository rulesets), and is retired
-# by Bead s3b when a released rquickjs ships the fix -- at which point this
-# whole [patch.crates-io] block is deleted and the mirror is archived.
+# The mirror is ARCHIVED (read-only) and public, so it stays fetchable while
+# nothing can push to it; its `pinned/*` branches and all tags are additionally
+# protected against deletion and force-push by repository rulesets, and the
+# revision is permanently anchored by the annotated tag `lagrange-pin-810b2b66`
+# even if a branch head ever moved. Archiving is not cosmetic: the mirrored
+# commit necessarily carries upstream's own `.github/dependabot.yml` (deleting
+# it would change the tree and therefore the pinned SHA), so GitHub began
+# opening Dependabot PRs against the mirror -- including one to bump the
+# `sys/quickjs` submodule off 2c620e4, precisely the thing that must never
+# move. A read-only repository cannot accept them. Bead s3b retires the mirror
+# when a released rquickjs ships the fix, at which point this whole
+# [patch.crates-io] block is deleted.
 #
 # Second leg, recorded so it is not re-investigated: rquickjs vendors the engine
 # as a git SUBMODULE (.gitmodules: sys/quickjs -> quickjs-ng/quickjs, pinned at
