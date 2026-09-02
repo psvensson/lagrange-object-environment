@@ -21,7 +21,27 @@
 //!   green rquickjs path is PR DelSkayn/rquickjs#723, pinned by EXACT rev
 //!   `810b2b661ebee5f632e664fc93084f0f21258341` (quickjs-ng 2c620e4) in
 //!   `Cargo.toml`'s `[patch.crates-io]`. No released green rquickjs exists; the
-//!   pin moves to a release when one ships the fix.
+//!   pin moves to a release when one ships the fix (Bead s3b).
+//!
+//!   PROVENANCE vs FETCH URL (Bead 2rk) — these are different things, and the
+//!   manifest is NOT inconsistent with the paragraph above. The revision's
+//!   PROVENANCE is PR DelSkayn/rquickjs#723 (as stated); the URL it is FETCHED
+//!   from is a project-owned mirror, `psvensson/rquickjs-pin`, serving that
+//!   byte-identical commit. The revision is on no branch of DelSkayn/rquickjs
+//!   and was reachable only as `refs/pull/723/head`, which a force-push or a
+//!   closed PR could orphan — breaking `cargo fetch` for every fresh clone and
+//!   CI run. Do not "restore" the upstream URL and do not pin a branch/tag name;
+//!   see the `[patch.crates-io]` comment in `hosts/linux/Cargo.toml`.
+//!
+//!   ORACLE CAVEAT (Bead 25v): `full_closure_links_and_exports_api` is the
+//!   project's only guard that the engine carries the linker fix, and it is NOT
+//!   hermetic — it links the REAL sibling `lagrange-images` closure, so it only
+//!   fires while that module graph still contains a circular re-export. If
+//!   Images ever removes that cycle, this test goes GREEN UNDER A BUGGY ENGINE.
+//!   The minimized 3-module synthetic repro is not checked in anywhere; Bead 25v
+//!   adds it, and blocks s3b (where the engine actually changes). For a mere
+//!   fetch-URL change the engine cannot change at all — the rev is pinned by
+//!   SHA — so for Bead 2rk this test is a smoke test, not the primary proof.
 //!
 //! Proven GREEN below:
 //!   - guest conditions are non-Node (process/Buffer/require undefined);
