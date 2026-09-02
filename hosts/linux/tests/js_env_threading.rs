@@ -122,7 +122,6 @@ impl CapabilityTrigger {
 async fn async_capability_resumes_on_js_owner_thread() {
     let actor = JsEnvActor::spawn(EmbeddedLoader::new()).expect("spawn actor");
     let owner_tid = format!("{:?}", actor.owner_thread_id());
-    install_signal(&actor, Signal::new()).await;
     install_thread_probe(&actor).await;
     let sig = Signal::new();
     install_signal(&actor, sig.clone()).await;

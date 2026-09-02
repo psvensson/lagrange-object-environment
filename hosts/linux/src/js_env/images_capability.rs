@@ -282,6 +282,17 @@ fn mutate_object(
     // Apply the mutation (merge value's slots), bump the version, and record the
     // observation event BEFORE completing (so any later poll sees it — the olm
     // ordering guarantee slice-4 relies on).
+    // Loud-reject a non-object mutation value rather than silently no-oping the
+    // merge while still bumping the version/recording an event (fake fidelity:
+    // a mutation that "commits" without changing anything would mask a real
+    // caller bug behind a token advance).
+    if !value.is_object() {
+        return err_envelope(
+            "ObjectMutationError",
+            "mutation value must be a JSON object of slots",
+            Some("MUTATION_VALUE_NOT_OBJECT"),
+        );
+    }
     if let (Value::Object(dst), Value::Object(src)) = (&mut rec.slots, &value) {
         for (k, v) in src {
             dst.insert(k.clone(), v.clone());

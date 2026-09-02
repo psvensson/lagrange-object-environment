@@ -107,6 +107,10 @@ fn guard_detection_is_not_vacuous() {
         "let mut cmd = process::Command::new(\"sh\");",
         "// loads hosts/linux/tests/bridge-worker/acceptance-worker.mjs",
         "let url = env!(\"LAGRANGE_IMAGES_URL\");",
+        // The js_env TEST capability must NOT become a private lagrange-images host:
+        // the underscore form is the needle (LAGRANGE_IMAGES_URL above only covers
+        // the env-var form).
+        "use lagrange_images::runtime;",
     ];
     for line in forbidden_examples {
         let hit = FORBIDDEN_NEEDLES.iter().any(|needle| line.contains(needle));

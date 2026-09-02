@@ -349,3 +349,40 @@ return {
     }
     actor.shutdown().await;
 }
+
+/// The production `EmbeddedLoader` loudly REJECTS any dynamic import that is not
+/// in the explicit embedded-source map: `node:*` builtins, bare Node vocabulary
+/// (`crypto`/`buffer`), and unknown local modules. This is the committed
+/// falsifier for the dynamic-import side of the Node fence (the static side is
+/// `bridge_structural_guard`): a future edit that accidentally grows a Node
+/// compatibility loader goes RED here.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn embedded_loader_loudly_rejects_node_and_unknown_imports() {
+    let actor = JsEnvActor::spawn(EmbeddedLoader::new()).expect("spawn actor");
+    let json = actor
+        .eval_async(
+            r#"
+const attempts = {};
+for (const spec of ['node:crypto', 'node:fs', 'crypto', 'buffer', 'unknown-local-module']) {
+  try {
+    await import(spec);
+    attempts[spec] = 'RESOLVED (unexpected!)';
+  } catch (e) {
+    attempts[spec] = String((e && e.message) || e);
+  }
+}
+return attempts;
+"#,
+        )
+        .await
+        .expect("eval dynamic imports");
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    for spec in ["node:crypto", "node:fs", "crypto", "buffer", "unknown-local-module"] {
+        let msg = v[spec].as_str().unwrap_or("");
+        assert!(
+            msg.contains("not in the embedded-source map"),
+            "import('{spec}') must reject loudly as not-in-map, got: {msg}"
+        );
+    }
+    actor.shutdown().await;
+}

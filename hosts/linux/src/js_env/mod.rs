@@ -361,11 +361,23 @@ globalThis.__jsenv_fire_due = function __jsenv_fire_due(now) {
   const due = [...globalThis.__jsenv_timers.entries()]
     .filter(([, t]) => t.due <= now)
     .sort((a, b) => a[1].due - b[1].due);
+  let fired = 0;
   for (const [id, t] of due) {
+    // A clearTimeout from an earlier callback in this same batch must win: the
+    // batch is snapshotted before firing, so re-check registration per timer.
+    if (!globalThis.__jsenv_timers.has(id)) continue;
     globalThis.__jsenv_timers.delete(id);
-    t.fn();
+    fired++;
+    try {
+      t.fn();
+    } catch (e) {
+      // A throwing guest timer callback must NOT abort the rest of the batch or
+      // vanish silently. Record it on a host-drained channel (the owner logs
+      // it); the owner stays alive and later timers still fire.
+      (globalThis.__jsenv_timer_errors = globalThis.__jsenv_timer_errors ?? []).push(String((e && e.stack) || e));
+    }
   }
-  return due.length;
+  return fired;
 };
 // Owner-pump query: the earliest pending due time, or null if none.
 globalThis.__jsenv_next_due = function __jsenv_next_due() {

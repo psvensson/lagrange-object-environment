@@ -503,6 +503,17 @@ async fn fire_due_timers(owner: &JsEnvOwner) {
                 .get("__jsenv_fire_due")
                 .unwrap_or_else(|_| ctx.eval("() => 0").unwrap());
             let _: i64 = fire.call((now as f64,)).unwrap_or(0);
+            // Surface any guest timer callback that threw (recorded guest-side by
+            // __jsenv_fire_due so it is neither swallowed nor batch-aborting). Drain
+            // and log host-side; the owner stays alive and later timers still fire.
+            if let Ok(errors) = ctx.globals().get::<_, rquickjs::Array>("__jsenv_timer_errors") {
+                for i in 0..errors.len() {
+                    if let Ok(e) = errors.get::<String>(i) {
+                        eprintln!("js_env: guest timer callback threw: {e}");
+                    }
+                }
+                let _ = ctx.globals().set("__jsenv_timer_errors", rquickjs::Array::new(ctx.clone()));
+            }
         })
         .await;
 }

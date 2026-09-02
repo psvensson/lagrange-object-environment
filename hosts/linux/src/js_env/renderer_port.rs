@@ -287,8 +287,19 @@ pub fn install_renderer_adapter(ctx: &rquickjs::Ctx, tx: RendererPortTx, name: &
                 async move {
                     let size: Value = serde_json::from_str(&size_json)
                         .map_err(json_err("resize", "size JSON"))?;
-                    let width = size.get("width").and_then(Value::as_u64).unwrap_or(0) as u32;
-                    let height = size.get("height").and_then(Value::as_u64).unwrap_or(0) as u32;
+                    // Loud-reject a malformed size rather than silently defaulting
+                    // to 0x0 (this port's discipline: bad input crosses as an error,
+                    // not a silent no-op).
+                    let width = size
+                        .get("width")
+                        .and_then(Value::as_u64)
+                        .ok_or_else(|| rquickjs::Error::new_from_js("resize", "size.width must be a non-negative integer"))?
+                        as u32;
+                    let height = size
+                        .get("height")
+                        .and_then(Value::as_u64)
+                        .ok_or_else(|| rquickjs::Error::new_from_js("resize", "size.height must be a non-negative integer"))?
+                        as u32;
                     tx.resize(handle, width, height).await.map_err(op_err("resize"))
                 }
             }),
