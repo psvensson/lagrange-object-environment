@@ -7,7 +7,8 @@
 //!   - a timeout fires through the OWNER pump, not an unrelated thread;
 //!   - shutdown drops pending host timers cleanly;
 //!   - unsupported/Node global facilities remain absent (no `process`, no
-//!     `Buffer`, no `require`, no `fetch`, no `crypto`, no `structuredClone`).
+//!     `Buffer`, no `require`, no `fetch`, no `crypto`) -- while the WEB-STANDARD
+//!     facilities the real portable closure needs ARE present.
 //!
 //! All JS contact routes through the dedicated-owner-thread actor
 //! (`js_env::actor::JsEnvActor`): the ONLY public path to QuickJS is the owner
@@ -325,7 +326,6 @@ return {
   require: typeof require,
   fetch: typeof fetch,
   crypto: typeof crypto,
-  structuredClone: typeof structuredClone,
   global: typeof global,
   __dirname: typeof __dirname,
   // Present-and-used natives:
@@ -335,17 +335,30 @@ return {
   btoa: typeof btoa,
   AbortController: typeof AbortController,
   setTimeout: typeof setTimeout,
+  // Web-standard host facilities the REAL lagrange-images portable closure
+  // needs. NOT Node compatibility and NOT engine features -- the pinned
+  // QuickJS-NG provides none of them. Coders: Bead 3zb B1a. structuredClone:
+  // B1c (Images' LanguagePlatform.register, mock-backend and graph-image-service
+  // all clone). `crypto` stays ABSENT above: crypto reaches Images through its
+  // own provider contract, never a WebCrypto-shaped global.
+  TextEncoder: typeof TextEncoder,
+  TextDecoder: typeof TextDecoder,
+  structuredClone: typeof structuredClone,
 };
 "#,
         )
         .await
         .expect("eval globals");
     let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-    for key in ["process", "Buffer", "require", "fetch", "crypto", "structuredClone", "global", "__dirname"] {
+    for key in ["process", "Buffer", "require", "fetch", "crypto", "global", "__dirname"] {
         assert_eq!(v[key], serde_json::json!("undefined"), "{key} must be absent (no Node personality)");
     }
     for key in ["Promise", "queueMicrotask", "atob", "btoa", "AbortController", "setTimeout"] {
         assert_eq!(v[key], serde_json::json!("function"), "{key} must be present");
+    }
+    // Web-standard, deliberately present (see the object literal above).
+    for key in ["TextEncoder", "TextDecoder", "structuredClone"] {
+        assert_eq!(v[key], serde_json::json!("function"), "{key} must be present (web standard)");
     }
     actor.shutdown().await;
 }

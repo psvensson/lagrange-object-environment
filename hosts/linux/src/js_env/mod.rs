@@ -32,6 +32,15 @@
 //!         only coder user, and `composite-codec.js` calls `utf8Encode('LGIC')`
 //!         at MODULE TOP LEVEL — so they must exist BEFORE module evaluation,
 //!         which is why they are installed here with the other host globals.
+//!       * `structuredClone` (Bead 3zb slice B1c) — likewise a WEB-STANDARD host
+//!         facility that the pinned engine does not provide. The 3zb-A review
+//!         correctly deleted it from the Env-side surface (no Environment module
+//!         uses it; the census's hits were all `lagrange-images`, BELOW the
+//!         capability port). B1b is the first slice to run the real Images
+//!         closure IN-PROCESS, which turns that below-the-port need into a host
+//!         obligation: `LanguagePlatform.register` clones every descriptor, the
+//!         mock backend clones EVERY value in and out, and the graph image
+//!         service clones every durable put record.
 //!   - `process` is ABSENT (asserted in tests). NO Buffer shim, NO crypto shim,
 //!     NO node:crypto/fs/process/child_process, NO Node module personality, NO
 //!     lagrange-images imports, and NO dependency on the throwaway 64j Node
@@ -231,7 +240,8 @@ impl JsEnvOwner {
     }
 
     /// Install the minimal host globals: AbortController/AbortSignal,
-    /// setTimeout/clearTimeout and the web-standard UTF-8 coders.
+    /// setTimeout/clearTimeout, the web-standard UTF-8 coders and
+    /// `structuredClone`.
     /// Promise/queueMicrotask/atob/btoa are native and need no installation.
     /// `process` is intentionally NOT defined.
     async fn install_host_globals(&self) -> Result<()> {
@@ -240,6 +250,7 @@ impl JsEnvOwner {
             install_abort_controller(&ctx)?;
             install_timers(&ctx, timer_notify)?;
             install_text_coders(&ctx)?;
+            install_structured_clone(&ctx)?;
             Ok::<_, Error>(())
         })
         .await?;
@@ -595,4 +606,204 @@ globalThis.TextDecoder = class TextDecoder {
     return this._fatal ? __jsenv_utf8_decode_fatal(bytes) : __jsenv_utf8_decode_lossy(bytes);
   }
 };
+"#;
+
+// ---------------------------------------------------------------------------
+// structuredClone (Bead 3zb slice B1c)
+// ---------------------------------------------------------------------------
+//
+// WHY IT IS HERE. Another WEB-STANDARD host facility the pinned QuickJS-NG does
+// not provide. The 3zb-A review deliberately removed `structuredClone` from the
+// host-global surface, correctly: no Environment module uses it, and the Phase-A
+// census's hits were all `lagrange-images` — BELOW the capability port. B1b is
+// the first slice to run the real Images closure IN-PROCESS, which turns that
+// below-the-port need into a host obligation. It is not niche in that closure:
+// `LanguagePlatform.register` clones every language descriptor (which is where
+// composing a runtime first fails without it), the mock backend clones EVERY
+// value entering and leaving storage, and the graph image service clones every
+// durable shape/object/code-artifact/lexical-environment put record.
+//
+// THIS IS THE STANDARD GLOBAL, NOT AN IMAGES-SPECIFIC DEEP CLONE. It implements
+// the structured-clone algorithm for the value space Lagrange can realistically
+// put through it plus the obvious standard structures, and REFUSES everything
+// else loudly rather than silently degrading to a shallow copy or a lossy one.
+//
+// Supported: primitives incl. BigInt, `undefined`, `NaN`, ±Infinity and -0;
+// plain objects (including null-prototype); arrays (holes preserved, extra own
+// enumerable keys carried); cycles and repeated-reference IDENTITY; `Date`;
+// `RegExp`; `ArrayBuffer`; `DataView` and all typed arrays; `Map`; `Set`.
+//
+// Refused with a DataCloneError-shaped exception: functions, symbols (as values
+// or reachable), and any object with a prototype other than `Object.prototype`
+// or `null` (class instances, wrapper objects, Errors, Promises). The spec
+// refuses these too; refusing loudly means a future need shows up as a clear
+// failure rather than a silently wrong durable record.
+//
+// TRANSFER LISTS ARE UNSUPPORTED AND LOUD. Nothing in the portable closure uses
+// them, and silently ignoring `{transfer: [...]}` would be the worst outcome:
+// the caller would believe a buffer had been detached and transferred when it
+// had in fact been copied.
+//
+// IDENTITY IS THE LOAD-BEARING PROPERTY, not deep equality. Two properties
+// referencing one object must still reference ONE object after cloning, a cycle
+// must remain a cycle, and two typed arrays over one `ArrayBuffer` must still
+// share one (cloned) buffer. `graph-image-service` clones durable records that
+// contain repeated references; a clone that duplicated them would silently
+// change the shape of what gets stored. The memo map is keyed on the ORIGINAL
+// object and is populated BEFORE recursing, which is what makes cycles work.
+
+/// Install `structuredClone`.
+///
+/// Pure JS: the algorithm is a deep traversal with identity memoisation over JS
+/// values, which has no natural Rust representation — and (as with the encoder
+/// half of `TextEncoder`) values that cannot cross into Rust are exactly the
+/// ones that would need special handling.
+fn install_structured_clone(ctx: &Ctx<'_>) -> Result<()> {
+    ctx.eval::<(), _>(STRUCTURED_CLONE)?;
+    Ok(())
+}
+
+const STRUCTURED_CLONE: &str = r#"
+(() => {
+  // DataCloneError-shaped: the pinned engine has no DOMException, so this is a
+  // plain Error carrying the name the web platform uses. Callers that branch on
+  // `err.name === 'DataCloneError'` behave identically.
+  function dataCloneError(message) {
+    const e = new Error(message);
+    e.name = 'DataCloneError';
+    return e;
+  }
+
+  const typedArrayCtors = [
+    'Int8Array', 'Uint8Array', 'Uint8ClampedArray',
+    'Int16Array', 'Uint16Array',
+    'Int32Array', 'Uint32Array',
+    'Float32Array', 'Float64Array',
+    'BigInt64Array', 'BigUint64Array',
+  ];
+
+  function describe(value) {
+    if (typeof value === 'function') return 'a function';
+    if (typeof value === 'symbol') return 'a symbol';
+    const tag = Object.prototype.toString.call(value);
+    return `an object of type ${tag}`;
+  }
+
+  function cloneValue(value, memo) {
+    // Primitives clone as themselves. This covers undefined, null, booleans,
+    // strings, BigInt, and every number including NaN, ±Infinity and -0 (which
+    // survives because it is returned, not reconstructed).
+    if (value === null) return null;
+    const t = typeof value;
+    if (t === 'undefined' || t === 'boolean' || t === 'number' || t === 'string' || t === 'bigint') {
+      return value;
+    }
+    if (t === 'symbol') throw dataCloneError('structuredClone cannot clone a symbol');
+    if (t === 'function') throw dataCloneError('structuredClone cannot clone a function');
+
+    // Identity: a value already cloned in this call returns the SAME clone, so
+    // repeated references stay shared and cycles terminate.
+    if (memo.has(value)) return memo.get(value);
+
+    if (value instanceof Date) {
+      const out = new Date(value.getTime());
+      memo.set(value, out);
+      return out;
+    }
+
+    if (value instanceof RegExp) {
+      const out = new RegExp(value.source, value.flags);
+      memo.set(value, out);
+      return out;
+    }
+
+    if (value instanceof ArrayBuffer) {
+      const out = value.slice(0);
+      memo.set(value, out);
+      return out;
+    }
+
+    // Views: clone the BACKING BUFFER through the memo, so two views over one
+    // buffer still share one buffer afterwards, then rebuild the view over the
+    // same byteOffset/length. `slice()` would flatten that sharing and lose the
+    // offset, so it is deliberately not used here.
+    if (ArrayBuffer.isView(value)) {
+      const name = value.constructor && value.constructor.name;
+      const isDataView = value instanceof DataView;
+      if (!isDataView && !typedArrayCtors.includes(name)) {
+        throw dataCloneError(`structuredClone cannot clone ${describe(value)}`);
+      }
+      const buffer = cloneValue(value.buffer, memo);
+      const out = isDataView
+        ? new DataView(buffer, value.byteOffset, value.byteLength)
+        : new globalThis[name](buffer, value.byteOffset, value.length);
+      memo.set(value, out);
+      return out;
+    }
+
+    if (value instanceof Map) {
+      const out = new Map();
+      memo.set(value, out);
+      for (const [k, v] of value) out.set(cloneValue(k, memo), cloneValue(v, memo));
+      return out;
+    }
+
+    if (value instanceof Set) {
+      const out = new Set();
+      memo.set(value, out);
+      for (const v of value) out.add(cloneValue(v, memo));
+      return out;
+    }
+
+    if (Array.isArray(value)) {
+      const out = new Array(value.length);
+      memo.set(value, out);
+      for (let i = 0; i < value.length; i++) {
+        // Preserve holes: a sparse array must not densify into undefineds.
+        if (i in value) out[i] = cloneValue(value[i], memo);
+      }
+      // Own enumerable non-index keys travel too (the spec clones own
+      // enumerable properties, not only the indexed ones).
+      for (const key of Object.keys(value)) {
+        if (String(Number(key)) === key && Number(key) >= 0) continue;
+        out[key] = cloneValue(value[key], memo);
+      }
+      return out;
+    }
+
+    // Only PLAIN objects. A class instance, wrapper object, Error, Promise or
+    // any other exotic prototype is refused, exactly as the platform refuses it
+    // -- silently flattening one to a plain object would produce a durable
+    // record that no longer round-trips.
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) {
+      throw dataCloneError(`structuredClone cannot clone ${describe(value)}`);
+    }
+
+    const out = {};
+    memo.set(value, out);
+    // Symbol-keyed properties are not cloned by the platform; string keys are.
+    for (const key of Object.keys(value)) {
+      out[key] = cloneValue(value[key], memo);
+    }
+    return out;
+  }
+
+  globalThis.structuredClone = function structuredClone(value, options) {
+    if (options !== undefined && options !== null) {
+      if (typeof options !== 'object') {
+        throw new TypeError('structuredClone options must be an object');
+      }
+      // Loud rather than silently ignored: a caller passing `transfer` believes
+      // the buffers were detached and moved, not copied.
+      if ('transfer' in options) {
+        throw dataCloneError('structuredClone: the transfer option is not implemented by this host');
+      }
+    }
+    if (arguments.length === 0) {
+      throw new TypeError('structuredClone requires a value');
+    }
+    return cloneValue(value, new Map());
+  };
+})();
 "#;
