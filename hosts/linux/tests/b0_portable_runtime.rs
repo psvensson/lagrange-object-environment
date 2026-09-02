@@ -56,13 +56,20 @@
 //!   - the FULL closure links + evaluates + exports the portable API
 //!     (`createPortableRuntime`, …) — the former SIGSEGV leg, now green.
 //!
-//! NOTE (host globals): the full closure's top-level (composite-codec's
-//! `utf8Encode('LGIC')`) needs the standard web-API `TextEncoder`/`TextDecoder`
-//! UTF-8 coders ("standard on every ES host" per the closure). These are NOT
-//! Node and NOT an engine feature; the host is expected to provide them exactly
-//! like setTimeout/AbortController. For 0fg they are installed TEST-LOCALLY below to
-//! keep the production `js_env` host-global surface at its 3zb-A-reviewed scope;
-//! 3zb-B decides the production surface.
+//! NOTE (host globals) — RESOLVED by Bead 3zb slice B1a. The full closure's
+//! top-level (composite-codec's `utf8Encode('LGIC')`) needs the standard web-API
+//! `TextEncoder`/`TextDecoder` UTF-8 coders ("standard on every ES host" per the
+//! closure). These are NOT Node and NOT an engine feature; the host provides them
+//! exactly like setTimeout/AbortController. 0fg installed a deliberately minimal
+//! shim TEST-LOCALLY here to keep the production `js_env` surface at its
+//! 3zb-A-reviewed scope, and deferred the production decision to 3zb-B. B1a made
+//! that decision: `js_env::install_host_globals` now installs spec-faithful
+//! coders, so this probe installs nothing and simply inherits them — which also
+//! means this test now exercises the PRODUCTION coders against the real
+//! 107-module closure. The old minimal shim survives only as the FALSIFIER's
+//! subject in `tests/text_coders.rs`, where it is asserted to behave differently
+//! (it decodes `ED A0 80` to a lone surrogate and encodes `U+D800` as WTF-8,
+//! both of which the production coders refuse).
 //!
 //! The loader reads the checked-in lagrange-images sources from the sibling repo
 //! (the approved probe mechanism): path-preserving, no node_modules/package.json,
@@ -257,51 +264,6 @@ async fn b0_reachable_surface_is_green() {
     actor.shutdown().await;
 }
 
-/// Standard web-API UTF-8 coders the full closure's top-level needs
-/// (`composite-codec`'s `utf8Encode('LGIC')`). NOT Node, NOT an engine feature;
-/// installed TEST-LOCALLY here (see the module header) so 0fg keeps the
-/// production `js_env` host-global surface at its 3zb-A-reviewed scope.
-///
-/// DELIBERATELY MINIMAL, NOT spec-faithful: correct UTF-8 for all scalar values
-/// incl. surrogate pairs, but lone surrogates encode as CESU-8 (not U+FFFD) and
-/// the decoder ignores `{fatal:true}`/labels and mojibakes invalid input. That is
-/// fine for this probe (the only top-level use is the pure-ASCII 'LGIC'), but if
-/// 3zb-B promotes coders to PRODUCTION it must use a spec-faithful implementation.
-const TEXT_CODERS_SHIM: &str = r#"
-globalThis.TextEncoder = globalThis.TextEncoder ?? class TextEncoder {
-  encode(s) {
-    s = String(s);
-    const out = [];
-    for (let i = 0; i < s.length; i++) {
-      let c = s.charCodeAt(i);
-      if (c >= 0xD800 && c <= 0xDBFF && i + 1 < s.length) {
-        const c2 = s.charCodeAt(i + 1);
-        if (c2 >= 0xDC00 && c2 <= 0xDFFF) { c = 0x10000 + ((c - 0xD800) << 10) + (c2 - 0xDC00); i++; }
-      }
-      if (c < 0x80) out.push(c);
-      else if (c < 0x800) out.push(0xC0 | (c >> 6), 0x80 | (c & 63));
-      else if (c < 0x10000) out.push(0xE0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
-      else out.push(0xF0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
-    }
-    return new Uint8Array(out);
-  }
-};
-globalThis.TextDecoder = globalThis.TextDecoder ?? class TextDecoder {
-  decode(bytes) {
-    bytes = new Uint8Array(bytes);
-    let s = '';
-    for (let i = 0; i < bytes.length; i++) {
-      const b = bytes[i];
-      if (b < 0x80) { s += String.fromCharCode(b); }
-      else if (b < 0xE0) { s += String.fromCharCode(((b & 31) << 6) | (bytes[++i] & 63)); }
-      else if (b < 0xF0) { s += String.fromCharCode(((b & 15) << 12) | ((bytes[++i] & 63) << 6) | (bytes[++i] & 63)); }
-      else { let cp = ((b & 7) << 18) | ((bytes[++i] & 63) << 12) | ((bytes[++i] & 63) << 6) | (bytes[++i] & 63); cp -= 0x10000; s += String.fromCharCode(0xD800 + (cp >> 10), 0xDC00 + (cp & 1023)); }
-    }
-    return s;
-  }
-};
-"#;
-
 /// The resolved blocker: the FULL portable-runtime closure now LINKS, EVALUATES,
 /// exports the portable API, and preserves the crypto-provider contract under the
 /// pinned engine (0fg). Kept behind a child process as a crash guard: if a future
@@ -323,7 +285,6 @@ fn full_closure_links_and_exports_api() {
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
             let (actor, node_requests) = spawn_images_actor();
-            actor.eval_async(TEXT_CODERS_SHIM).await.expect("install text coders");
             let result = actor
                 .eval_async(
                     r#"(async () => {

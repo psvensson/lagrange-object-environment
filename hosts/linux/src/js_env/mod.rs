@@ -25,6 +25,13 @@
 //!         Environment uses these at environment-shell.js and image-observation.js),
 //!         and `setTimeout`/`clearTimeout` integrated with the OWNER pump (a
 //!         timeout fires through the owner, not an unrelated thread).
+//!       * `TextEncoder`/`TextDecoder` (Bead 3zb slice B1a) — WEB-STANDARD host
+//!         facilities, NOT Node compatibility and NOT an engine feature (both
+//!         are `undefined` in the pinned QuickJS-NG). The real `lagrange-images`
+//!         portable closure needs them: `src/support/portable-bytes.js` is its
+//!         only coder user, and `composite-codec.js` calls `utf8Encode('LGIC')`
+//!         at MODULE TOP LEVEL — so they must exist BEFORE module evaluation,
+//!         which is why they are installed here with the other host globals.
 //!   - `process` is ABSENT (asserted in tests). NO Buffer shim, NO crypto shim,
 //!     NO node:crypto/fs/process/child_process, NO Node module personality, NO
 //!     lagrange-images imports, and NO dependency on the throwaway 64j Node
@@ -48,7 +55,7 @@
 
 use std::collections::HashMap;
 
-use rquickjs::{AsyncContext, AsyncRuntime, Ctx, Error, Module, Result};
+use rquickjs::{AsyncContext, AsyncRuntime, Ctx, Error, Exception, Function, Module, Result, TypedArray};
 use rquickjs::loader::{ImportAttributes, Loader, Resolver};
 
 pub mod actor;
@@ -223,14 +230,16 @@ impl JsEnvOwner {
         self.context.with(f).await
     }
 
-    /// Install the minimal host globals: AbortController/AbortSignal and
-    /// setTimeout/clearTimeout. Promise/queueMicrotask/atob/btoa are native and
-    /// need no installation. `process` is intentionally NOT defined.
+    /// Install the minimal host globals: AbortController/AbortSignal,
+    /// setTimeout/clearTimeout and the web-standard UTF-8 coders.
+    /// Promise/queueMicrotask/atob/btoa are native and need no installation.
+    /// `process` is intentionally NOT defined.
     async fn install_host_globals(&self) -> Result<()> {
         let timer_notify = self.timer_notify();
         self.with(|ctx| {
             install_abort_controller(&ctx)?;
             install_timers(&ctx, timer_notify)?;
+            install_text_coders(&ctx)?;
             Ok::<_, Error>(())
         })
         .await?;
@@ -392,3 +401,198 @@ globalThis.__jsenv_next_due = function __jsenv_next_due() {
     Ok(())
 }
 
+
+// ---------------------------------------------------------------------------
+// Web-standard UTF-8 coders (Bead 3zb slice B1a)
+// ---------------------------------------------------------------------------
+//
+// WHY THESE ARE HERE AT ALL. The real `lagrange-images` portable closure needs
+// `TextEncoder`/`TextDecoder`. They are WEB-STANDARD host facilities, not Node
+// compatibility (`portable-bytes.js` itself calls them "standard on every ES
+// host") and not an engine feature — both are `undefined` in the pinned
+// QuickJS-NG, alongside `crypto`. Only `src/support/portable-bytes.js` touches
+// them, and exactly two operations are reached by the portable closure:
+// `utf8Encode` (`TextEncoder.encode`) and `utf8DecodeLossy`
+// (`new TextDecoder('utf-8', {fatal:false}).decode`). `utf8DecodeStrict`
+// (`fatal:true`) is exported but has zero callers there.
+//
+// WHY SPEC FIDELITY IS LOAD-BEARING (not pedantry — two concrete holes):
+//
+//  1. SURROGATE SMUGGLING ON DECODE. `smalltalk-primitives-bytes.js`'s
+//     `decodeUtf8Strict` is the ONLY UTF-8 validity check in the closure, and it
+//     validates by ROUND TRIP: `bytesEqual(utf8Encode(utf8DecodeLossy(b)), b)`.
+//     A decoder that maps the UTF-8-encoded surrogate range (`ED A0 80` =
+//     U+D800) back to a lone surrogate makes that round trip SUCCEED, so the
+//     bytes validate and mint an Images `Text` containing a lone surrogate.
+//     WHATWG requires `ED A0 80` -> three U+FFFD, which does not round-trip and
+//     is correctly refused.
+//
+//  2. DIVERGENT DURABLE IDENTITY ON ENCODE. `utf8Encode` feeds `sha256`
+//     (project/model, callable/type-grammar, compilation/derivation-cache,
+//     graph/bundle) and `base64urlEncode` (object/version-token,
+//     smalltalk-kernel, smalltalk-class-builder, authority/object-resource), and
+//     `composite-codec.js` encodes string values with NO well-formedness guard.
+//     An encoder that emits WTF-8 `ED A0 80` for a lone surrogate where the spec
+//     emits `EF BF BD` therefore produces a DIFFERENT DIGEST, a different
+//     version token and a different durable identity than the Node reference
+//     implementation — for the same logical value.
+//
+// WHY THE ENCODER IS PURE JS AND THE DECODER IS RUST-BACKED. This asymmetry is
+// forced by the engine, not chosen for taste. A JS string holding a LONE
+// SURROGATE CANNOT CROSS INTO RUST: `JS_ToCStringLen2` keeps unmatched
+// surrogates as WTF-8, and `rquickjs`'s `String::to_string` then fails
+// `str::from_utf8` and raises "Conversion from string failed: invalid utf-8
+// sequence". There is no rquickjs API exposing UTF-16 units or a CESU-8 mode.
+// So the exact input a spec-faithful encoder must map to U+FFFD is precisely the
+// input that cannot reach Rust — a Rust-backed encoder would throw a HOST error
+// where WHATWG mandates a replacement character, on unguarded Images paths.
+// Decoding has no such problem, and `String::from_utf8_lossy` implements the
+// WHATWG maximal-subpart U+FFFD substitution bit-exactly (verified against
+// Node's `TextDecoder` across the full corpus in `tests/text_coders.rs`), which
+// is the part that is genuinely easy to get wrong by hand.
+//
+// DELIBERATELY NARROW, AND LOUD ABOUT IT. Only `encode` and `decode` are
+// implemented. `{stream:true}`, `ignoreBOM`, `encodeInto` and any label other
+// than utf-8 THROW rather than silently degrading, and `fatal:true` really does
+// decode strictly — `utf8DecodeStrict` is exported by `portable-bytes.js`, so a
+// shim that quietly ignored `fatal` would downgrade a strict decode to a lossy
+// one, which is the very bug class this slice exists to close.
+
+/// Rust half of `TextDecoder`: WHATWG UTF-8 decode with `fatal:false`.
+///
+/// Named `fn` item on purpose: `TypedArray<'js, T>` and `String<'js>` are
+/// INVARIANT in `'js`, so a closure cannot express the higher-ranked bound
+/// `Function::new` needs ("lifetime may not live long enough").
+fn jsenv_utf8_decode_lossy<'js>(
+    ctx: Ctx<'js>,
+    bytes: TypedArray<'js, u8>,
+) -> Result<rquickjs::String<'js>> {
+    // `as_ref()` honours byteOffset/length, which is load-bearing: the Images
+    // observation binding hands us `payload.subarray(0, 12)` / `(12, 28)` /
+    // `(28)` rather than whole buffers.
+    let decoded = String::from_utf8_lossy(bytes.as_ref());
+    // WHATWG strips ONE leading U+FEFF when `ignoreBOM` is false (the default).
+    // `from_utf8_lossy` does not, and the difference is observable: Images on
+    // Node REJECTS `EF BB BF 61` through `decodeUtf8Strict` (the re-encode has
+    // lost the BOM) and we must reject it identically.
+    let stripped = decoded.strip_prefix('\u{FEFF}').unwrap_or(&decoded);
+    rquickjs::String::from_str(ctx, stripped)
+}
+
+/// Rust half of `TextDecoder` with `{fatal: true}`: WHATWG UTF-8 decode that
+/// raises `TypeError` on malformed input. Unreached by today's portable closure
+/// (`utf8DecodeStrict` has no callers), but implemented rather than stubbed so
+/// the option can never silently degrade to a lossy decode.
+fn jsenv_utf8_decode_fatal<'js>(
+    ctx: Ctx<'js>,
+    bytes: TypedArray<'js, u8>,
+) -> Result<rquickjs::String<'js>> {
+    match std::str::from_utf8(bytes.as_ref()) {
+        Ok(text) => {
+            let stripped = text.strip_prefix('\u{FEFF}').unwrap_or(text);
+            rquickjs::String::from_str(ctx, stripped)
+        }
+        // `Exception::throw_type` (NOT `Error::new_from_js_message`) so the
+        // message Images sees is ours, not a mangled conversion diagnostic
+        // leaking into an image-observation-binding `{cause}` chain.
+        Err(_) => Err(Exception::throw_type(
+            &ctx,
+            "TextDecoder: the encoded data was not valid UTF-8",
+        )),
+    }
+}
+
+/// Install `TextEncoder`/`TextDecoder`.
+///
+/// The encoder is pure JS (see the note above: lone surrogates cannot cross into
+/// Rust); the decoder delegates to the Rust helpers.
+fn install_text_coders(ctx: &Ctx<'_>) -> Result<()> {
+    let globals = ctx.globals();
+    globals.set(
+        "__jsenv_utf8_decode_lossy",
+        Function::new(ctx.clone(), jsenv_utf8_decode_lossy)?,
+    )?;
+    globals.set(
+        "__jsenv_utf8_decode_fatal",
+        Function::new(ctx.clone(), jsenv_utf8_decode_fatal)?,
+    )?;
+    ctx.eval::<(), _>(TEXT_CODERS)?;
+    Ok(())
+}
+
+/// `TextEncoder` (pure JS, WHATWG-faithful incl. lone surrogates -> U+FFFD) and
+/// `TextDecoder` (thin JS wrapper enforcing the supported option surface, then
+/// delegating the actual decode to Rust).
+const TEXT_CODERS: &str = r#"
+globalThis.TextEncoder = class TextEncoder {
+  get encoding() { return 'utf-8'; }
+  encode(input) {
+    const s = input === undefined ? '' : String(input);
+    const out = [];
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      let cp = c;
+      if (c >= 0xD800 && c <= 0xDBFF) {
+        // High surrogate: only a following low surrogate forms a scalar value.
+        const next = i + 1 < s.length ? s.charCodeAt(i + 1) : NaN;
+        if (next >= 0xDC00 && next <= 0xDFFF) {
+          cp = 0x10000 + ((c - 0xD800) << 10) + (next - 0xDC00);
+          i++;
+        } else {
+          cp = 0xFFFD; // unpaired high surrogate
+        }
+      } else if (c >= 0xDC00 && c <= 0xDFFF) {
+        cp = 0xFFFD; // unpaired low surrogate
+      }
+      if (cp < 0x80) {
+        out.push(cp);
+      } else if (cp < 0x800) {
+        out.push(0xC0 | (cp >> 6), 0x80 | (cp & 63));
+      } else if (cp < 0x10000) {
+        out.push(0xE0 | (cp >> 12), 0x80 | ((cp >> 6) & 63), 0x80 | (cp & 63));
+      } else {
+        out.push(0xF0 | (cp >> 18), 0x80 | ((cp >> 12) & 63), 0x80 | ((cp >> 6) & 63), 0x80 | (cp & 63));
+      }
+    }
+    return new Uint8Array(out);
+  }
+  encodeInto() {
+    // Deliberately unimplemented: no caller in the portable closure. Loud, so a
+    // future caller gets a clear failure instead of silent corruption.
+    throw new TypeError('TextEncoder.encodeInto is not implemented by this host');
+  }
+};
+
+const __JSENV_UTF8_LABELS = new Set(['utf-8', 'utf8', 'unicode-1-1-utf-8']);
+
+globalThis.TextDecoder = class TextDecoder {
+  constructor(label = 'utf-8', options = {}) {
+    const normalized = String(label).trim().toLowerCase();
+    if (!__JSENV_UTF8_LABELS.has(normalized)) {
+      throw new RangeError(`TextDecoder: this host supports only UTF-8, got '${label}'`);
+    }
+    const opts = options ?? {};
+    if (opts.ignoreBOM) {
+      throw new TypeError('TextDecoder: ignoreBOM is not implemented by this host');
+    }
+    this._fatal = Boolean(opts.fatal);
+  }
+  get encoding() { return 'utf-8'; }
+  get fatal() { return this._fatal; }
+  get ignoreBOM() { return false; }
+  decode(input, options = {}) {
+    if ((options ?? {}).stream) {
+      // Streaming needs cross-call state we deliberately do not keep; failing
+      // loudly beats silently decoding each chunk independently.
+      throw new TypeError('TextDecoder: {stream:true} is not implemented by this host');
+    }
+    let bytes;
+    if (input === undefined) bytes = new Uint8Array(0);
+    else if (input instanceof Uint8Array) bytes = input;
+    else if (ArrayBuffer.isView(input)) bytes = new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+    else if (input instanceof ArrayBuffer) bytes = new Uint8Array(input);
+    else throw new TypeError('TextDecoder.decode expects a BufferSource');
+    return this._fatal ? __jsenv_utf8_decode_fatal(bytes) : __jsenv_utf8_decode_lossy(bytes);
+  }
+};
+"#;
