@@ -338,7 +338,15 @@ globalThis.__jsenv_timers = new Map();   // id -> {due, fn}
 globalThis.__jsenv_next_timer_id = 1;
 globalThis.setTimeout = function setTimeout(fn, ms, ...args) {
   const id = globalThis.__jsenv_next_timer_id++;
-  const due = Date.now() + (typeof ms === 'number' ? ms : 0);
+  // Clamp to a 1ms minimum (the Node/browser timer floor). The shell's follow
+  // hardcodes intervalMs:0; without the floor setTimeout(0) would fire on every
+  // command-loop turn, making the follow a hot spin that floods the serial
+  // images host. Node clamps nested timeouts to ~1ms; matching that keeps the
+  // follow's poll rate faithful instead of unbounded. Non-finite ms (NaN/
+  // Infinity) would otherwise make `due` NaN so `due <= now` is false forever —
+  // coerce those to the floor too (Node/browsers coerce to ~0/1ms).
+  const msNum = (typeof ms === 'number' && Number.isFinite(ms)) ? ms : 0;
+  const due = Date.now() + Math.max(1, msNum);
   globalThis.__jsenv_timers.set(id, { due, fn: () => fn(...args) });
   globalThis.__jsenv_timer_changed();
   return id;

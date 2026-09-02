@@ -223,6 +223,68 @@ async fn timer_registered_by_resumed_continuation_fires_with_no_commands() {
     actor.shutdown().await;
 }
 
+/// Setup: a fire-and-forget script awaits a `setTimeout`-backed PROMISE
+/// (`await new Promise(r => setTimeout(r, ms))`) and signals a RUST-side atomic in
+/// the promise CONTINUATION. This is the image-observation follow's exact shape
+/// (`await sleep(intervalMs)`, src/image-observation.js). The test polls the
+/// atomic with zero JS commands.
+///
+/// This is the liveness the slice-4 OLM stall exposed: firing the timer resolves
+/// the guest promise via a SYNC host callback, which enqueues a BARE QuickJS job
+/// that wakes nobody — the parked `DriveFuture` is only woken by `spawner.push`
+/// (a spawned task) or a spawned task's own waker, NOT by a bare job enqueue. So
+/// without the command loop draining ready jobs after `fire_due_timers`
+/// (`actor::drain_jobs`), the continuation never runs and the environment stops
+/// reacting in any command-quiet embedding. Distinct from the test above (a
+/// timer whose SYNC callback signals directly): here the signal is in a
+/// promise-continuation job that must be actively drained.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn timer_fired_promise_continuation_runs_with_no_commands() {
+    use rquickjs::Function;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+
+    let actor = JsEnvActor::spawn(EmbeddedLoader::new()).expect("spawn actor");
+    let done = Arc::new(AtomicBool::new(false));
+
+    {
+        let done = Arc::clone(&done);
+        actor
+            .with_context(move |ctx| {
+                let signal = Function::new(ctx.clone(), move || {
+                    done.store(true, Ordering::SeqCst);
+                })
+                .map_err(rquickjs::Error::from)?;
+                ctx.globals().set("__jsenv_signal_done", signal)?;
+                Ok(())
+            })
+            .await
+            .expect("install host fn");
+    }
+
+    // Fire-and-forget: await a setTimeout-backed promise, then signal in the
+    // continuation. `eval` returns as soon as the await parks; the timer resolves
+    // the promise LATER via fire_due_timers, enqueueing the continuation job.
+    actor
+        .eval(r#"(async () => { await new Promise((r) => setTimeout(r, 5)); __jsenv_signal_done(); })()"#)
+        .await
+        .expect("start awaiting script");
+
+    // Poll the RUST-side atomic with Rust sleeps ONLY — zero JS commands. The
+    // continuation can only run if the command loop drains the bare job that the
+    // timer-fired promise resolution enqueued.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !done.load(Ordering::SeqCst) {
+        if std::time::Instant::now() > deadline {
+            panic!("timer-fired promise continuation never ran (undrained bare job)");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    actor.shutdown().await;
+}
+
 /// clearTimeout removes a pending timer so the pump does not fire it; and a
 /// dropped owner leaves no pending host timer that could fire after free.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

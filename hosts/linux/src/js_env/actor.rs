@@ -140,7 +140,16 @@ impl JsEnvActor {
                             return;
                         }
                     };
-                    // Spawn the long-lived drive task on THIS thread's LocalSet.
+                    // Spawn the long-lived drive task on THIS thread's LocalSet. It
+                    // owns SPAWNED runtime futures (capability `Async` host fns): it
+                    // parks on the scheduler and is woken by `spawner.push` when such a
+                    // future is spawned or by the future's own waker when its cross-thread
+                    // oneshot completes. It is NOT sufficient on its own, though: a guest
+                    // promise resolved by a SYNC host callback (`fire_due_timers`, a
+                    // fire-and-forget push handler) enqueues a BARE QuickJS job that wakes
+                    // nobody, so the command loop must ALSO drain ready jobs itself (see
+                    // `drain_jobs` below) or those continuations stall whenever no
+                    // `eval_async` happens to be in flight (the slice-4 OLM stall).
                     let _drive = owner.runtime().drive();
                     tokio::task::spawn_local(_drive);
 
@@ -164,6 +173,11 @@ impl JsEnvActor {
                         // Fire any timers already due, then compute when the next
                         // is due (None = no pending timers -> wait indefinitely).
                         fire_due_timers(&owner).await;
+                        // Firing a timer resolves a guest `setTimeout` promise via a SYNC
+                        // host callback, enqueuing a bare QuickJS job that wakes nobody —
+                        // drain those ready continuations NOW on the owner thread (the
+                        // image-observation follow is exactly such a continuation).
+                        drain_jobs(&owner).await;
                         let next_due_ms = next_timer_due_ms(&owner).await;
 
                         // Wait for the next command, the next timer's due time,
@@ -217,8 +231,13 @@ impl JsEnvActor {
                                 break;
                             }
                         }
-                        // Yield so the drive task can run pending JS jobs between
-                        // commands (keeps continuations progressing on this thread).
+                        // A delivered push starts a FIRE-AND-FORGET chain whose initial
+                        // continuation is a bare QuickJS job (the push handler's promise
+                        // is pre-resolved, so push delivery drains nothing). Drain ready
+                        // jobs on the owner thread so those chains progress even when no
+                        // eval is in flight; then yield so the drive task runs spawned
+                        // (capability) futures on this thread.
+                        drain_jobs(&owner).await;
                         tokio::task::yield_now().await;
                     }
                 });
@@ -384,6 +403,15 @@ async fn eval_async_on_owner(owner: &JsEnvOwner, source: &str) -> Result<String>
             };
             let promise: rquickjs::Promise = ctx.eval(wrapped.as_str())?;
             let resolved: rquickjs::Value = promise.into_future::<rquickjs::Value>().await?;
+            // A fire-and-forget eval (select/armHold/releaseGate/destroyAll/…) resolves
+            // to `undefined`, which `JSON.stringify` returns as the JS `undefined`
+            // (NOT the string "undefined") — inconvertible to String. Coerce to null:
+            // `undefined` is not representable on a plain-data JSON return channel.
+            let resolved = if resolved.is_undefined() {
+                rquickjs::Value::new_null(ctx.clone())
+            } else {
+                resolved
+            };
             // JSON.stringify the result for a plain-data return across the channel.
             let json: rquickjs::Function = ctx
                 .globals()
@@ -419,6 +447,48 @@ fn epoch_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// Drain every READY QuickJS job on the owner thread until quiescence.
+///
+/// A guest promise resolved by a SYNC host callback (`fire_due_timers`, a
+/// fire-and-forget push handler's synchronous routing) enqueues a bare QuickJS
+/// job WITHOUT waking the parked `DriveFuture` (only `spawner.push` wakes it).
+/// Left undrained, those continuations stall in any command-quiet embedding
+/// (production, not a poll-happy test harness) — the environment stops reacting.
+/// Draining stops at quiescence — when only SPAWNED capability futures (which the
+/// `DriveFuture` owns) remain pending, there are no more ready QuickJS jobs — so
+/// this never blocks on a suspended continuation; it just flushes the ready ones
+/// the drive task was never woken for.
+async fn drain_jobs(owner: &JsEnvOwner) {
+    owner
+        .with(|ctx| {
+            // `Ctx::execute_pending_job` calls `JS_ExecutePendingJob` directly: it
+            // drains ONE ready QuickJS job per call and does NOT poll the runtime's
+            // spawned-task scheduler. That distinction is load-bearing — the async
+            // `AsyncRuntime::execute_pending_job` polls the scheduler when no job is
+            // ready, and the scheduler keeps a SINGLE waker slot
+            // (`should_poll.waker().register(cx)`, schedular.rs:145, last-poller-wins).
+            // Polling it from here would re-register that slot away from the parked
+            // `DriveFuture`, so a spawned capability/timer future completing later
+            // would wake THIS (already-finished) drain task and the continuation would
+            // never run (the resumed-continuation-timer regression). Draining via the
+            // Ctx touches only bare QuickJS jobs and leaves the scheduler's waker
+            // registered to the drive task.
+            while ctx.execute_pending_job() {}
+            // ...but a command's OWN `WithFuture` (eval_async / push delivery) may
+            // ALREADY have stolen that single slot by polling the scheduler with the
+            // command-loop waker while its promise pended on a job hop. If the command
+            // then completes with no `spawner.push`, a later capability-oneshot
+            // resolution wakes the STALE command-loop waker, and the re-queued spawned
+            // task stalls (a bare-job drain cannot reach spawned tasks). Kick the
+            // DriveFuture so it re-polls, re-registers its OWN waker in the slot, and
+            // drains any re-queued spawned task: a no-op spawn is a `spawner.push`
+            // (spawner.rs:34 wakes every listened waker). It runs after the drain so
+            // the slot is re-registered AFTER the command's steal.
+            ctx.spawn(async {});
+        })
+        .await;
 }
 
 /// Fire every guest timer whose `due <= now` on the owner thread. Called by the
