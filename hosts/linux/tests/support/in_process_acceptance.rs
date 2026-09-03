@@ -269,8 +269,9 @@ pub fn run_in_process_acceptance(
         .activate_gtk_action(&navigator_handle, 0)
         .expect("activate")
         .expect("an activate-item intent");
+    let intent_value = serde_json::to_value(&intent).expect("serialize NAV intent");
     assert_eq!(
-        intent,
+        intent_value,
         json!({"kind": "activate-item", "key": 0}),
         "NAV key-only intent"
     );
@@ -365,8 +366,9 @@ pub fn run_in_process_acceptance(
         .edit_gtk_field(&inspector_handle, 0, flavor.olm_title)
         .expect("edit")
         .expect("an edit-field intent");
+    let edit_intent_value = serde_json::to_value(&edit_intent).expect("serialize OLM intent");
     assert_eq!(
-        edit_intent,
+        edit_intent_value,
         json!({"kind": "edit-field", "key": 0, "text": flavor.olm_title}),
         "OLM GTK edit intent"
     );
