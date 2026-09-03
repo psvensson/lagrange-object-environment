@@ -34,10 +34,10 @@
 //!   see the `[patch.crates-io]` comment in `hosts/linux/Cargo.toml`.
 //!
 //!   ORACLE CAVEAT (Bead 25v): `full_closure_links_and_exports_api` is the
-//!   project's only guard that the engine carries the linker fix, and it is NOT
-//!   hermetic — it links the REAL sibling `lagrange-images` closure, so it only
-//!   fires while that module graph still contains a circular re-export. If
-//!   Images ever removes that cycle, this test goes GREEN UNDER A BUGGY ENGINE.
+//!   project's only dedicated crash-isolated guard that the engine carries the
+//!   linker fix. It links the exact pinned Images artifact, so the proof is
+//!   hermetic until a reviewed artifact bump. If a future bump removes that
+//!   cycle, this test goes GREEN UNDER A BUGGY ENGINE.
 //!   The minimized 3-module synthetic repro is not checked in anywhere; Bead 25v
 //!   adds it, and blocks s3b (where the engine actually changes). For a mere
 //!   fetch-URL change the engine cannot change at all — the rev is pinned by
@@ -45,10 +45,10 @@
 //!
 //! Proven GREEN below:
 //!   - guest conditions are non-Node (process/Buffer/require undefined);
-//!   - the path-preserving loader resolves and loads the real per-module graph
+//!   - the artifact loader resolves and loads the real per-module graph
 //!     (incl. `language/index`, `backend/create-backend`, `image/graph-image-service`)
-//!     with ZERO node:/bare-builtin resolution requests (the closure IS portable
-//!     per module — PR #163's composition-root work is confirmed clean);
+//!     with no filesystem/package/Node fallback (the closure IS portable per
+//!     module — PR #163's composition-root work is confirmed clean);
 //!   - the crypto-provider CONTRACT (the 3zb-B boundary) loads and behaves:
 //!     `getDefaultCryptoProvider()` throws the explicit "no crypto provider
 //!     installed" TypeError; `setDefaultCryptoProvider(stub)` installs;
@@ -71,118 +71,26 @@
 //! (it decodes `ED A0 80` to a lone surrogate and encodes `U+D800` as WTF-8,
 //! both of which the production coders refuse).
 //!
-//! The loader reads the checked-in lagrange-images sources from the sibling repo
-//! (the approved probe mechanism): path-preserving, no node_modules/package.json,
-//! a resolved name maps to exactly one file, a missing one fails loudly, and a
-//! node:/bare-builtin specifier is recorded AND fails loudly (proving no Node
-//! resolution occurs for the modules that DO load).
+//! The production loader reads the exact pinned
+//! `lagrange-images-portable-runtime/v1` artifact in memory. A resolved name maps
+//! to exactly one canonical artifact module; missing, bare, and `node:*`
+//! specifiers fail loudly with no filesystem/package/Node fallback.
 
+use lagrange_host_linux::images_composition::portable_artifact::PortableImagesArtifactLoader;
 use lagrange_host_linux::js_env::actor::JsEnvActor;
-use rquickjs::loader::{ImportAttributes, Loader, Resolver};
-use rquickjs::{Ctx, Error, Module, Result};
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 
-fn images_src_root() -> PathBuf {
-    if let Ok(p) = std::env::var("LAGRANGE_IMAGES_SRC") {
-        return PathBuf::from(p);
-    }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../lagrange-images/src")
-}
-
-/// A path-preserving repo-tree loader (probe-only; a reviewed version is
-/// promoted to production only when 3zb-B is unblocked).
-#[derive(Clone)]
-struct RepoTreeLoader {
-    root: PathBuf,
-    node_requests: Arc<Mutex<Vec<String>>>,
-}
-
-fn is_node_builtin(name: &str) -> bool {
-    name.starts_with("node:")
-        || matches!(
-            name,
-            "crypto" | "buffer" | "fs" | "fs/promises" | "path" | "os" | "util" | "stream"
-                | "events" | "url" | "assert" | "worker_threads" | "module" | "process"
-                | "child_process" | "net" | "http" | "https" | "zlib" | "vm"
-        )
-}
-
-fn normalize_repo_path(base: &str, name: &str) -> String {
-    let joined = if name.starts_with('.') {
-        let dir = match base.rfind('/') {
-            Some(i) => &base[..i],
-            None => "",
-        };
-        if dir.is_empty() { name.to_string() } else { format!("{dir}/{name}") }
-    } else {
-        name.to_string()
-    };
-    let mut out: Vec<&str> = Vec::new();
-    for seg in joined.split('/') {
-        match seg {
-            "" | "." => {}
-            ".." => {
-                out.pop();
-            }
-            s => out.push(s),
-        }
-    }
-    let p = out.join("/");
-    p.strip_suffix(".js").unwrap_or(&p).to_string()
-}
-
-impl Resolver for RepoTreeLoader {
-    fn resolve<'js>(
-        &mut self,
-        _ctx: &Ctx<'js>,
-        base: &str,
-        name: &str,
-        _attributes: Option<ImportAttributes<'js>>,
-    ) -> Result<String> {
-        if is_node_builtin(name) {
-            self.node_requests.lock().unwrap().push(name.to_string());
-            return Err(Error::new_loading_message(
-                name,
-                "NODE-BUILTIN resolution request (forbidden in the portable closure)",
-            ));
-        }
-        Ok(normalize_repo_path(base, name))
-    }
-}
-
-impl Loader for RepoTreeLoader {
-    fn load<'js>(
-        &mut self,
-        ctx: &Ctx<'js>,
-        name: &str,
-        _attributes: Option<ImportAttributes<'js>>,
-    ) -> Result<Module<'js, rquickjs::module::Declared>> {
-        let path = self.root.join(format!("{name}.js"));
-        let source = std::fs::read_to_string(&path)
-            .map_err(|e| Error::new_loading_message(name, format!("cannot read {}: {e}", path.display())))?;
-        Module::declare(ctx.clone(), name, source)
-    }
-}
-
-fn spawn_images_actor() -> (JsEnvActor, Arc<Mutex<Vec<String>>>) {
-    let root = images_src_root();
-    assert!(
-        root.join("portable-runtime.js").exists(),
-        "lagrange-images portable-runtime.js not found at {} (set LAGRANGE_IMAGES_SRC)",
-        root.display()
-    );
-    let node_requests = Arc::new(Mutex::new(Vec::new()));
-    let loader = RepoTreeLoader { root, node_requests: Arc::clone(&node_requests) };
-    (JsEnvActor::spawn(loader).expect("spawn actor with repo-tree loader"), node_requests)
+fn spawn_images_actor() -> JsEnvActor {
+    let loader = PortableImagesArtifactLoader::from_embedded()
+        .expect("construct loader from the pinned Images artifact");
+    JsEnvActor::spawn(loader).expect("spawn artifact-backed actor")
 }
 
 /// Everything provable WITHOUT linking the full closure: non-Node guest, the
-/// per-module graph loads with zero Node requests, and the crypto-provider
+/// per-module graph loads through exact artifact paths, and the crypto-provider
 /// contract behaves.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn b0_reachable_surface_is_green() {
-    let (actor, node_requests) = spawn_images_actor();
+    let actor = spawn_images_actor();
 
     // Guest conditions: the non-Node environment the portable closure must tolerate.
     let cond = actor
@@ -195,14 +103,14 @@ async fn b0_reachable_surface_is_green() {
     assert_eq!(cond["require"], "undefined");
 
     // Per-module loads (the big subgraphs) succeed — the closure is portable
-    // module-by-module, even though the FULL link crashes (see the other test).
+    // module-by-module as well as through the full root below.
     let mods = actor
         .eval_async(
             r#"(async () => {
   const out = {};
-  for (const m of ['support/default-crypto', 'support/crypto-provider',
-                   'backend/create-backend', 'image/graph-image-service',
-                   'language/index', 'language/smalltalk-kernel']) {
+  for (const m of ['src/support/default-crypto.js', 'src/support/crypto-provider.js',
+                   'src/backend/create-backend.js', 'src/image/graph-image-service.js',
+                   'src/language/index.js', 'src/language/smalltalk-kernel.js']) {
     try { const ns = await import(m); out[m] = 'ok:' + Object.keys(ns).length; }
     catch (e) { out[m] = 'ERR:' + (e && e.name) + ':' + (e && e.message); }
   }
@@ -222,8 +130,8 @@ async fn b0_reachable_surface_is_green() {
     let crypto = actor
         .eval_async(
             r#"(async () => {
-  const dc = await import('support/default-crypto');
-  const cp = await import('support/crypto-provider');
+  const dc = await import('src/support/default-crypto.js');
+  const cp = await import('src/support/crypto-provider.js');
   const out = {};
   try { dc.getDefaultCryptoProvider(); out.noProvider = 'NO-THROW'; }
   catch (e) { out.noProvider = (e && e.name) + ': ' + (e && e.message); }
@@ -256,11 +164,6 @@ async fn b0_reachable_surface_is_green() {
         crypto["incomplete"]
     );
 
-    // No Node module resolution request occurred across ALL the loads above.
-    let node_reqs = node_requests.lock().unwrap().clone();
-    println!("B0-NODE-REQUESTS {node_reqs:?}");
-    assert!(node_reqs.is_empty(), "Node resolution requests occurred: {node_reqs:?}");
-
     actor.shutdown().await;
 }
 
@@ -284,12 +187,12 @@ fn full_closure_links_and_exports_api() {
         // full closure and ASSERT its exported API + crypto-provider contract.
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
-            let (actor, node_requests) = spawn_images_actor();
+            let actor = spawn_images_actor();
             let result = actor
                 .eval_async(
                     r#"(async () => {
   const ns = await import('portable-runtime');
-  const dc = await import('support/default-crypto');
+  const dc = await import('src/support/default-crypto.js');
   const out = { apiCount: Object.keys(ns).length, hasCreatePortableRuntime: typeof ns.createPortableRuntime, hasCreateRuntimeCore: typeof ns.createRuntimeCore, hasCreatePortableCodeExecutorRegistry: typeof ns.createPortableCodeExecutorRegistry };
   try { dc.getDefaultCryptoProvider(); out.noProvider = 'NO-THROW'; }
   catch (e) { out.noProvider = (e && e.name) + ': ' + (e && e.message); }
@@ -308,8 +211,6 @@ fn full_closure_links_and_exports_api() {
                 v["noProvider"].as_str().unwrap().contains("no crypto provider installed"),
                 "crypto-provider contract preserved: {result}"
             );
-            let node_reqs = node_requests.lock().unwrap().clone();
-            assert!(node_reqs.is_empty(), "no Node resolution requests: {node_reqs:?}");
             actor.shutdown().await;
         });
         return;

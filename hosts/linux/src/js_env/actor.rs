@@ -112,7 +112,8 @@ impl JsEnvActor {
     /// `drive()` on its `LocalSet`, and runs the command loop. Returns once the
     /// owner thread is ready (causal handshake). Generic over the loader (the
     /// Environment closure uses `EmbeddedLoader`; the lagrange-images portable
-    /// runtime uses a path-preserving repo-tree loader for B0 / 3zb-B).
+    /// runtime uses the pinned-artifact `PortableImagesArtifactLoader` for B0 /
+    /// 3zb-B).
     pub fn spawn<L>(loader: L) -> std::result::Result<Self, String>
     where
         L: rquickjs::loader::Resolver + rquickjs::loader::Loader + Clone + Send + 'static,

@@ -184,8 +184,8 @@ impl JsEnvOwner {
     /// Build the owner with the given module loader/resolver and the minimal
     /// host globals installed. Generic over the loader: the Environment closure
     /// uses `EmbeddedLoader`; the lagrange-images portable-runtime closure (B0 /
-    /// 3zb-B) uses a path-preserving repo-tree loader. Async because
-    /// AsyncRuntime/AsyncContext construction is async in rquickjs.
+    /// 3zb-B) uses the pinned-artifact `PortableImagesArtifactLoader`. Async
+    /// because AsyncRuntime/AsyncContext construction is async in rquickjs.
     pub async fn new<L>(loader: L) -> Result<Self>
     where
         L: Resolver + Loader + Clone + 'static,

@@ -39,6 +39,37 @@ const PRODUCTION_FILES: &[&str] = &[
     // it is listed here (the B1b plan review's mandatory fix), and this is the
     // module where an Images import or a semantic name would be most tempting.
     "js_env/host_crypto.rs",
+    // 3zb-B2 pinned Images artifact composition. The loader is production
+    // composition code and must remain read-only/in-memory: no sibling checkout,
+    // filesystem path, Node, or subprocess fallback.
+    "images_composition/mod.rs",
+    "images_composition/portable_artifact.rs",
+];
+
+const ARTIFACT_COMPOSITION_FILES: &[&str] = &[
+    "images_composition/mod.rs",
+    "images_composition/portable_artifact.rs",
+];
+
+const FORBIDDEN_IN_ARTIFACT_COMPOSITION: &[&str] = &[
+    "std::fs",
+    "PathBuf",
+    "LAGRANGE_IMAGES_SRC",
+    "lagrange-images/src",
+];
+
+const REQUIRED_IN_ARTIFACT_COMPOSITION: &[(&str, &[&str])] = &[
+    (
+        "images_composition/mod.rs",
+        &[
+            "PORTABLE_RUNTIME_ARTIFACT_BYTES",
+            "PORTABLE_RUNTIME_CONTENT_IDENTITY",
+        ],
+    ),
+    (
+        "images_composition/portable_artifact.rs",
+        &["PortableImagesArtifactLoader", "Sha256::digest"],
+    ),
 ];
 
 /// FILE-SCOPED fences, applied ONLY to the named file.
@@ -215,6 +246,52 @@ fn bridge_is_the_only_subprocess_spawn_site() {
         "the guard is vacuous: the throwaway bridge no longer spawns the Node worker \
          (was it deleted by 3zb? then this whole guard module should be deleted too)"
     );
+}
+
+#[test]
+fn portable_artifact_composition_has_no_filesystem_or_sibling_fallback() {
+    for file in ARTIFACT_COMPOSITION_FILES {
+        let path = src_root().join(file);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        for (line_no, line) in text.lines().enumerate() {
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            for needle in FORBIDDEN_IN_ARTIFACT_COMPOSITION {
+                assert!(
+                    !line.contains(needle),
+                    "{file}:{} contains forbidden artifact fallback `{needle}` in code: {}",
+                    line_no + 1,
+                    line.trim()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn portable_artifact_composition_fences_are_not_vacuous() {
+    for (file, needles) in REQUIRED_IN_ARTIFACT_COMPOSITION {
+        let path = src_root().join(file);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        for needle in *needles {
+            assert!(text.contains(needle), "{file} must retain `{needle}`");
+        }
+    }
+
+    for planted in [
+        "let root = PathBuf::from(env!(\"LAGRANGE_IMAGES_SRC\"));",
+        "let source = std::fs::read_to_string(\"lagrange-images/src/x.js\");",
+    ] {
+        assert!(
+            FORBIDDEN_IN_ARTIFACT_COMPOSITION
+                .iter()
+                .any(|needle| planted.contains(needle)),
+            "artifact fence missed planted fallback: {planted}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
