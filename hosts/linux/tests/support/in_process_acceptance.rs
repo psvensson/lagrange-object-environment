@@ -160,6 +160,20 @@ fn assert_nonnegative_integer(value: &Value, what: &str) {
     );
 }
 
+fn assert_nullable_string(value: &Value, what: &str) {
+    assert!(
+        value.is_null() || value.is_string(),
+        "{what} must be a string or null: {value}"
+    );
+}
+
+fn assert_inspector_shape(value: &Value, what: &str) {
+    assert_exact_keys(value, &["title", "kind", "reason"], what);
+    for key in ["title", "kind", "reason"] {
+        assert_nullable_string(&value[key], &format!("{what}.{key}"));
+    }
+}
+
 fn session_string_call(method: &str, value: &str) -> String {
     format!(
         "globalThis.__session.{method}({})",
@@ -287,17 +301,16 @@ pub fn run_in_process_acceptance(
         |v| v["title"] == json!(flavor.initial_title),
         "navigation: inspector shows the primary object after activate-item key 0",
     );
-    assert_exact_keys(&nav, &["title", "kind", "reason"], "NAV inspector");
-    let nav_gtk = host
+    assert_inspector_shape(&nav, "NAV inspector");
+    let nav_editable = host
         .adapter()
-        .gtk_visible_text(&inspector_handle)
-        .expect("gtk text");
-    assert!(
-        nav_gtk
-            .iter()
-            .any(|text| text.contains(flavor.initial_title)),
-        "NAV ({}): GTK inspector shows the primary title: {nav_gtk:?}",
-        flavor.name
+        .gtk_editable_texts(&inspector_handle)
+        .expect("GTK editable texts");
+    assert_eq!(
+        nav_editable,
+        vec![(0, flavor.initial_title.to_string())],
+        "NAV ({}): keyed GTK inspector value must match exactly",
+        flavor.name,
     );
 
     // OBS: follow after navigation, complete a poll before mutation, then prove
@@ -472,11 +485,7 @@ pub fn run_in_process_acceptance(
         |v| v["title"] == json!(flavor.stale_external_title),
         "STALE recovery reread restores the external value",
     );
-    assert_exact_keys(
-        &recovered,
-        &["title", "kind", "reason"],
-        "STALE recovered inspector",
-    );
+    assert_inspector_shape(&recovered, "STALE recovered inspector");
 
     // DENIED WRITE: composition chooses its flavor-specific target. The fake
     // deliberately uses a separate readable object; the real flavor later must
@@ -510,11 +519,7 @@ pub fn run_in_process_acceptance(
         |v| v["title"] == json!(flavor.denied_write_title),
         "denied-write target remains readable",
     );
-    assert_exact_keys(
-        &denied_visible,
-        &["title", "kind", "reason"],
-        "DENIED WRITE inspector",
-    );
+    assert_inspector_shape(&denied_visible, "DENIED WRITE inspector");
     let denied = run_json_while_pumping(
         runtime,
         actor,
@@ -569,11 +574,7 @@ pub fn run_in_process_acceptance(
         |v| v["kind"] == json!("unauthorized-reference"),
         "denied-read surfaces unauthorized-reference",
     );
-    assert_exact_keys(
-        &denied_read,
-        &["title", "kind", "reason"],
-        "DENIED READ inspector",
-    );
+    assert_inspector_shape(&denied_read, "DENIED READ inspector");
     assert_eq!(denied_read["kind"], json!("unauthorized-reference"));
 
     // C1: reselect the primary object, wait for its live token, then prove all
