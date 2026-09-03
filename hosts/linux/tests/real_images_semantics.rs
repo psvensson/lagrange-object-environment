@@ -672,6 +672,9 @@ async fn real_images_adapter_semantic_chain_runs_in_process() {
       imageId, objectId, authority: readAuthority, blockId: ids.readBlockId,
     });
 
+    stage('project-read');
+    const projectRead = await s.readProjectFixture();
+
     return {
       objectCreated: typeof objectId === 'string' && objectId.length > 0,
       creationTokenWasString: typeof created.versionToken === 'string',
@@ -697,6 +700,8 @@ async fn real_images_adapter_semantic_chain_runs_in_process() {
       stillReadableTitle: titleOf(stillReadable),
       deniedWrite,
       finalTitle: titleOf(final),
+      projectDescriptor: projectRead.descriptor,
+      projectDeniedKinds: projectRead.deniedKinds,
     };
 "#,
     )
@@ -747,6 +752,23 @@ async fn real_images_adapter_semantic_chain_runs_in_process() {
         json!({"name": "AuthorityError", "code": null})
     );
     assert_eq!(report["finalTitle"], "third");
+    assert_eq!(report["projectDescriptor"]["format"], "lagrange-project/v1");
+    assert_eq!(report["projectDescriptor"]["projectId"], "portable-project");
+    assert_eq!(report["projectDescriptor"]["name"], "Portable Project");
+    assert_eq!(report["projectDescriptor"]["namespace"], Value::Null);
+    assert_eq!(
+        report["projectDescriptor"]["members"],
+        json!([
+            {"key":"a-first","role":"source","target":{"kind":"ref","imageId":"demo","objectId":"target-a"}},
+            {"key":"z-last","role":"test","target":{"kind":"ref","imageId":"demo","objectId":"target-z"}}
+        ]),
+        "the artifact-backed authorized Project read returns Images' canonical member order"
+    );
+    assert_eq!(
+        report["projectDeniedKinds"],
+        json!(["AuthorityError", "AuthorityError"]),
+        "denied existing and missing Projects must not expose existence"
+    );
 
     let serialized_report = report.to_string();
     assert!(

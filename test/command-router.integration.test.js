@@ -63,6 +63,7 @@ test('PR D: semantic interaction on a view routes Command -> authorized image mu
     images: runtime.images,
     invocations: runtime.invocations,
     executor: runtime.executor,
+    authority: runtime.authority,
     defineClass: imagesApi.defineClass,
     installCallableInterfaceV2: imagesApi.installCallableInterfaceV2,
     installImageCreationBinding: imagesApi.installImageCreationBinding,
@@ -78,6 +79,7 @@ test('PR D: semantic interaction on a view routes Command -> authorized image mu
     packCompositeValue: imagesApi.packCompositeValue,
     unpackCompositeValue: imagesApi.unpackCompositeValue,
     normalizeTypeDeclarations: imagesApi.normalizeTypeDeclarations,
+    authorizedReadProjectDescriptor: imagesApi.authorizedReadProjectDescriptor,
   });
   await adapter.ensureSchema(IMAGE, IDS);
 

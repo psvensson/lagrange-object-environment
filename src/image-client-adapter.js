@@ -247,7 +247,7 @@ function createImageClientAdapter(client) {
   if (!client || typeof client !== 'object') {
     throw new TypeError('createImageClientAdapter requires the lagrange-images public surface');
   }
-  for (const service of ['images', 'invocations', 'executor']) {
+  for (const service of ['images', 'invocations', 'executor', 'authority']) {
     if (!client[service] || typeof client[service] !== 'object') {
       throw new TypeError(`lagrange-images client is missing required service: ${service}`);
     }
@@ -256,6 +256,7 @@ function createImageClientAdapter(client) {
     images,
     invocations,
     executor,
+    authority: authorityService,
     // Helpers consumed from the public exports (createRuntime's module barrels).
     defineClass,
     installCallableInterfaceV2,
@@ -272,15 +273,38 @@ function createImageClientAdapter(client) {
     packCompositeValue,
     unpackCompositeValue,
     normalizeTypeDeclarations,
+    authorizedReadProjectDescriptor,
   } = client;
 
-  for (const [name, fn] of Object.entries({defineClass, installCallableInterfaceV2, installImageCreationBinding, installImageMutationBinding, installImageObjectReadBinding, installImageObservationBinding, findSmalltalkKernel, objectRef, objectResource, parseObjectResource, objectVersionToken, textValue, packCompositeValue, unpackCompositeValue, normalizeTypeDeclarations})) {
+  if (typeof authorityService.require !== 'function') {
+    throw new TypeError('lagrange-images client authority service is missing required operation: require');
+  }
+
+  for (const [name, fn] of Object.entries({defineClass, installCallableInterfaceV2, installImageCreationBinding, installImageMutationBinding, installImageObjectReadBinding, installImageObservationBinding, findSmalltalkKernel, objectRef, objectResource, parseObjectResource, objectVersionToken, textValue, packCompositeValue, unpackCompositeValue, normalizeTypeDeclarations, authorizedReadProjectDescriptor})) {
     if (typeof fn !== 'function') {
       throw new TypeError(`lagrange-images client is missing required helper: ${name}`);
     }
   }
 
   const objectIdFromVersionToken = makeObjectIdDecoder(objectResource, parseObjectResource);
+
+  /**
+   * Read one durable Project through Images' authorized semantic seam.
+   *
+   * Images owns the demand, authorization-before-existence ordering, backing
+   * member storage unit, and canonical ProjectDescriptor. The adapter owns only
+   * bridging the caller's opaque authority context to the injected runtime's
+   * check-only `require(context, demand)` operation. It never constructs,
+   * inspects, caches, or broadens a demand/context.
+   */
+  async function readProject({imageId, projectId, authority = null} = {}) {
+    return authorizedReadProjectDescriptor({
+      images,
+      imageId,
+      projectId,
+      require: (demand) => authorityService.require(authority, demand),
+    });
+  }
 
   const dispatcher = createCommandDispatcher({
     image: async ({command, subject, authority, context}) => {
@@ -916,6 +940,7 @@ function createImageClientAdapter(client) {
     ensurePerspectiveSchema,
     savePerspective,
     loadPerspective,
+    readProject,
     readObject,
     authorizedReadObject,
     resolveAssetBytes,

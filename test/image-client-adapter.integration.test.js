@@ -73,6 +73,7 @@ async function setup() {
     images: runtime.images,
     invocations: runtime.invocations,
     executor: runtime.executor,
+    authority: runtime.authority,
     defineClass: imagesApi.defineClass,
     installCallableInterfaceV2: imagesApi.installCallableInterfaceV2,
     installImageCreationBinding: imagesApi.installImageCreationBinding,
@@ -88,6 +89,7 @@ async function setup() {
     packCompositeValue: imagesApi.packCompositeValue,
     unpackCompositeValue: imagesApi.unpackCompositeValue,
     normalizeTypeDeclarations: imagesApi.normalizeTypeDeclarations,
+    authorizedReadProjectDescriptor: imagesApi.authorizedReadProjectDescriptor,
   });
 
   const schema = await adapter.ensureSchema(IMAGE, IDS);
@@ -125,6 +127,7 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
         images: noKernel.images,
         invocations: noKernel.invocations,
         executor: noKernel.executor,
+        authority: noKernel.authority,
         defineClass: imagesApi.defineClass,
         installCallableInterfaceV2: imagesApi.installCallableInterfaceV2,
         installImageCreationBinding: imagesApi.installImageCreationBinding,
@@ -140,8 +143,51 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
         packCompositeValue: imagesApi.packCompositeValue,
         unpackCompositeValue: imagesApi.unpackCompositeValue,
         normalizeTypeDeclarations: imagesApi.normalizeTypeDeclarations,
+        authorizedReadProjectDescriptor: imagesApi.authorizedReadProjectDescriptor,
       }).ensureSchema('bare', IDS),
       /no Smalltalk kernel/,
+    );
+  });
+
+  await t.test('authorized Project read returns the canonical descriptor without granting member targets', async () => {
+    const {runtime, adapter} = await setup();
+    const projectId = 'adapter-project';
+    await imagesApi.createProject({images: runtime.images, imageId: IMAGE, projectId, name: 'Adapter Project'});
+    await imagesApi.addProjectMember({
+      images: runtime.images, imageId: IMAGE, projectId,
+      key: 'z-last', role: 'test', target: imagesApi.objectRef(IMAGE, 'target-z'),
+    });
+    await imagesApi.addProjectMember({
+      images: runtime.images, imageId: IMAGE, projectId,
+      key: 'a-first', role: 'source', target: imagesApi.objectRef(IMAGE, 'target-a'),
+    });
+
+    const projectAuthority = grant(
+      runtime,
+      'object/read',
+      imagesApi.objectResource(IMAGE, imagesApi.projectObjectId(projectId)),
+    );
+    const descriptor = await adapter.readProject({imageId: IMAGE, projectId, authority: projectAuthority});
+    assert.equal(descriptor.name, 'Adapter Project');
+    assert.deepEqual(descriptor.members.map(({key, role, target}) => ({key, role, target})), [
+      {key: 'a-first', role: 'source', target: imagesApi.objectRef(IMAGE, 'target-a')},
+      {key: 'z-last', role: 'test', target: imagesApi.objectRef(IMAGE, 'target-z')},
+    ], 'Images canonicalizes member order; the adapter returns that descriptor unchanged');
+
+    const none = runtime.authority.issue({principal: 'mallory', grants: []});
+    for (const deniedProjectId of [projectId, 'does-not-exist']) {
+      await assert.rejects(
+        adapter.readProject({imageId: IMAGE, projectId: deniedProjectId, authority: none}),
+        (error) => error?.name === 'AuthorityError',
+        'denied existing and nonexistent Projects are indistinguishable by error kind',
+      );
+    }
+    await assert.rejects(
+      adapter.readObject({
+        imageId: IMAGE, objectId: 'target-a', authority: projectAuthority, blockId: IDS.readBlockId,
+      }),
+      (error) => error?.name === 'AuthorityError',
+      'Project membership and Project-read authority do not grant target object/read',
     );
   });
 
@@ -888,10 +934,10 @@ test('createImageClientAdapter validates services and helpers (unit, no runtime)
   assert.throws(() => createImageClientAdapter({images: {}}), /missing required service: invocations/);
 
   const good = {
-    images: {}, invocations: {}, executor: {},
+    images: {}, invocations: {}, executor: {}, authority: {require: () => {}},
     defineClass: () => {}, installCallableInterfaceV2: () => {}, installImageCreationBinding: () => {},
     installImageMutationBinding: () => {}, installImageObjectReadBinding: () => {}, installImageObservationBinding: () => {}, findSmalltalkKernel: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
-    objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, unpackCompositeValue: () => {}, normalizeTypeDeclarations: () => {},
+    objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, unpackCompositeValue: () => {}, normalizeTypeDeclarations: () => {}, authorizedReadProjectDescriptor: () => {},
   };
   assert.ok(createImageClientAdapter(good));
   const missing = {...good};
@@ -900,14 +946,48 @@ test('createImageClientAdapter validates services and helpers (unit, no runtime)
   const noObservation = {...good};
   delete noObservation.installImageObservationBinding;
   assert.throws(() => createImageClientAdapter(noObservation), /missing required helper: installImageObservationBinding/);
+  const noProjectRead = {...good};
+  delete noProjectRead.authorizedReadProjectDescriptor;
+  assert.throws(() => createImageClientAdapter(noProjectRead), /missing required helper: authorizedReadProjectDescriptor/);
+  const noAuthorityRequire = {...good, authority: {}};
+  assert.throws(() => createImageClientAdapter(noAuthorityRequire), /authority service is missing required operation: require/);
+});
+
+test('readProject delegates the Images-owned demand unchanged to the injected authority service', async () => {
+  const context = Object.freeze({opaque: true});
+  const demand = Object.freeze({operation: 'owner/decides', resource: 'owner/opaque'});
+  const calls = [];
+  const descriptor = Object.freeze({format: 'lagrange-project/v1', projectId: 'p', name: 'P', namespace: null, members: []});
+  const client = {
+    images: {}, invocations: {}, executor: {},
+    authority: {require: (receivedContext, receivedDemand) => calls.push({receivedContext, receivedDemand})},
+    defineClass: () => {}, installCallableInterfaceV2: () => {}, installImageCreationBinding: () => {},
+    installImageMutationBinding: () => {}, installImageObjectReadBinding: () => {}, installImageObservationBinding: () => {}, findSmalltalkKernel: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
+    objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, unpackCompositeValue: () => {}, normalizeTypeDeclarations: () => {},
+    authorizedReadProjectDescriptor: ({images, imageId, projectId, require}) => {
+      assert.equal(images, client.images);
+      assert.equal(imageId, 'img');
+      assert.equal(projectId, 'p');
+      require(demand);
+      return descriptor;
+    },
+  };
+
+  const result = await createImageClientAdapter(client).readProject({
+    imageId: 'img', projectId: 'p', authority: context,
+  });
+
+  assert.equal(result, descriptor, 'the canonical descriptor is returned unchanged');
+  assert.deepEqual(calls, [{receivedContext: context, receivedDemand: demand}],
+    'the adapter bridges the opaque context and exact owner-created demand only');
 });
 
 test('ensureSchema validates its ids eagerly (unit)', async () => {
   const good = {
-    images: {}, invocations: {}, executor: {},
+    images: {}, invocations: {}, executor: {}, authority: {require: () => {}},
     defineClass: () => {}, installCallableInterfaceV2: () => {}, installImageCreationBinding: () => {},
     installImageMutationBinding: () => {}, installImageObjectReadBinding: () => {}, installImageObservationBinding: () => {}, findSmalltalkKernel: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
-    objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, unpackCompositeValue: () => {}, normalizeTypeDeclarations: () => {},
+    objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, unpackCompositeValue: () => {}, normalizeTypeDeclarations: () => {}, authorizedReadProjectDescriptor: () => {},
   };
   const adapter = createImageClientAdapter(good);
   await assert.rejects(adapter.ensureSchema('img', {}), /ids\.shapeId/);
@@ -925,12 +1005,13 @@ test('refToEdgeString mapping (unit, no runtime)', () => {
 });
 
 // GETOBJECT AUDIT (the invariant of this change): ordinary user-facing reads
-// (readObject, loadPerspective, and by composition ObjectNavigator.navigate)
+// (readProject, readObject, loadPerspective, and by composition
+// ObjectNavigator.navigate)
 // must NOT use the privileged images.getObject; they cross the authorized
 // object/read lane. The only remaining getObject call sites are the
 // control-plane/schema reads (trusted host), each explicitly commented. This
 // guard makes a regression — a new un-commented privileged read, or one inside
-// readObject/loadPerspective — go red.
+// readProject/readObject/loadPerspective — go red.
 test('no ordinary runtime-facing path calls images.getObject directly (audit)', () => {
   const source = readFileSync(resolve(HERE, '../src/image-client-adapter.js'), 'utf8');
   const lines = source.split('\n');
@@ -954,7 +1035,7 @@ test('no ordinary runtime-facing path calls images.getObject directly (audit)', 
     const next = rest.slice(1).search(/\n  (async )?function \w+\(/);
     return next === -1 ? rest : rest.slice(0, next + 1);
   };
-  for (const name of ['authorizedReadObject', 'readObject', 'loadPerspective']) {
+  for (const name of ['readProject', 'authorizedReadObject', 'readObject', 'loadPerspective']) {
     assert.ok(
       !bodyOf(name).includes('images.getObject('),
       `${name} must not call images.getObject; it must cross the authorized object/read lane`,

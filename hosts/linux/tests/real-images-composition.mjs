@@ -32,6 +32,10 @@ import {
   packCompositeValue,
   unpackCompositeValue,
   normalizeTypeDeclarations,
+  authorizedReadProjectDescriptor,
+  createProject,
+  addProjectMember,
+  projectObjectId,
 } from 'portable-runtime';
 import {installNativeCryptoProvider} from 'host/crypto-bootstrap';
 
@@ -50,6 +54,7 @@ async function setup({imageId, ids}) {
     images: runtime.images,
     invocations: runtime.invocations,
     executor: runtime.executor,
+    authority: runtime.authority,
     defineClass,
     installCallableInterfaceV2,
     installImageCreationBinding,
@@ -65,6 +70,7 @@ async function setup({imageId, ids}) {
     packCompositeValue,
     unpackCompositeValue,
     normalizeTypeDeclarations,
+    authorizedReadProjectDescriptor,
     // Part 2's ObjectNavigator consumes this same public binding. Passing it
     // here keeps the composition surface identical without claiming Navigator
     // behavior in this headless adapter-only slice.
@@ -75,6 +81,32 @@ async function setup({imageId, ids}) {
   const resource = (objectId) => objectResource(imageId, objectId);
   const issue = (principal, grants) => runtime.authority.issue({principal, grants});
   const grant = (operation, objectId) => ({operation, resource: resource(objectId)});
+
+  async function readProjectFixture() {
+    const projectId = 'portable-project';
+    await createProject({images: runtime.images, imageId, projectId, name: 'Portable Project'});
+    await addProjectMember({
+      images: runtime.images, imageId, projectId,
+      key: 'z-last', role: 'test', target: objectRef(imageId, 'target-z'),
+    });
+    await addProjectMember({
+      images: runtime.images, imageId, projectId,
+      key: 'a-first', role: 'source', target: objectRef(imageId, 'target-a'),
+    });
+    const projectAuthority = issue('alice', [grant('object/read', projectObjectId(projectId))]);
+    const descriptor = await adapter.readProject({imageId, projectId, authority: projectAuthority});
+    const denied = issue('mallory', []);
+    const deniedKinds = [];
+    for (const candidate of [projectId, 'missing-project']) {
+      try {
+        await adapter.readProject({imageId, projectId: candidate, authority: denied});
+        deniedKinds.push('NO_THROW');
+      } catch (error) {
+        deniedKinds.push(error?.name ?? null);
+      }
+    }
+    return {descriptor, deniedKinds};
+  }
 
   return Object.freeze({
     adapter,
@@ -94,6 +126,7 @@ async function setup({imageId, ids}) {
       readOnly: (objectId) => issue('mallory', [grant('object/read', objectId)]),
     }),
     observeIntervalMs: OBSERVE_INTERVAL_MS,
+    readProjectFixture,
   });
 }
 
