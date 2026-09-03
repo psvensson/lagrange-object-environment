@@ -34,10 +34,10 @@
 //!   see the `[patch.crates-io]` comment in `hosts/linux/Cargo.toml`.
 //!
 //!   ORACLE CAVEAT (Bead 25v): `full_closure_links_and_exports_api` is the
-//!   project's only guard that the engine carries the linker fix. It links the
-//!   exact pinned Images artifact, so the proof is hermetic until a reviewed
-//!   artifact bump. If a future bump removes that cycle, this test goes GREEN
-//!   UNDER A BUGGY ENGINE.
+//!   project's only dedicated crash-isolated guard that the engine carries the
+//!   linker fix. It links the exact pinned Images artifact, so the proof is
+//!   hermetic until a reviewed artifact bump. If a future bump removes that
+//!   cycle, this test goes GREEN UNDER A BUGGY ENGINE.
 //!   The minimized 3-module synthetic repro is not checked in anywhere; Bead 25v
 //!   adds it, and blocks s3b (where the engine actually changes). For a mere
 //!   fetch-URL change the engine cannot change at all — the rev is pinned by

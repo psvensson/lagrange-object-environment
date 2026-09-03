@@ -17,8 +17,8 @@ pub mod portable_artifact;
 pub const CRYPTO_BOOTSTRAP_JS: &str = include_str!("crypto-bootstrap.js");
 
 /// The module specifier the bootstrap is loaded under. Bare and canonical so it
-/// is loader-agnostic: it resolves the same way under B1b's repo-tree loader and
-/// under the artifact loader B2 introduces.
+/// is loader-agnostic: the artifact loader resolves this exact host overlay
+/// without exposing a filesystem or package-resolution fallback.
 pub const CRYPTO_BOOTSTRAP_SPECIFIER: &str = "host/crypto-bootstrap";
 
 /// Canonical `lagrange-images-portable-runtime/v1` material embedded verbatim.

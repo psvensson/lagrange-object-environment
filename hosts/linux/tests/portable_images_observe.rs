@@ -26,10 +26,10 @@
 //! implementation rather than asserting it exists.
 //!
 //! CRYPTO IS DELIBERATELY A DETERMINISTIC TEST PROVIDER HERE. B1c is about host
-//! globals; the NATIVE crypto provider is Bead 3zb slice B1b, which will replace
-//! the stub below and add the NIST/FIPS vectors and the tamper falsifier. The
-//! stub is honest about being one: it is not a security claim, and it is the
-//! reason this file makes no assertion about cursor confidentiality.
+//! globals; the separate `native_crypto_images` B1b proof covers the native
+//! provider, NIST/FIPS vectors, and tamper falsifier. This stub stays here to
+//! isolate the B1c claim. It is not a security claim, and it is the reason this
+//! file makes no assertion about cursor confidentiality.
 //!
 //! Images sources come from the exact pinned
 //! `lagrange-images-portable-runtime/v1` artifact. The production loader has no
@@ -51,8 +51,8 @@ fn spawn_images_actor() -> JsEnvActor {
 /// rquickjs `Exception`.
 const OBSERVE: &str = r#"(async () => { try {
   const dc = await import('src/support/default-crypto.js');
-  // DETERMINISTIC TEST PROVIDER (see the module header): B1b replaces this with
-  // the native one. Not a security claim.
+  // DETERMINISTIC TEST PROVIDER (see the module header). The separate B1b test
+  // proves the native provider; this test isolates host globals. Not a security claim.
   let uuidCalls = 0;
   dc.setDefaultCryptoProvider({
     secureRandomBytes: (len) => new Uint8Array(len).fill(7),
