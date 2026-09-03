@@ -55,6 +55,7 @@
 //! crate can reach them; do not widen that). Capturing a `oneshot::Sender` (to
 //! resolve later from a worker thread) is the intended pattern.
 
+use std::future::Future;
 use std::sync::mpsc as std_mpsc;
 use std::thread::JoinHandle;
 
@@ -215,7 +216,11 @@ impl JsEnvActor {
                                 let _ = done.send(r);
                             }
                             OwnerCommand::EvalAsync { source, done } => {
-                                let r = eval_async_on_owner(&owner, &source).await;
+                                let r = await_command_with_timer_pump(
+                                    &owner,
+                                    eval_async_on_owner(&owner, &source),
+                                )
+                                .await;
                                 let _ = done.send(r);
                             }
                             OwnerCommand::WithContext { f, done } => {
@@ -223,7 +228,11 @@ impl JsEnvActor {
                                 let _ = done.send(r);
                             }
                             OwnerCommand::Push { payload, done } => {
-                                let r = deliver_push_on_owner(&owner, payload).await;
+                                let r = await_command_with_timer_pump(
+                                    &owner,
+                                    deliver_push_on_owner(&owner, payload),
+                                )
+                                .await;
                                 let _ = done.send(r); // std channel: wakes any blocked producer
                             }
                             OwnerCommand::Shutdown { done } => {
@@ -438,6 +447,60 @@ async fn deliver_push_on_owner(owner: &JsEnvOwner, payload: String) -> Result<()
             Ok::<_, Error>(())
         })
         .await
+}
+
+/// Await one already-constructed asynchronous owner command while continuing to
+/// service the guest timer registry on the same owner thread.
+///
+/// `EvalAsync` and `Push` both await an `AsyncContext::async_with` future. That
+/// future releases the rquickjs runtime lock whenever it returns `Pending`, so
+/// this OUTER driver may safely reacquire the owner context between polls to
+/// inspect/fire timers. Putting the pump inside `async_with` would instead try
+/// to acquire the lock while the same future holds it and self-deadlock.
+///
+/// The command future is pinned ONCE: recreating it after a timer wake would
+/// re-evaluate the source or re-deliver the push. We deliberately do not poll
+/// `OwnerCommand::recv` here, so later commands remain serialized behind the
+/// in-flight command. Globally due guest timers may run while it is suspended,
+/// which is the event-loop re-entry required for an awaited `setTimeout`.
+async fn await_command_with_timer_pump<F>(owner: &JsEnvOwner, command: F) -> F::Output
+where
+    F: Future,
+{
+    tokio::pin!(command);
+    let timer_notify = owner.timer_notify();
+
+    loop {
+        // The registry is authoritative. Notify intentionally coalesces changes;
+        // after every wake we re-read the earliest deadline rather than trying to
+        // associate a notification with one particular timer.
+        let next_due_ms = next_timer_due_ms(owner).await;
+        if let Some(due_ms) = next_due_ms {
+            let wait = due_ms.saturating_sub(epoch_ms());
+            tokio::select! {
+                // Prefer a command that completed at the same instant as a timer;
+                // its normal post-command drain below remains responsible for any
+                // already-ready jobs.
+                biased;
+                output = &mut command => return output,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(wait)) => {}
+                _ = timer_notify.notified() => {}
+            }
+        } else {
+            tokio::select! {
+                biased;
+                output = &mut command => return output,
+                _ = timer_notify.notified() => {}
+            }
+        }
+
+        // A deadline or registry change woke us. Fire what is now due, flush the
+        // bare promise jobs synchronously queued by those callbacks, and retain
+        // drain_jobs' no-op-spawn kick so the long-lived DriveFuture reclaims the
+        // pinned scheduler waker before the command is polled again.
+        fire_due_timers(owner).await;
+        drain_jobs(owner).await;
+    }
 }
 
 /// The current time in epoch-ms (the SAME clock domain as the guest's
