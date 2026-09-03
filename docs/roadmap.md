@@ -96,7 +96,7 @@ Success: built-in development feels like inhabiting the image rather than using 
 The underlying Project model/history remains in Lagrange Images. This phase makes it pleasant to inhabit.
 
 - [x] read-only Project navigation and member relationship presentation (canonical Images descriptor, no shadow Project model; Bead mky)
-- [ ] creation/editing commands over image-level Project APIs
+- [ ] creation/editing commands over image-level Project APIs — first slice is **rename**; blocked on an Images-owned authorized seam, proposed in `docs/proposals/authorized-project-rename-lane.md` (Bead okv)
 - [ ] mixed native/OpenSmalltalk Project browser
 - [ ] working-view and object/Project-diff presentations
 - [ ] merge/conflict commands and resolution UX over lower conflict data
