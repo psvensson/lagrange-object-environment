@@ -1,0 +1,28 @@
+# DELIBERATELY DIFFERENT from hosts/linux/rust-toolchain.toml (1.98.0). Do NOT
+# "unify" them.
+#
+# The checked-in GLB Component (test/browser/components/glb/glb.component.wasm,
+# sha256 c64b061c...) is byte-reproducible from the committed Cargo.lock ONLY
+# with this exact compiler: rustc 1.89.0 (29483883e 2025-08-04). Measured on
+# 2026-09-03 (Bead lagrange-object-environment-ocj): rebuilding with rustc
+# 1.98.0 left Cargo.lock unchanged yet moved every artifact (component sha256 ->
+# 84c09ad7...); jco 1.32.1 and wasm-tools 1.244.0 reproduce byte-for-byte from
+# the same core wasm, so ALL drift is compiler codegen.
+#
+# Changing this channel therefore CHANGES THE COMPONENT'S BYTE IDENTITY, which
+# hosts/linux/tests/l1_portability.rs (EXPECTED_COMPONENT_SHA256), hosts/linux/
+# src/main.rs and build.sh pin. That is a deliberate artifact re-pin with a full
+# browser + native re-proof, tracked as its own Bead -- never a side effect.
+#
+# Consequences of the pin for commands run INSIDE this directory: `cargo install`
+# would compile under 1.89.0 (may miss a tool's MSRV) -- install tooling from the
+# repo root or with `cargo +stable`; and `profile = "minimal"` ships no rustfmt/
+# clippy for 1.89.0, so `cargo fmt`/`cargo clippy` here need `+stable` too.
+#
+# rustup resolves this file by walking UP from the cwd, so it applies only to
+# builds run from inside renderer-component/ (what build.sh does). It is
+# invisible to hosts/linux and to CI, which never builds this crate.
+[toolchain]
+channel = "1.89.0"
+profile = "minimal"
+targets = ["wasm32-unknown-unknown"]

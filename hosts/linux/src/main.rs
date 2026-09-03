@@ -2,7 +2,10 @@
 //! box.glb offscreen, prints the pinned Component hash + frame stats + mesh
 //! pixel count, and asserts the frame is non-blank. Usage:
 //!
-//!   rustup run stable cargo run --release [-- --asset box|box-big --frames N --width W --height H --dump-ppm PATH]
+//!   cargo run --release --locked [-- --asset box|box-big --frames N --width W --height H --dump-ppm PATH]
+//!
+//! (`rust-toolchain.toml` selects the pinned compiler; do not bypass it with
+//! `rustup run stable`, and keep `--locked` so Cargo.lock is never rewritten.)
 
 use std::collections::HashMap;
 
