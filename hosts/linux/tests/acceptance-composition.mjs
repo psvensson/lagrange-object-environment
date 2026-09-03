@@ -17,6 +17,12 @@
 // real authority enforcement, real CAS correctness, or real observation-cursor
 // correctness (those are 3zb-B).
 //
+// Its independent counterpart is `real-images-composition.mjs`: that harness
+// uses the same checked-in Environment sources with the pinned real Images
+// artifact, but deliberately shares no JavaScript composition so the fake
+// boundary proof and real semantic proof constrain rather than mirror each
+// other.
+//
 // The guest Images adapter DELIBERATELY duplicates three tiny ImageClientAdapter
 // seam compositions (the dispatcher image seam, the observe composition, the
 // writableSlots constant) because extraction would require editing the REAL
