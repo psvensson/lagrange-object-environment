@@ -31,78 +31,18 @@
 //! stub is honest about being one: it is not a security claim, and it is the
 //! reason this file makes no assertion about cursor confidentiality.
 //!
-//! The Images sources are read from the SIBLING REPO CHECKOUT, which is
-//! probe/development machinery, not the production module-source mechanism.
-//! Slice B2 replaces it with the Images-owned `lagrange-images-portable-runtime/v1`
-//! artifact; this test should then swap loaders and keep asserting the same
-//! things.
+//! Images sources come from the exact pinned
+//! `lagrange-images-portable-runtime/v1` artifact. The production loader has no
+//! sibling checkout or filesystem fallback; private test imports below use the
+//! artifact's exact canonical `src/.../*.js` paths.
 
+use lagrange_host_linux::images_composition::portable_artifact::PortableImagesArtifactLoader;
 use lagrange_host_linux::js_env::actor::JsEnvActor;
-use rquickjs::loader::{ImportAttributes, Loader, Resolver};
-use rquickjs::{Ctx, Error, Module, Result};
-use std::path::PathBuf;
 
-fn images_src_root() -> PathBuf {
-    if let Ok(p) = std::env::var("LAGRANGE_IMAGES_SRC") {
-        return PathBuf::from(p);
-    }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../lagrange-images/src")
-}
-
-/// Path-preserving loader over the sibling Images `src/` tree. Deliberately
-/// boring: a resolved specifier maps to exactly one file and a missing one fails
-/// loudly. Development machinery only (see the module header).
-#[derive(Clone)]
-struct RepoTreeLoader {
-    root: PathBuf,
-}
-
-fn normalize_repo_path(base: &str, name: &str) -> String {
-    let joined = if name.starts_with('.') {
-        let dir = match base.rfind('/') {
-            Some(i) => &base[..i],
-            None => "",
-        };
-        if dir.is_empty() { name.to_string() } else { format!("{dir}/{name}") }
-    } else {
-        name.to_string()
-    };
-    let mut out: Vec<&str> = Vec::new();
-    for seg in joined.split('/') {
-        match seg {
-            "" | "." => {}
-            ".." => { out.pop(); }
-            s => out.push(s),
-        }
-    }
-    let p = out.join("/");
-    p.strip_suffix(".js").unwrap_or(&p).to_string()
-}
-
-impl Resolver for RepoTreeLoader {
-    fn resolve<'js>(
-        &mut self,
-        _ctx: &Ctx<'js>,
-        base: &str,
-        name: &str,
-        _attrs: Option<ImportAttributes<'js>>,
-    ) -> Result<String> {
-        Ok(normalize_repo_path(base, name))
-    }
-}
-
-impl Loader for RepoTreeLoader {
-    fn load<'js>(
-        &mut self,
-        ctx: &Ctx<'js>,
-        name: &str,
-        _attrs: Option<ImportAttributes<'js>>,
-    ) -> Result<Module<'js, rquickjs::module::Declared>> {
-        let path = self.root.join(format!("{name}.js"));
-        let src = std::fs::read_to_string(&path)
-            .map_err(|e| Error::new_loading_message(name, format!("{}: {e}", path.display())))?;
-        Module::declare(ctx.clone(), name, src)
-    }
+fn spawn_images_actor() -> JsEnvActor {
+    let loader = PortableImagesArtifactLoader::from_embedded()
+        .expect("construct loader from the pinned Images artifact");
+    JsEnvActor::spawn(loader).expect("spawn artifact-backed actor")
 }
 
 /// Compose the real portable runtime and drive a real observation round trip.
@@ -110,7 +50,7 @@ impl Loader for RepoTreeLoader {
 /// regression names the Images call site rather than surfacing as an opaque
 /// rquickjs `Exception`.
 const OBSERVE: &str = r#"(async () => { try {
-  const dc = await import('support/default-crypto');
+  const dc = await import('src/support/default-crypto.js');
   // DETERMINISTIC TEST PROVIDER (see the module header): B1b replaces this with
   // the native one. Not a security claim.
   let uuidCalls = 0;
@@ -126,12 +66,12 @@ const OBSERVE: &str = r#"(async () => { try {
   });
 
   const pr  = await import('portable-runtime');
-  const tg  = await import('callable/type-grammar');
-  const sc  = await import('value/scalars');
-  const sk  = await import('language/smalltalk-kernel');
-  const iv2 = await import('callable/interface-v2-artifacts');
-  const iob = await import('callable/image-observation-binding');
-  const cc  = await import('callable/composite-codec');
+  const tg  = await import('src/callable/type-grammar.js');
+  const sc  = await import('src/value/scalars.js');
+  const sk  = await import('src/language/smalltalk-kernel.js');
+  const iv2 = await import('src/callable/interface-v2-artifacts.js');
+  const iob = await import('src/callable/image-observation-binding.js');
+  const cc  = await import('src/callable/composite-codec.js');
 
   const TYPES = tg.normalizeTypeDeclarations({
     'obs-event': {kind: 'record', fields: [
@@ -185,7 +125,7 @@ const OBSERVE: &str = r#"(async () => { try {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn production_host_globals_unlock_real_images_observation() {
-    let actor = JsEnvActor::spawn(RepoTreeLoader { root: images_src_root() }).expect("spawn actor");
+    let actor = spawn_images_actor();
     let json = actor.eval_async(OBSERVE).await.expect("observe flow must not raise");
     let v: serde_json::Value = serde_json::from_str(&json).unwrap();
 
@@ -232,12 +172,12 @@ async fn production_host_globals_unlock_real_images_observation() {
 /// execution" rather than merely asserting the global exists.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn without_structured_clone_real_images_cannot_even_compose() {
-    let actor = JsEnvActor::spawn(RepoTreeLoader { root: images_src_root() }).expect("spawn actor");
+    let actor = spawn_images_actor();
     let json = actor
         .eval_async(
             r#"(async () => { try {
   delete globalThis.structuredClone;
-  const dc = await import('support/default-crypto');
+  const dc = await import('src/support/default-crypto.js');
   dc.setDefaultCryptoProvider({
     secureRandomBytes: (len) => new Uint8Array(len).fill(7),
     sha256: () => new Uint8Array(32),
