@@ -224,18 +224,23 @@ test('bindIntents routes an edit-field intent from the inspector surface to hand
   const adapter = {onIntent: (fn) => { handlers.add(fn); return () => handlers.delete(fn); }};
   const calls = [];
   const commandRouter = {consumeIntent: async (intent, opts) => { calls.push({intent, opts}); return {ok: true}; }};
+  // The inspector surface must be the LIVE handle the Compositor gave that view:
+  // the shell resolves the bound view by surface (the same source the
+  // CommandRouter uses for the subject), so a made-up handle is a no-op.
+  const inspSurface = compositor.surfaceHandleForView('inspector-view');
   shell.bindIntents({
-    adapter, navigatorSurfaceHandle: 'nav-surface', inspectorSurfaceHandle: 'insp-surface',
+    adapter, navigatorSurfaceHandle: 'nav-surface', inspectorSurfaceHandle: inspSurface,
     commandRouter, authority: null, readBlockId: undefined,
   });
-  // An edit-field intent from the INSPECTOR surface routes to handleEditField,
-  // which resolves key->slot + attaches the transient token and calls the router.
-  for (const fn of handlers) fn({kind: 'edit-field', key: 0, text: 'B-edited'}, 'insp-surface');
+  // An edit-field intent from the INSPECTOR surface routes through the inspector's
+  // edit binding, which resolves key->slot + attaches the transient token.
+  for (const fn of handlers) fn({kind: 'edit-field', key: 0, text: 'B-edited'}, inspSurface);
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(calls.length, 1, 'the edit-field intent reached the CommandRouter');
   assert.deepEqual(calls[0].intent, {kind: 'edit-field', key: 0});
-  assert.equal(calls[0].opts.surfaceHandle, 'insp-surface');
-  assert.equal(calls[0].opts.context.slot, 'probe-title', 'key 0 resolved to the writable slot');
+  assert.equal(calls[0].opts.surfaceHandle, inspSurface);
+  assert.deepEqual(calls[0].opts.context.field, {slot: 'probe-title'}, 'key 0 resolved to the writable slot, NESTED under field');
+  assert.deepEqual(Object.keys(calls[0].opts.context).sort(), ['commandId', 'field', 'text', 'versionToken'], 'the shell\'s context keys are fixed');
   assert.equal(calls[0].opts.context.text, 'B-edited', 'the raw text passes through');
   assert.equal(calls[0].opts.context.versionToken, 'tok-b', 'the transient token is attached');
   // An edit-field intent from a DIFFERENT surface is ignored.
@@ -347,16 +352,17 @@ test('handleEditField resolves the descriptor-local key to a writable slot and r
   assert.deepEqual(inspView.presentationDescriptor.parameters.writable, ['probe-title'], 'the writable set is threaded to the descriptor');
 
   const router = makeCapturingRouter({objectId: 'obj-b'});
+  const inspSurface = compositor.surfaceHandleForView('inspector-view');
   const result = await shell.handleEditField({
-    key: 0, text: 'B-edited', commandRouter: router, inspectorSurfaceHandle: 'insp-surface-0',
+    key: 0, text: 'B-edited', commandRouter: router, inspectorSurfaceHandle: inspSurface,
   });
   assert.deepEqual(result, {objectId: 'obj-b'}, 'the dispatch result is returned');
   // The shell routed a semantic edit-field intent through CommandRouter, with the
   // resolved slot + the transient token in the dispatch context (NEVER a descriptor).
   assert.equal(router.calls.length, 1);
   assert.deepEqual(router.calls[0].intent, {kind: 'edit-field', key: 0});
-  assert.equal(router.calls[0].surfaceHandle, 'insp-surface-0');
-  assert.equal(router.calls[0].context.slot, 'probe-title', 'key 0 resolved to the writable slot');
+  assert.equal(router.calls[0].surfaceHandle, inspSurface);
+  assert.deepEqual(router.calls[0].context.field, {slot: 'probe-title'}, 'key 0 resolved to the writable slot (nested under field)');
   assert.equal(router.calls[0].context.text, 'B-edited', 'the RAW text passes through unparsed');
   assert.equal(router.calls[0].context.versionToken, 'tok-b', 'the transient token is attached to the dispatch context');
   await compositor.destroy();
@@ -372,13 +378,17 @@ test('handleEditField: a stale or read-only key is an explicit no-op (never a wr
     },
   };
   const {shell, compositor} = makeShell({records, writableSlots: ['probe-title']});
+  const inspSurface = compositor.surfaceHandleForView('inspector-view');
   await shell.openWorkspace(ref('obj-root'), {});
   await shell.selectObject(ref('obj-b'), {});
   const router = makeCapturingRouter();
   // key 1 would name probe-count (read-only) if the shell miscounted writable
   // fields; key 99 is out of range. Both are no-ops with NO dispatch.
-  assert.equal(await shell.handleEditField({key: 1, text: 'x', commandRouter: router, inspectorSurfaceHandle: 's'}), null);
-  assert.equal(await shell.handleEditField({key: 99, text: 'x', commandRouter: router, inspectorSurfaceHandle: 's'}), null);
+  assert.equal(await shell.handleEditField({key: 1, text: 'x', commandRouter: router, inspectorSurfaceHandle: inspSurface}), null);
+  assert.equal(await shell.handleEditField({key: 99, text: 'x', commandRouter: router, inspectorSurfaceHandle: inspSurface}), null);
+  // A handle that resolves to NO live view is an explicit no-op too (the view is
+  // gone or never was this shell's inspector), never a dispatch against another view.
+  assert.equal(await shell.handleEditField({key: 0, text: 'x', commandRouter: router, inspectorSurfaceHandle: 'not-a-live-surface'}), null);
   assert.equal(router.calls.length, 0, 'a stale/read-only key never reaches CommandRouter');
   await compositor.destroy();
 });
@@ -414,5 +424,310 @@ test('an unreadable inspector (unavailable/unauthorized) carries NO transient to
   await shell.selectObject(ref('obj-c'), {});
   assert.deepEqual(shell._inspectorToken(), {token: null, objectId: 'obj-c'},
     'a failure presentation carries no token (paired only with a successful read)');
+  await compositor.destroy();
+});
+
+// ---------------------------------------------------------------------------
+// Bead 6lm: generic EDIT BINDINGS (the shell's row 64 generalized). Everything
+// below is proved at the shell's intent contract with synthesized intents: no
+// SemanticUi producer emits edit-field for a non-inspector surface yet (Bead ndk).
+// ---------------------------------------------------------------------------
+
+// A bound non-inspector view: a 'custom' presentation whose descriptor carries
+// labels the CONSUMER's resolver indexes. Nothing Project/Images-specific.
+async function openCustomView(compositor, {labels = ['first'], subject = {kind: 'ref', imageId: 'img', objectId: 'obj-root'}} = {}) {
+  const presentationDescriptor = {kind: 'custom', subject, parameters: {labels}};
+  await compositor.openView({
+    viewId: 'custom-view',
+    viewDescriptor: {kind: 'canvas', width: 64, height: 64},
+    presentationDescriptor,
+  });
+  return {surface: compositor.surfaceHandleForView('custom-view'), presentationDescriptor};
+}
+const labelResolver = (descriptor, key) => descriptor?.parameters?.labels?.[key] ? {field: descriptor.parameters.labels[key]} : null;
+function intentSeam() {
+  const handlers = new Set();
+  const adapter = {onIntent: (fn) => { handlers.add(fn); return () => handlers.delete(fn); }};
+  const emit = (intent, surface) => { for (const fn of handlers) fn(intent, surface); };
+  return {adapter, emit};
+}
+const settle = () => new Promise((r) => setTimeout(r, 10));
+
+test('(a) an edit binding routes an edit-field intent from ITS surface with the resolver context nested under field, its own token and commandId; the resolver sees the CURRENT descriptor', async () => {
+  const records = {'obj-root': {slots: {}, indexed: []}};
+  const {shell, compositor} = makeShell({records});
+  await shell.openWorkspace(ref('obj-root'), {});
+  const {surface, presentationDescriptor} = await openCustomView(compositor);
+  const {adapter, emit} = intentSeam();
+  const router = makeCapturingRouter({routed: true});
+  const seen = [];
+  const tokens = [];
+  const edited = [];
+  shell.bindIntents({
+    adapter, commandRouter: router,
+    editBindings: [{
+      surfaceHandle: surface, viewId: 'custom-view',
+      resolveField: (descriptor, key) => { seen.push(descriptor); return labelResolver(descriptor, key); },
+      tokenFor: (descriptor) => { tokens.push(descriptor); return 'custom-token'; },
+      commandId: 'rename-thing',
+      onEdited: (result) => { edited.push(result); },
+    }],
+  });
+  emit({kind: 'edit-field', key: 0, text: 'new text'}, surface);
+  await settle();
+  assert.equal(router.calls.length, 1, 'the non-inspector edit-field intent reached the CommandRouter');
+  assert.deepEqual(router.calls[0].intent, {kind: 'edit-field', key: 0});
+  assert.equal(router.calls[0].surfaceHandle, surface);
+  assert.deepEqual(router.calls[0].context, {commandId: 'rename-thing', text: 'new text', versionToken: 'custom-token', field: {field: 'first'}});
+  assert.equal(seen[0].kind, 'custom', 'the resolver received the BOUND view\'s descriptor (by kind)');
+  assert.deepEqual(seen[0].subject, presentationDescriptor.subject, '…and by subject identity, not the inspector\'s');
+  assert.equal(tokens[0], seen[0], 'tokenFor receives the same resolved descriptor the resolver saw');
+  assert.deepEqual(edited, [{routed: true}], 'onEdited receives the router result verbatim');
+  // Re-present the bound view: the resolver sees the CURRENT descriptor, not a cached one.
+  const current = {kind: 'custom', subject: presentationDescriptor.subject, parameters: {labels: ['renamed-label']}};
+  await compositor.presentOn('custom-view', current);
+  emit({kind: 'edit-field', key: 0, text: 'again'}, surface);
+  await settle();
+  assert.equal(router.calls.length, 2);
+  assert.deepEqual(router.calls[1].context.field, {field: 'renamed-label'});
+  assert.equal(seen.at(-1), current, 'the resolver receives the current Compositor descriptor object');
+  await compositor.destroy();
+});
+
+test('(b) resolver null = explicit no-op; (b\') a descriptor carrying inspector-style fields/writable does NOT trigger a shell-side fallback slot walk; (f) tokenFor absent -> versionToken null even while the inspector holds a LIVE token', async () => {
+  const records = {
+    'obj-root': {slots: {'slot-b': ref('obj-b')}, indexed: []},
+    'obj-b': {slots: {'probe-title': {kind: 'text', value: 'B'}}, indexed: [], versionToken: 'tok-b'},
+  };
+  const {shell, compositor} = makeShell({records, writableSlots: ['probe-title']});
+  await shell.openWorkspace(ref('obj-root'), {});
+  await shell.selectObject(ref('obj-b'), {});
+  assert.equal(shell._inspectorToken().token, 'tok-b', 'precondition: the inspector holds a live token');
+  // A foreign view whose descriptor LOOKS like an inspector descriptor (fields +
+  // writable). If the shell fell back to its own key->slot walk when the binding
+  // resolver returns null, this would dispatch. It must not.
+  const lookalike = {
+    kind: 'custom', subject: {kind: 'ref', imageId: 'img', objectId: 'obj-b'},
+    parameters: {fields: {'probe-title': 'B'}, writable: ['probe-title'], labels: ['x']},
+  };
+  await compositor.openView({viewId: 'custom-view', viewDescriptor: {kind: 'canvas', width: 64, height: 64}, presentationDescriptor: lookalike});
+  const surface = compositor.surfaceHandleForView('custom-view');
+  const {adapter, emit} = intentSeam();
+  const router = makeCapturingRouter();
+  shell.bindIntents({
+    adapter, commandRouter: router,
+    editBindings: [{surfaceHandle: surface, viewId: 'custom-view', commandId: 'custom-edit', resolveField: (d, key) => key === 1 ? {} : null}],
+  });
+  // Key 0 is EXACTLY the key the inspector's own key->writable-slot walk would
+  // resolve on this lookalike descriptor; the binding's resolver says null. A
+  // shell that fell back to its inspector walk would dispatch here. It must not.
+  emit({kind: 'edit-field', key: 0, text: 'x'}, surface); // resolver -> null
+  await settle();
+  assert.equal(router.calls.length, 0, 'a null resolution is a no-op: no shell-side fallback resolution against fields/writable');
+  emit({kind: 'edit-field', key: 1, text: 'x'}, surface); // resolver -> {} (legal, dispatches)
+  await settle();
+  assert.equal(router.calls.length, 1, '{} is a legal field context and dispatches');
+  assert.deepEqual(router.calls[0].context.field, {});
+  assert.equal(router.calls[0].context.versionToken, null, 'no tokenFor -> null, NOT the inspector\'s live token');
+  assert.equal(shell._inspectorToken().token, 'tok-b', 'the inspector token is untouched by a foreign edit');
+  await compositor.destroy();
+});
+
+test('(c),(d),(h) routing by (kind, surface): unbound surface ignored; inspector still routes to its own binding; an activation binding and an edit binding share one surface', async () => {
+  const target = {kind: 'ref', imageId: 'other-image', objectId: 'obj-b'};
+  const records = {
+    'obj-root': {slots: {'slot-b': ref('obj-b')}, indexed: []},
+    'obj-b': {slots: {'probe-title': {kind: 'text', value: 'B'}}, indexed: [], versionToken: 'tok-b'},
+  };
+  const {shell, selectionModel, compositor} = makeShell({records, writableSlots: ['probe-title']});
+  await shell.openWorkspace(ref('obj-root'), {});
+  await shell.selectObject(ref('obj-b'), {});
+  const {surface} = await openCustomView(compositor, {labels: ['lbl']});
+  const inspSurface = compositor.surfaceHandleForView('inspector-view');
+  const {adapter, emit} = intentSeam();
+  const router = makeCapturingRouter();
+  shell.bindIntents({
+    adapter, commandRouter: router, inspectorSurfaceHandle: inspSurface,
+    activationBindings: [{surfaceHandle: surface, viewId: 'custom-view', resolveItem: (d, key) => key === 0 ? target : null}],
+    editBindings: [{surfaceHandle: surface, viewId: 'custom-view', commandId: 'custom-edit', resolveField: labelResolver}],
+  });
+  emit({kind: 'edit-field', key: 0, text: 'x'}, 'unbound-surface');
+  await settle();
+  assert.equal(router.calls.length, 0, 'an unbound surface routes nowhere');
+  emit({kind: 'edit-field', key: 0, text: 'from inspector'}, inspSurface);
+  await settle();
+  assert.equal(router.calls.length, 1);
+  assert.deepEqual(router.calls[0].context.field, {slot: 'probe-title'}, 'the inspector surface still resolves via its own binding');
+  assert.equal(router.calls[0].context.versionToken, 'tok-b');
+  selectionModel.clear();
+  emit({kind: 'activate-item', key: 0}, surface); // same surface, activation kind
+  await settle();
+  assert.deepEqual(selectionModel.selectedSubject(), target, 'activate-item on the shared surface routes to the activation binding');
+  emit({kind: 'edit-field', key: 0, text: 'from custom'}, surface); // same surface, edit kind
+  await settle();
+  assert.equal(router.calls.length, 2);
+  assert.deepEqual(router.calls[1].context.field, {field: 'lbl'}, 'edit-field on the shared surface routes to the edit binding');
+  await compositor.destroy();
+});
+
+test('(e) bind-time validation: duplicate edit surface, an edit binding on the inspector surface, edit bindings without a CommandRouter, malformed entries', async () => {
+  const records = {'obj-root': {slots: {}, indexed: []}};
+  const {shell, compositor} = makeShell({records});
+  await shell.openWorkspace(ref('obj-root'), {});
+  const {surface} = await openCustomView(compositor);
+  const inspSurface = compositor.surfaceHandleForView('inspector-view');
+  const {adapter} = intentSeam();
+  const router = makeCapturingRouter();
+  const ok = {surfaceHandle: surface, viewId: 'custom-view', commandId: 'custom-edit', resolveField: labelResolver};
+  assert.throws(() => shell.bindIntents({adapter, commandRouter: router, editBindings: [ok, {...ok}]}), /edit surfaceHandle bindings must be unique/);
+  // A public binding on the inspector's SURFACE (under any other viewId) collides
+  // with the inspector binding when inspectorSurfaceHandle is set.
+  assert.throws(() => shell.bindIntents({adapter, commandRouter: router, inspectorSurfaceHandle: inspSurface, editBindings: [{...ok, surfaceHandle: inspSurface}]}), /must be unique/, 'the inspector surface is taken by inspectorSurfaceHandle');
+  assert.throws(() => shell.bindIntents({adapter, editBindings: [ok]}), /requires a CommandRouter/, 'an edit binding without a router can never work: loud at bind time');
+  assert.throws(() => shell.bindIntents({adapter, inspectorSurfaceHandle: inspSurface}), /requires a CommandRouter/);
+  assert.throws(() => shell.bindIntents({adapter, commandRouter: router, editBindings: [{...ok, resolveField: 'nope'}]}), /requires surfaceHandle, viewId and resolveField/);
+  assert.throws(() => shell.bindIntents({adapter, commandRouter: router, editBindings: [{...ok, tokenFor: 42}]}), /tokenFor must be a function/);
+  assert.throws(() => shell.bindIntents({adapter, commandRouter: router, editBindings: 'nope'}), /editBindings must be an array/);
+  assert.throws(() => shell.bindIntents({adapter, commandRouter: router, editBindings: [{...ok, commandId: undefined}]}), /must declare its commandId/, 'a binding cannot inherit the inspector default command');
+  // The inspector view is bound ONLY through inspectorSurfaceHandle: a public edit
+  // binding on it (even when the inspector is otherwise unbound) would drive the
+  // shell's own inspector with a foreign token and no barrier.
+  assert.throws(() => shell.bindIntents({adapter, commandRouter: router, editBindings: [{...ok, surfaceHandle: inspSurface, viewId: 'inspector-view'}]}), /bound through inspectorSurfaceHandle/);
+  // Valid: the same surface in an ACTIVATION binding and an EDIT binding is fine.
+  const unsubscribe = shell.bindIntents({
+    adapter, commandRouter: router,
+    activationBindings: [{surfaceHandle: surface, viewId: 'custom-view', resolveItem: () => null}],
+    editBindings: [ok],
+  });
+  assert.equal(typeof unsubscribe, 'function');
+  await compositor.destroy();
+});
+
+test('(g) a malformed resolver result (non-plain-data, string, array, class instance) or a throwing resolver/tokenFor is a LOUD error to onEditError, reported once, with NO dispatch and no inspector reread offered', async () => {
+  const records = {'obj-root': {slots: {}, indexed: []}};
+  const {shell, compositor} = makeShell({records});
+  await shell.openWorkspace(ref('obj-root'), {});
+  const {surface} = await openCustomView(compositor, {labels: ['a', 'b', 'c', 'd', 'e', 'f']});
+  const {adapter, emit} = intentSeam();
+  const router = makeCapturingRouter();
+  const errors = [];
+  class Boxed { constructor() { this.v = 1; } }
+  const results = [() => ({fn: () => 1}), () => 'a string', () => [1, 2], () => new Boxed(), () => { throw new Error('resolver boom'); }, () => ({})];
+  shell.bindIntents({
+    adapter, commandRouter: router,
+    editBindings: [{
+      surfaceHandle: surface, viewId: 'custom-view', commandId: 'custom-edit',
+      resolveField: (d, key) => results[key](),
+      tokenFor: (d) => { if (d.parameters.labels[0] === 'TOKEN-BOOM') throw new Error('token boom'); return null; },
+      onEditError: (error, recovery) => { errors.push({message: error.message, recovery}); },
+    }],
+  });
+  for (const key of [0, 1, 2, 3, 4]) emit({kind: 'edit-field', key, text: 'x'}, surface);
+  await settle();
+  assert.equal(router.calls.length, 0, 'no malformed/throwing resolution dispatches');
+  assert.equal(errors.length, 5, 'each malformed/throwing resolution is reported exactly once');
+  assert.match(errors[0].message, /data-representable/);
+  for (const i of [1, 2, 3]) assert.match(errors[i].message, /null or a plain object/);
+  assert.equal(errors[4].message, 'resolver boom');
+  for (const e of errors) assert.deepEqual(e.recovery, {}, 'a foreign binding gets NO shell-side reread');
+  // A throwing tokenFor is reported the same way, after a valid resolution.
+  await compositor.presentOn('custom-view', {kind: 'custom', subject: {kind: 'ref', imageId: 'img', objectId: 'obj-root'}, parameters: {labels: ['TOKEN-BOOM', 'b', 'c', 'd', 'e', 'f']}});
+  emit({kind: 'edit-field', key: 5, text: 'x'}, surface);
+  await settle();
+  assert.equal(router.calls.length, 0);
+  assert.equal(errors.at(-1).message, 'token boom');
+  await compositor.destroy();
+});
+
+test('a resolver cannot re-target the Command: a field context carrying commandId/text/versionToken stays nested and the shell\'s own keys win', async () => {
+  const records = {'obj-root': {slots: {}, indexed: []}};
+  const {shell, compositor} = makeShell({records});
+  await shell.openWorkspace(ref('obj-root'), {});
+  const {surface} = await openCustomView(compositor);
+  const {adapter, emit} = intentSeam();
+  const router = makeCapturingRouter();
+  shell.bindIntents({
+    adapter, commandRouter: router,
+    editBindings: [{surfaceHandle: surface, viewId: 'custom-view', commandId: 'declared-command', resolveField: () => ({commandId: 'hijack', text: 'hijack', versionToken: 'hijack'})}],
+  });
+  emit({kind: 'edit-field', key: 0, text: 'real text'}, surface);
+  await settle();
+  assert.equal(router.calls.length, 1);
+  assert.equal(router.calls[0].context.commandId, 'declared-command', 'the binding\'s declared commandId wins');
+  assert.equal(router.calls[0].context.text, 'real text');
+  assert.equal(router.calls[0].context.versionToken, null);
+  assert.deepEqual(router.calls[0].context.field, {commandId: 'hijack', text: 'hijack', versionToken: 'hijack'}, 'the resolver payload is fenced under field');
+  await compositor.destroy();
+});
+
+test('a foreign edit takes NO olm barrier and leaves the inspector alone: an inspector invalidation during a foreign in-flight edit rereads immediately (never deferred); the inspector descriptor/token are unchanged on success and failure', async () => {
+  const records = {
+    'obj-root': {slots: {'slot-b': ref('obj-b')}, indexed: []},
+    'obj-b': {slots: {'probe-title': {kind: 'text', value: 'B'}}, indexed: [], versionToken: 'tok-b'},
+  };
+  const {shell, compositor} = makeShell({records, writableSlots: ['probe-title']});
+  await shell.openWorkspace(ref('obj-root'), {});
+  await shell.selectObject(ref('obj-b'), {});
+  const inspectorBefore = compositor.durableIntent().find((v) => v.viewId === 'inspector-view').presentationDescriptor;
+  const tokenBefore = shell._inspectorToken();
+  const {surface} = await openCustomView(compositor);
+  const {adapter, emit} = intentSeam();
+  // A router whose dispatch blocks until released: the foreign edit stays in flight.
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let mode = 'ok';
+  const router = {calls: [], async consumeIntent(intent, opts) { this.calls.push({intent, opts}); await gate; if (mode === 'fail') throw new Error('foreign edit failed'); return {ok: true}; }};
+  const errors = [];
+  shell.bindIntents({
+    adapter, commandRouter: router,
+    editBindings: [{surfaceHandle: surface, viewId: 'custom-view', commandId: 'custom-edit', resolveField: labelResolver, onEditError: (e, recovery) => errors.push({e, recovery})}],
+  });
+  // A controllable observation feed for the inspector follow.
+  const pending = [];
+  let wake = null;
+  async function* observe() { for (;;) { if (pending.length) { yield pending.shift(); continue; } await new Promise((r) => { wake = r; }); } }
+  const pushChange = (change) => { pending.push(change); if (wake) { const w = wake; wake = null; w(); } };
+  const updates = [];
+  const deferred = [];
+  const follow = shell.followSelected({observe, imageId: 'img', onUpdate: (d) => updates.push(d), onDeferred: (c) => deferred.push(c)});
+  emit({kind: 'edit-field', key: 0, text: 'x'}, surface); // foreign edit, now in flight (blocked on gate)
+  await settle();
+  assert.equal(router.calls.length, 1, 'the foreign edit is in flight');
+  pushChange({objectId: 'obj-b', imageId: 'img'}); // inspector invalidation DURING the foreign edit
+  await settle();
+  assert.equal(deferred.length, 0, 'a foreign in-flight edit does NOT take the shell\'s olm barrier: nothing is deferred');
+  assert.equal(updates.length, 1, 'the inspector reread ran immediately');
+  release();
+  await settle();
+  const inspectorAfter = compositor.durableIntent().find((v) => v.viewId === 'inspector-view').presentationDescriptor;
+  assert.deepEqual(inspectorAfter, inspectorBefore, 'the inspector descriptor is unchanged by the foreign edit');
+  assert.deepEqual(shell._inspectorToken(), tokenBefore, 'the inspector token is unchanged by the foreign edit');
+  // Failure path: still no barrier side effects, no inspector reread offered.
+  mode = 'fail';
+  emit({kind: 'edit-field', key: 0, text: 'y'}, surface);
+  await settle();
+  assert.equal(errors.length, 1);
+  assert.deepEqual(errors[0].recovery, {}, 'no inspector reread is offered to a foreign binding');
+  assert.deepEqual(shell._inspectorToken(), tokenBefore);
+  follow.stop();
+  await compositor.destroy();
+});
+
+test('the binding viewId is an ASSERTION: a live surface whose view is not the declared one is an explicit no-op and the resolver is never consulted', async () => {
+  const records = {'obj-root': {slots: {}, indexed: []}};
+  const {shell, compositor} = makeShell({records});
+  await shell.openWorkspace(ref('obj-root'), {});
+  const {surface} = await openCustomView(compositor);
+  const {adapter, emit} = intentSeam();
+  const router = makeCapturingRouter();
+  let resolverCalls = 0;
+  shell.bindIntents({
+    adapter, commandRouter: router,
+    editBindings: [{surfaceHandle: surface, viewId: 'other-view', commandId: 'custom-edit', resolveField: () => { resolverCalls += 1; return {}; }}],
+  });
+  emit({kind: 'edit-field', key: 0, text: 'x'}, surface); // live surface, but it realizes 'custom-view', not 'other-view'
+  await settle();
+  assert.equal(router.calls.length, 0, 'a viewId mismatch never dispatches (descriptor and subject could belong to different views)');
+  assert.equal(resolverCalls, 0, 'the resolver is not even consulted on a mismatch');
   await compositor.destroy();
 });

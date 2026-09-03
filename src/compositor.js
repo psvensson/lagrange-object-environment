@@ -390,4 +390,6 @@ function createCompositor({rendererAdapter} = {}) {
   });
 }
 
-export {RENDERER_ADAPTER_METHODS, createCompositor};
+// assertDataRepresentable is exported so other loci (EnvironmentShell's edit-binding
+// field context) apply the SAME data-only rule instead of re-deciding it.
+export {RENDERER_ADAPTER_METHODS, assertDataRepresentable, createCompositor};
