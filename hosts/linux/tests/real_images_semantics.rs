@@ -7,95 +7,18 @@
 //! acceptance remains the proof of that boundary; this test proves real Images
 //! integration semantics behind the same Environment-owned adapter.
 
-use std::sync::{Arc, Mutex};
+#[path = "support/public_entry_composition_loader.rs"]
+mod public_entry_composition_loader;
 
-use lagrange_host_linux::images_composition::{
-    portable_artifact::{PortableImagesArtifactLoader, PORTABLE_RUNTIME_ALIAS},
-    CRYPTO_BOOTSTRAP_JS, CRYPTO_BOOTSTRAP_SPECIFIER,
-};
+use lagrange_host_linux::images_composition::portable_artifact::PORTABLE_RUNTIME_ALIAS;
 use lagrange_host_linux::js_env::{actor::JsEnvActor, EmbeddedLoader};
-use rquickjs::loader::{ImportAttributes, Loader, Resolver};
-use rquickjs::{Ctx, Error, Module, Result as JsResult};
+use public_entry_composition_loader::{ExternalArtifactResolutions, PublicEntryCompositionLoader};
 use serde_json::{json, Value};
 
 const COMPOSITION: &str = include_str!("real-images-composition.mjs");
-
-type ExternalArtifactResolutions = Arc<Mutex<Vec<(String, String, String)>>>;
-
-/// Test-owned enforcement and audit for the Environment -> Images source
-/// boundary. Artifact modules may resolve their own canonical closure; any
-/// non-artifact module must enter that closure through the one public alias.
-#[derive(Clone)]
-struct PublicEntryCompositionLoader {
-    images: PortableImagesArtifactLoader,
-    environment: EmbeddedLoader,
-    external_artifact_resolutions: ExternalArtifactResolutions,
-}
-
-impl Resolver for PublicEntryCompositionLoader {
-    fn resolve<'js>(
-        &mut self,
-        ctx: &Ctx<'js>,
-        base: &str,
-        name: &str,
-        attributes: Option<ImportAttributes<'js>>,
-    ) -> JsResult<String> {
-        if !base.starts_with("src/") && name.starts_with("src/") {
-            return Err(Error::new_resolving_message(
-                base,
-                name,
-                "non-artifact modules must use the public portable-runtime alias",
-            ));
-        }
-
-        match Resolver::resolve(&mut self.images, ctx, base, name, attributes.clone()) {
-            Ok(resolved) => {
-                if resolved.starts_with("src/") && !base.starts_with("src/") {
-                    if name != PORTABLE_RUNTIME_ALIAS {
-                        return Err(Error::new_resolving_message(
-                            base,
-                            name,
-                            "non-artifact modules must use the public portable-runtime alias",
-                        ));
-                    }
-                    self.external_artifact_resolutions
-                        .lock()
-                        .expect("artifact resolution audit lock poisoned")
-                        .push((base.to_string(), name.to_string(), resolved.clone()));
-                }
-                Ok(resolved)
-            }
-            Err(Error::Resolving { .. }) => {
-                Resolver::resolve(&mut self.environment, ctx, base, name, attributes)
-            }
-            Err(error) => Err(error),
-        }
-    }
-}
-
-impl Loader for PublicEntryCompositionLoader {
-    fn load<'js>(
-        &mut self,
-        ctx: &Ctx<'js>,
-        name: &str,
-        attributes: Option<ImportAttributes<'js>>,
-    ) -> JsResult<Module<'js, rquickjs::module::Declared>> {
-        match Loader::load(&mut self.images, ctx, name, attributes.clone()) {
-            Ok(module) => Ok(module),
-            Err(Error::Loading { .. }) => {
-                Loader::load(&mut self.environment, ctx, name, attributes)
-            }
-            Err(error) => Err(error),
-        }
-    }
-}
+const FULL_ACCEPTANCE_COMPOSITION: &str = include_str!("real-images-acceptance-composition.mjs");
 
 fn actor() -> (JsEnvActor, ExternalArtifactResolutions) {
-    let external_artifact_resolutions = Arc::new(Mutex::new(Vec::new()));
-    let images = PortableImagesArtifactLoader::from_embedded()
-        .expect("construct loader from the pinned Images artifact")
-        .with_host_module(CRYPTO_BOOTSTRAP_SPECIFIER, CRYPTO_BOOTSTRAP_JS)
-        .expect("register the exact host crypto bootstrap overlay");
     let environment = EmbeddedLoader::new()
         .with_module("model", include_str!("../../../src/model.js"))
         .with_module(
@@ -115,11 +38,8 @@ fn actor() -> (JsEnvActor, ExternalArtifactResolutions) {
             include_str!("../../../src/image-client-adapter.js"),
         )
         .with_module("test/real-images-composition", COMPOSITION);
-    let loader = PublicEntryCompositionLoader {
-        images,
-        environment,
-        external_artifact_resolutions: Arc::clone(&external_artifact_resolutions),
-    };
+    let (loader, external_artifact_resolutions) = PublicEntryCompositionLoader::new(environment)
+        .expect("construct combined public-entry composition loader");
 
     // Ordering is load-bearing: the artifact resolver must claim and
     // canonicalize `portable-runtime` before EmbeddedLoader sees the bare name.
@@ -369,7 +289,10 @@ fn import_specifiers(source: &str) -> Vec<String> {
         }
 
         let word_start = cursor;
-        while source.get(cursor).is_some_and(|byte| is_js_identifier_byte(*byte)) {
+        while source
+            .get(cursor)
+            .is_some_and(|byte| is_js_identifier_byte(*byte))
+        {
             cursor += 1;
         }
         let keyword = &source[word_start..cursor];
@@ -404,9 +327,7 @@ fn import_specifiers(source: &str) -> Vec<String> {
                     );
                     skip_js_trivia(source, &mut cursor);
                     if source.get(cursor) != Some(&b')') {
-                        specifiers.push(
-                            "<unsupported-dynamic-import-expression>".to_string(),
-                        );
+                        specifiers.push("<unsupported-dynamic-import-expression>".to_string());
                     }
                 }
             }
@@ -446,6 +367,33 @@ fn composition_uses_only_the_public_images_entry() {
             .iter()
             .all(|specifier| !is_forbidden_images_specifier(specifier)),
         "the composition must not deep-import Images or name a sibling/package path"
+    );
+
+    let full_specifiers = import_specifiers(FULL_ACCEPTANCE_COMPOSITION);
+    assert_eq!(
+        full_specifiers,
+        vec![
+            "model".to_string(),
+            "environment-shell".to_string(),
+            "compositor".to_string(),
+            "object-navigator".to_string(),
+            "command-router".to_string(),
+            "command-registry".to_string(),
+            "presentation-registry".to_string(),
+            "object-presentation-providers".to_string(),
+            "selection-model".to_string(),
+            "image-client-adapter".to_string(),
+            "image-observation".to_string(),
+            "portable-runtime".to_string(),
+            "host/crypto-bootstrap".to_string(),
+        ],
+        "the full composition has only flat Environment roots, one public Images root, and one host overlay"
+    );
+    assert!(
+        full_specifiers
+            .iter()
+            .all(|specifier| !is_forbidden_images_specifier(specifier)),
+        "the full composition must not deep-import Images or name a sibling/package path"
     );
 
     let planted_source = r#"
@@ -510,8 +458,7 @@ fn composition_uses_only_the_public_images_entry() {
         );
     }
 
-    let compound_dynamic_import =
-        "import('portable-runtime' && 'src/value/scalars.js')";
+    let compound_dynamic_import = "import('portable-runtime' && 'src/value/scalars.js')";
     assert_eq!(
         import_specifiers(compound_dynamic_import),
         vec![

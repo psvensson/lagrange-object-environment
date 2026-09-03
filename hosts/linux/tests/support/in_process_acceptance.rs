@@ -1,7 +1,7 @@
 //! Shared test-only driver for the in-process Environment/GTK acceptance
 //! protocol. Composition modules own setup and dependency injection; this file
-//! alone owns the common open -> NAV -> OBS -> OLM -> STALE -> DENIED -> C1
-//! sequencing, renderer pumping, and assertions.
+//! alone owns the common open -> NAV -> OBS -> OLM -> STALE -> DENIED ->
+//! UNAVAILABLE -> C1 sequencing, renderer pumping, and assertions.
 
 use std::sync::Once;
 use std::time::{Duration, Instant};
@@ -37,6 +37,7 @@ pub struct AcceptanceFlavor<'a> {
     pub denied_write_title: &'a str,
     pub denied_attempt_title: &'a str,
     pub denied_write_same_object_as_primary: bool,
+    pub expected_creation_tokens: u64,
     pub minimum_c1_tokens: u64,
 }
 
@@ -322,7 +323,12 @@ pub fn run_in_process_acceptance(
         "globalThis.__session.follow()",
         "follow",
     );
-    assert_eq!(follow, json!(true), "follow contract");
+    assert_exact_keys(&follow, &["following", "asyncIterable"], "follow");
+    assert_eq!(
+        follow,
+        json!({"following": true, "asyncIterable": true}),
+        "follow must consume an async-iterable observation lane"
+    );
     let poll_count = poll_until(
         runtime,
         actor,
@@ -554,9 +560,8 @@ pub fn run_in_process_acceptance(
         "inspector remains usable"
     );
 
-    // DENIED READ: preserve the fake oracle's unauthorized presentation. The
-    // unavailable positive-control distinction is deliberately deferred to the
-    // real Part 2B composition.
+    // DENIED READ: an existing object without object/read authority is
+    // unauthorized, never unavailable.
     let selected_denied = run_json_while_pumping(
         runtime,
         actor,
@@ -576,6 +581,32 @@ pub fn run_in_process_acceptance(
     );
     assert_inspector_shape(&denied_read, "DENIED READ inspector");
     assert_eq!(denied_read["kind"], json!("unauthorized-reference"));
+
+    // UNAVAILABLE: the positive control is an authorized read of a missing
+    // object, proving it remains distinct from the denied-read arm above.
+    let selected_unavailable = run_json_while_pumping(
+        runtime,
+        actor,
+        host,
+        "globalThis.__session.selectUnavailable()",
+        "selectUnavailable",
+    );
+    assert_exact_keys(&selected_unavailable, &["selected"], "selectUnavailable");
+    assert_eq!(selected_unavailable, json!({"selected": true}));
+    let unavailable = poll_until(
+        runtime,
+        actor,
+        host,
+        "globalThis.__session.inspector()",
+        |v| v["kind"] == json!("unavailable-reference"),
+        "authorized missing read surfaces unavailable-reference",
+    );
+    assert_inspector_shape(&unavailable, "UNAVAILABLE inspector");
+    assert_eq!(unavailable["kind"], json!("unavailable-reference"));
+    assert_ne!(
+        unavailable["kind"], denied_read["kind"],
+        "denied and authorized-missing reads must remain distinct"
+    );
 
     // C1: reselect the primary object, wait for its live token, then prove all
     // checked tokens are absent from durable, renderer, descriptor, and GTK sinks.
@@ -614,15 +645,63 @@ pub fn run_in_process_acceptance(
         serde_json::to_string(&gtk_descriptor.to_string()).unwrap()
     );
     let c1 = pump_and_eval_json(runtime, actor, host, &c1_js, "c1Check");
-    assert_exact_keys(&c1, &["tokensChecked", "sinksChecked", "leaks"], "c1Check");
-    for key in ["tokensChecked", "sinksChecked", "leaks"] {
+    assert_exact_keys(
+        &c1,
+        &[
+            "currentTokenChecked",
+            "creationTokensChecked",
+            "tokensChecked",
+            "durableSinksChecked",
+            "presentationParameterSinksChecked",
+            "gtkSinksChecked",
+            "leaks",
+        ],
+        "c1Check",
+    );
+    assert!(
+        c1["currentTokenChecked"].is_boolean(),
+        "c1Check.currentTokenChecked must be boolean"
+    );
+    assert_eq!(
+        c1["currentTokenChecked"],
+        json!(true),
+        "C1 must include the current shell token"
+    );
+    for key in [
+        "creationTokensChecked",
+        "tokensChecked",
+        "durableSinksChecked",
+        "presentationParameterSinksChecked",
+        "gtkSinksChecked",
+        "leaks",
+    ] {
         assert_nonnegative_integer(&c1[key], &format!("c1Check.{key}"));
     }
+    assert_eq!(
+        c1["creationTokensChecked"],
+        json!(flavor.expected_creation_tokens),
+        "C1 ({}) creation-token provenance",
+        flavor.name
+    );
     assert!(
         c1["tokensChecked"].as_u64().unwrap() >= flavor.minimum_c1_tokens,
         "C1 ({}) must check at least {} live token(s): {c1}",
         flavor.name,
         flavor.minimum_c1_tokens
+    );
+    assert_eq!(
+        c1["durableSinksChecked"],
+        json!(1),
+        "C1 must check the durable intent"
+    );
+    assert!(
+        c1["presentationParameterSinksChecked"].as_u64().unwrap() >= 1,
+        "C1 must check presentation parameter sinks"
+    );
+    assert_eq!(
+        c1["gtkSinksChecked"],
+        json!(2),
+        "C1 must check both GTK descriptor and visible-text sinks"
     );
     assert_eq!(
         c1["leaks"],

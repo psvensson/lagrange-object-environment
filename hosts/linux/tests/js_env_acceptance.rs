@@ -136,7 +136,10 @@ fn slice4_acceptance() {
   m.setup({
     imageId: 'img',
     blockIds: {read: 'blk-read', mutation: 'blk-mut', observation: 'blk-obs'},
-    seededObjectIds: {root: 'obj-root', b: 'obj-b', deniedRead: 'obj-denied-read', deniedMutate: 'obj-denied-mutate'},
+    seededObjectIds: {
+      root: 'obj-root', b: 'obj-b', deniedRead: 'obj-denied-read',
+      deniedMutate: 'obj-denied-mutate', unavailable: 'obj-unavailable',
+    },
   });
   return true;
 })()
@@ -160,6 +163,7 @@ fn slice4_acceptance() {
             denied_write_title: "frozen",
             denied_attempt_title: "attempt",
             denied_write_same_object_as_primary: false,
+            expected_creation_tokens: 0,
             minimum_c1_tokens: 1,
         },
     );
