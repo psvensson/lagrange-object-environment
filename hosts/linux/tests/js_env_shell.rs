@@ -367,7 +367,7 @@ return {
 /// in the explicit embedded-source map: `node:*` builtins, bare Node vocabulary
 /// (`crypto`/`buffer`), and unknown local modules. This is the committed
 /// falsifier for the dynamic-import side of the Node fence (the static side is
-/// `bridge_structural_guard`): a future edit that accidentally grows a Node
+/// `host_runtime_structural_guard`): a future edit that accidentally grows a Node
 /// compatibility loader goes RED here.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn embedded_loader_loudly_rejects_node_and_unknown_imports() {

@@ -313,6 +313,24 @@ pub fn run_in_process_acceptance(
         "NAV ({}): keyed GTK inspector value must match exactly",
         flavor.name,
     );
+    let nav_token = pump_and_eval_json(
+        runtime,
+        actor,
+        host,
+        "globalThis.__session.tokenState()",
+        "NAV tokenState",
+    );
+    assert_token_state_shape(&nav_token, "NAV tokenState");
+    assert_eq!(
+        nav_token,
+        json!({
+            "hasToken": true,
+            "objectIdMatchesPrimary": true,
+            "tokenIsFresh": true,
+            "obsEvents": 0,
+        }),
+        "NAV must pair a fresh transient token before follow begins",
+    );
 
     // OBS: follow after navigation, complete a poll before mutation, then prove
     // the event drove a fresh Images read and GTK presentation.
@@ -351,10 +369,26 @@ pub fn run_in_process_acceptance(
         actor,
         host,
         "globalThis.__session.tokenState()",
-        |v| v["obsEvents"].as_u64().unwrap_or(0) >= 1,
-        "observation lane fired",
+        |v| {
+            v["obsEvents"].as_u64().unwrap_or(0) >= 1
+                && v["hasToken"] == json!(true)
+                && v["objectIdMatchesPrimary"] == json!(true)
+                && v["tokenIsFresh"] == json!(true)
+        },
+        "observation lane fired and its reread re-paired the token",
     );
     assert_token_state_shape(&observed_state, "OBS tokenState");
+    assert_eq!(observed_state["hasToken"], json!(true));
+    assert_eq!(observed_state["objectIdMatchesPrimary"], json!(true));
+    assert_eq!(
+        observed_state["tokenIsFresh"],
+        json!(true),
+        "OBS reread must re-pair the transient token to the current version",
+    );
+    assert!(
+        observed_state["obsEvents"].as_u64().unwrap() >= 1,
+        "OBS must include at least one completed observation delivery",
+    );
     let obs = poll_until(
         runtime,
         actor,

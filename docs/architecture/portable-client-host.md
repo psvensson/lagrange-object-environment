@@ -52,6 +52,14 @@ The follow-up embed census showed the downside of making a JavaScript VM the per
 
 ADR 0014 therefore moves the preferred boundary upward: the environment should consume **public authorized Images capabilities** and execute portably as a Component where current tooling permits. Language toolchains may differ, but the host-facing architecture should converge on WASM/WIT rather than one FFI/runtime per source language.
 
+## Current implementation status
+
+The WASM-first investigation reached a concrete tooling RED: ComponentizeJS #335 cannot currently express the asynchronous guest imports needed by the real image -> renderer -> observation/reread loop. That result activated ADR 0014's bounded fallback rather than changing the target architecture.
+
+The Linux host now embeds the unchanged JavaScript Environment core in-process with rquickjs. Two independent proofs constrain the boundary: a scripted plain-data Images capability exercises the WIT-shaped port, and a separate composition loads the pinned public Images portable artifact and drives real authority, observation, CAS, Commands, the six-op renderer port and GTK. The real-artifact composition is currently in-guest and therefore does **not** claim that real Images already crosses the future WIT-shaped port.
+
+This one-process artifact-backed acceptance satisfies ADR 0014's removal criterion for the weaker PR #40 transport. The Node subprocess bridge, its workers and its sibling-checkout dependency have been deleted. The rquickjs host remains a bounded fallback with its own future removal criterion; it is not the language-support architecture.
+
 ## Portable vs host-specific
 
 | Layer | Portable (host contract) | Host-specific (one implementation) |
@@ -127,15 +135,7 @@ A language's compiler/runtime adapter may be specific to that language. The **ho
 
 JavaScript remains the current reference implementation of the environment semantics. ADR 0014 changes only the preferred hosting direction.
 
-The next investigation is **WASM-first**:
-
-1. derive the smallest WIT-shaped host/Images boundary from the already-proven PR #40 loop;
-2. componentize a real existing JS slice;
-3. run it under the existing native Wasmtime host;
-4. prove a genuinely asynchronous path (authorized read -> renderer -> observation/change -> reread -> update), not only a synchronous Hello World;
-5. expand toward the complete PR #40 acceptance if the toolchain supports the required imports/events/lifecycle.
-
-If current JS Component tooling cannot faithfully express that async path, an embedded JS runtime may be used temporarily. That fallback must stay behind the same plain-data/WIT-shaped ownership boundary, avoid broad Node compatibility, and carry an explicit removal criterion. It must not become the precedent for Go, Java or future languages.
+The first WASM-first attempt was stopped at ComponentizeJS #335's asynchronous-import limitation. The current embedded runtime is the resulting temporary execution path. It must continue to avoid broad Node compatibility and semantic ownership, and future work must converge the real Images interaction onto public authorized/WIT-shaped capabilities before treating the fallback as the desired boundary. It must not become the precedent for Go, Java or future languages.
 
 ## Images boundary
 
@@ -167,7 +167,8 @@ The Linux proof has now progressed beyond ADR 0013's original plan:
 - the same graphics Component core runs natively under Wasmtime;
 - SemanticUi drives real GTK controls;
 - one `LinuxRendererAdapter` holds native semantic UI + Component graphics behind the unchanged six-op contract;
-- PR #40 proved the real JavaScript semantic core can drive that native host end-to-end through throwaway transport.
+- PR #40 proved the real JavaScript semantic core can drive that native host end-to-end through throwaway transport;
+- Bead 3zb reproduced and strengthened that loop in-process against the pinned public Images artifact, so the throwaway transport has been removed.
 
 The next portability question is therefore **execution packaging**, not renderer semantics: can the semantic core itself move behind the Component/WIT boundary without acquiring a bespoke native-language runtime architecture?
 
