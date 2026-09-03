@@ -12,8 +12,8 @@
 //! and binds widget work to that thread. So this is ONE `#[test]` (cargo runs
 //! each `#[test]` on its own thread): the test thread owns GTK + the
 //! `RendererPortHost`, the JS actor is the spawned thread, and the test pumps
-//! the host while the JS work is in flight — the same structure as the proven
-//! `native_js_loop` (GTK on the test thread, JS on a separate worker).
+//! the host while the JS work is in flight. This test directly owns that
+//! in-process threading proof (GTK on the test thread, JS on its owner thread).
 
 use std::sync::Once;
 use std::time::Duration;

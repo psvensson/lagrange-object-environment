@@ -39,15 +39,6 @@ pub mod projector;
 pub mod semantic_gtk;
 pub mod semantic_ui;
 
-// THROWAWAY 64j-A bridge host (Rust side of the Node<->Rust bridge). NOT part
-// of the Linux client architecture and NOT a stable API: it exists ONLY to
-// falsify the SEMANTIC host-portability claim (the unmodified JS core driving
-// the real LinuxRendererAdapter) and is DELETED when Bead 3zb embeds a JS
-// runtime in-process. Do NOT build production code on this module; it spawns a
-// Node child process and is a peer-process transport, not an embedded runtime.
-#[doc(hidden)]
-pub mod bridge;
-
 // 3zb-A bounded Environment-side rquickjs embed (ADR 0014 fallback). Runtime
 // shell only in slice 1; see js_env/mod.rs for scope, invariants, and the
 // deletion criterion. NOT a Node runtime and NOT a per-language-bridge

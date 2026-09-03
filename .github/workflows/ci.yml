@@ -101,15 +101,6 @@ jobs:
           test ! -e "$GITHUB_WORKSPACE/lagrange-images"
           xvfb-run -a -s "-screen 0 1280x1024x24" \
             cargo test --locked --test real_images_acceptance
-      # The separate 64j native JS-core acceptance (native_js_loop) still
-      # drives the real Images repository through its public API. Pin that
-      # sibling to the exact revision that produced the checked-in artifact.
-      - name: Check out pinned lagrange-images (sibling, for the 64j native acceptance runtime)
-        uses: actions/checkout@v4
-        with:
-          repository: psvensson/lagrange-images
-          ref: 34ad6c20a16cf542cbf34e209bb3702385d41ba1
-          path: lagrange-images
       # L1 (Component graphics) + L2b (GTK semantic UI). The GTK tests need
       # gtk4::init(), which requires a display — run the whole native suite
       # under Xvfb (the L1 offscreen GPU tests are unaffected by a display).
@@ -121,6 +112,19 @@ jobs:
       # committed lock still named the old upstream URL — so CI would pass while
       # every `--locked` consumer kept fetching the URL this pin exists to stop
       # depending on. --locked makes that a hard CI failure instead.
-      - name: Native Linux host proof (L1 Component graphics + L2b GTK semantic UI)
+      # The retired 64j Node bridge was the Linux job's only sibling consumer.
+      # Keep both the targeted replacement ledger and the full locked suite
+      # artifact-only, with absence checked immediately before each command.
+      - name: Native Linux host proof (artifact-only replacement ledger + full suite)
         working-directory: lagrange-object-environment/hosts/linux
-        run: xvfb-run -a -s "-screen 0 1280x1024x24" cargo test --locked
+        run: |
+          test ! -e "$GITHUB_WORKSPACE/lagrange-images"
+          xvfb-run -a -s "-screen 0 1280x1024x24" \
+            cargo test --locked \
+              --test host_runtime_structural_guard \
+              --test js_env_renderer_port \
+              --test l3_coexistence \
+              --test js_env_acceptance \
+              --test real_images_acceptance
+          test ! -e "$GITHUB_WORKSPACE/lagrange-images"
+          xvfb-run -a -s "-screen 0 1280x1024x24" cargo test --locked

@@ -54,19 +54,16 @@ That is the wrong direction for Lagrange. The platform already treats WebAssembl
 
 9. **Future language support is evaluated by Component/WIT viability first.** Toolchain immaturity for one language may delay that language or justify a narrow adapter at its tooling boundary; it does not redefine the host architecture for all languages.
 
-## Immediate implementation direction
+## Implementation outcome
 
-The current in-process-embed Bead is reinterpreted as a **WASM-first client-runtime investigation**:
+Bead 3zb executed the required WASM-first investigation before using the fallback:
 
-1. inventory the smallest real PR #40 environment slice and the public host/Image capabilities it actually needs;
-2. define the smallest WIT-shaped boundary from existing owners;
-3. componentize a real existing JS slice without semantic forks;
-4. run it under the existing Linux Wasmtime host;
-5. prove at least one genuinely async image -> renderer -> observation/reread path;
-6. if that succeeds, extend toward the full PR #40 acceptance and delete the Node bridge;
-7. if it fails on a concrete upstream JS-guest/Component async limitation, record that exact RED and only then resume a bounded embedded-JS fallback behind the same boundary.
+1. The Component path reached a concrete upstream tooling RED at ComponentizeJS #335: asynchronous guest imports required by the real acceptance cannot currently be expressed faithfully.
+2. The bounded fallback embeds the unchanged Environment JavaScript core in-process with rquickjs, without a Node personality or new semantic ownership.
+3. A scripted plain-data Images capability preserves the WIT-shaped boundary proof. Independently, the pinned public Images portable artifact now drives real authority, observation, CAS, Commands, the six-op renderer port and GTK in one process. That real composition is currently in-guest and does not claim to exercise the future WIT-shaped Images port.
+4. The in-process real acceptance satisfies decision 8's bridge-removal criterion. The PR #40 Node subprocess module, worker scripts and tests have been deleted; the Linux CI job no longer checks out an Images sibling.
 
-The investigation must stop rather than widening architecture if it requires a second command/authority/navigation model, host-side semantic knowledge, a per-language native client architecture, or a large Node compatibility layer.
+The rquickjs runtime remains a bounded fallback. Component/WIT remains preferred, and future work must stop rather than widen architecture if it requires a second command/authority/navigation model, host-side semantic knowledge, a per-language native client architecture, or a large Node compatibility layer.
 
 ## Consequences
 

@@ -1,50 +1,13 @@
-//! 64j STRUCTURAL GUARD: the throwaway Node<->Rust bridge must NOT become a
-//! production dependency. The bridge (hosts/linux/src/bridge/) is the ONLY place
-//! a Node subprocess may be spawned; the rest of hosts/linux/src (the REAL
-//! production adapter: linux_adapter, semantic_gtk, projector, semantic_ui, lib,
-//! main) must have NO Node/subprocess dependency. When 3zb embeds the JS core
-//! in-process, the bridge is DELETED and this guard becomes trivially true.
+//! HOST-RUNTIME STRUCTURAL GUARDS. The obsolete 64j Node subprocess bridge was
+//! deleted once Bead 3zb reproduced its acceptance in-process. These durable
+//! fences ensure it stays deleted and preserve the artifact-source and crypto
+//! ownership constraints accumulated by later 3zb slices.
 //!
-//! This is a SOURCE-TEXT guard (no subprocess is spawned here): it scans the
-//! production .rs files and fails if any references a process spawn, a Node
-//! invocation, a child stdio pipe, or the worker path. It is the no-widening
-//! falsification for the "easy to delete / not a public API / no production Node
-//! dependency" fence (user-mandated for the 64j-A bridge spike).
+//! The no-Node fence recursively scans every production Rust source file, so a
+//! newly added module cannot silently evade it. No subprocess is spawned here.
 
 use std::fs;
 use std::path::{Path, PathBuf};
-
-/// The production source files (NOT the throwaway bridge/). If a new production
-/// module is added to hosts/linux/src, add it here — the guard must cover it.
-const PRODUCTION_FILES: &[&str] = &[
-    "lib.rs",
-    "main.rs",
-    "linux_adapter.rs",
-    "projector.rs",
-    "semantic_gtk.rs",
-    "semantic_ui.rs",
-    // 3zb-A embedded-JS-runtime host port. The highest-drift-risk module for a
-    // Node/subprocess/bridge reference, so it MUST be under this guard (the
-    // adversarial plan review's mandatory fix). It must never reference Node,
-    // a subprocess, the throwaway worker, or lagrange-images.
-    "js_env/mod.rs",
-    "js_env/actor.rs",
-    "js_env/renderer_port.rs",
-    // 3zb-A slice-3B TEST Images capability (scripted outcomes, NO substrate
-    // semantics). Same drift risk: it must never reference Node/subprocess/the
-    // throwaway worker, and — being the stand-in for the port — must NOT become
-    // a shadow lagrange-images (no real substrate import).
-    "js_env/images_capability.rs",
-    // 3zb-B1b native crypto PRIMITIVES. A new file is silently unguarded until
-    // it is listed here (the B1b plan review's mandatory fix), and this is the
-    // module where an Images import or a semantic name would be most tempting.
-    "js_env/host_crypto.rs",
-    // 3zb-B2 pinned Images artifact composition. The loader is production
-    // composition code and must remain read-only/in-memory: no sibling checkout,
-    // filesystem path, Node, or subprocess fallback.
-    "images_composition/mod.rs",
-    "images_composition/portable_artifact.rs",
-];
 
 const ARTIFACT_COMPOSITION_FILES: &[&str] = &[
     "images_composition/mod.rs",
@@ -157,9 +120,9 @@ const FORBIDDEN_NEEDLES: &[&str] = &[
     ".stdout(Stdio",
     ".stdin(Stdio",
     ".stderr(Stdio",
-    "\"node\"",          // invoking the node runtime by name
+    "\"node\"", // invoking the node runtime by name
     "node_modules",
-    "bridge-worker",    // the throwaway worker path
+    "bridge-worker", // the throwaway worker path
     "acceptance-worker",
     "loopback-worker",
     "LAGRANGE_IMAGES_URL",
@@ -175,26 +138,58 @@ fn src_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("src")
 }
 
+fn collect_rust_files(dir: &Path, files: &mut Vec<PathBuf>) {
+    let entries = fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("structural guard: cannot read {}: {e}", dir.display()));
+    for entry in entries {
+        let path = entry.expect("structural guard: read_dir entry").path();
+        if path.is_dir() {
+            collect_rust_files(&path, files);
+        } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
+            files.push(path);
+        }
+    }
+}
+
+fn production_rust_files() -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    collect_rust_files(&src_dir(), &mut files);
+    files.sort();
+    assert!(
+        !files.is_empty(),
+        "structural guard must scan production Rust sources"
+    );
+    files
+}
+
 #[test]
 fn production_src_has_no_node_or_subprocess_dependency() {
     let dir = src_dir();
     let mut violations = Vec::new();
-    for file in PRODUCTION_FILES {
-        let path = dir.join(file);
+    for path in production_rust_files() {
+        let file = path
+            .strip_prefix(&dir)
+            .expect("production source under src");
         let text = fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("structural guard: cannot read {}: {e}", path.display()));
         for (line_no, line) in text.lines().enumerate() {
             for needle in FORBIDDEN_NEEDLES {
                 if line.contains(needle) {
-                    violations.push(format!("{}:{}: forbidden {:?}: {}", file, line_no + 1, needle, line.trim()));
+                    violations.push(format!(
+                        "{}:{}: forbidden {:?}: {}",
+                        file.display(),
+                        line_no + 1,
+                        needle,
+                        line.trim()
+                    ));
                 }
             }
         }
     }
     assert!(
         violations.is_empty(),
-        "64j STRUCTURAL GUARD VIOLATED: production hosts/linux/src acquired a Node/subprocess dependency \
-         outside the throwaway bridge/. The bridge must stay deletable; production code must not spawn Node.\n{}",
+        "HOST-RUNTIME STRUCTURAL GUARD VIOLATED: production hosts/linux/src acquired a \
+         Node/subprocess dependency; production code must not spawn Node.\n{}",
         violations.join("\n")
     );
 }
@@ -228,23 +223,38 @@ fn guard_detection_is_not_vacuous() {
         "tokio::task::spawn_local(_drive);",
     ] {
         assert!(
-            !FORBIDDEN_NEEDLES.iter().any(|needle| benign.contains(needle)),
+            !FORBIDDEN_NEEDLES
+                .iter()
+                .any(|needle| benign.contains(needle)),
             "guard false-positives on a benign line: {benign:?}"
         );
     }
 }
 
 #[test]
-fn bridge_is_the_only_subprocess_spawn_site() {
-    // Sanity: the guard's premise is that the bridge DOES spawn the worker (so
-    // the guard isn't vacuously green because nothing spawns anything). Assert
-    // the bridge file actually contains a process spawn.
-    let bridge = fs::read_to_string(src_dir().join("bridge").join("mod.rs"))
-        .expect("read bridge/mod.rs");
+fn node_subprocess_bridge_remains_deleted() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for relative in [
+        "src/bridge/mod.rs",
+        "tests/bridge_spike.rs",
+        "tests/native_js_loop.rs",
+        "tests/bridge-worker/acceptance-worker.mjs",
+        "tests/bridge-worker/bridge.mjs",
+        "tests/bridge-worker/loopback-worker.mjs",
+    ] {
+        assert!(
+            !root.join(relative).exists(),
+            "retired Node bridge scaffold must stay absent: {relative}"
+        );
+    }
     assert!(
-        bridge.contains("Command::new") && bridge.contains("node"),
-        "the guard is vacuous: the throwaway bridge no longer spawns the Node worker \
-         (was it deleted by 3zb? then this whole guard module should be deleted too)"
+        !root.join("tests/bridge-worker").exists(),
+        "retired Node bridge worker directory must stay absent"
+    );
+    let lib = fs::read_to_string(root.join("src/lib.rs")).expect("read src/lib.rs");
+    assert!(
+        !lib.contains("pub mod bridge;"),
+        "the retired Node bridge must not be re-exported from the Linux host"
     );
 }
 
@@ -401,7 +411,12 @@ fn provider_assembly_lives_in_guest_composition() {
         "assertCryptoProvider is Images-owned and must not be reproduced in composition code"
     );
     // And it must implement no cryptography of its own.
-    for banned in ["Math.random", "createHash", "createCipheriv", "crypto.subtle"] {
+    for banned in [
+        "Math.random",
+        "createHash",
+        "createCipheriv",
+        "crypto.subtle",
+    ] {
         assert!(
             !text.contains(banned),
             "the bootstrap must adapt primitives, never implement crypto: found `{banned}`"
@@ -425,9 +440,9 @@ fn crypto_fence_detection_is_not_vacuous() {
     }
 
     // Representative violations a future edit might actually make. BOTH needle
-    // sets apply to this file (it is in PRODUCTION_FILES too), so the check is
-    // against their union -- e.g. a `use lagrange_images::...` is caught by the
-    // global crate-ident needle rather than by a crypto-specific one.
+    // sets apply to this production file (the recursive scan covers it too), so
+    // the check is against their union -- e.g. a `use lagrange_images::...` is
+    // caught by the global crate-ident needle rather than a crypto-specific one.
     let catches = |line: &str| {
         needles.iter().any(|n| line.contains(n))
             || FORBIDDEN_NEEDLES.iter().any(|n| line.contains(n))

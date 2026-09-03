@@ -78,8 +78,9 @@ pub struct RendererPortTx {
 /// created on, and its ops executed on, the process's designated GTK thread —
 /// which in the Linux client is the main thread (the same thread that owns the
 /// GTK main loop), and in tests is the `#[test]` thread. The JS-owner actor is
-/// the SPAWNED thread. This mirrors the proven `native_js_loop` structure
-/// (GTK on the test/main thread, JS on a separate worker).
+/// the SPAWNED thread. The in-process renderer-port and full Environment/GTK
+/// acceptances prove this directly: GTK stays on the test/main thread while JS
+/// runs on its dedicated owner thread.
 ///
 /// The GTK thread drives the port by calling `pump()`: it processes any queued
 /// renderer ops (executing them on itself) and iterates the GTK main context so
@@ -214,7 +215,8 @@ fn json_err(op: &'static str, what: &'static str) -> impl Fn(serde_json::Error) 
 /// descriptor object (not a JSON string). rquickjs cannot move a guest
 /// `Value<'js>` into the `'static`/Send future the GTK-thread op requires, and
 /// an `Async` host closure does not receive a call-time `Ctx` to stringify it.
-/// So the port installs BOTH layers (mirroring the proven 64j bridge.mjs shape):
+/// So the port installs BOTH layers (the in-process equivalent of the original
+/// transport proof, now owned and tested here):
 ///   (a) six low-level host fns taking JSON STRINGS (`__jsenv_renderer_*`) that
 ///       forward to the `RendererPortTx`, and
 ///   (b) a thin JS wrapper object (`name`) whose six methods take the
