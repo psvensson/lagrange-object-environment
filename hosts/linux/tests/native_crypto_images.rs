@@ -28,101 +28,23 @@
 //! corresponding real Images proof -- otherwise these tests could pass while
 //! Images quietly used some other implementation.
 //!
-//! Images sources come from the sibling checkout (development machinery); slice
-//! B2 replaces that with the `lagrange-images-portable-runtime/v1` artifact and
-//! should leave every assertion here intact.
+//! Images sources come from the exact pinned
+//! `lagrange-images-portable-runtime/v1` artifact. The production loader has no
+//! sibling checkout or filesystem fallback; private test imports below use the
+//! artifact's exact canonical `src/.../*.js` paths.
 
-use lagrange_host_linux::images_composition::{CRYPTO_BOOTSTRAP_JS, CRYPTO_BOOTSTRAP_SPECIFIER};
+use lagrange_host_linux::images_composition::{
+    portable_artifact::PortableImagesArtifactLoader, CRYPTO_BOOTSTRAP_JS,
+    CRYPTO_BOOTSTRAP_SPECIFIER,
+};
 use lagrange_host_linux::js_env::actor::JsEnvActor;
-use rquickjs::loader::{ImportAttributes, Loader, Resolver};
-use rquickjs::{Ctx, Error, Module, Result};
-use std::path::PathBuf;
-
-fn images_src_root() -> PathBuf {
-    if let Ok(p) = std::env::var("LAGRANGE_IMAGES_SRC") {
-        return PathBuf::from(p);
-    }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../lagrange-images/src")
-}
-
-/// Repo-tree loader with a small HOST OVERLAY: host-owned modules resolve from
-/// an embedded map, everything else falls through to the Images source tree.
-///
-/// The overlay is necessary because a plain repo-tree loader resolves EVERY
-/// specifier against the Images root, so a host module would be looked up as
-/// `<images_src>/host/crypto-bootstrap.js` and fail. It is also the shape B2's
-/// artifact loader needs, so this is not throwaway scaffolding.
-#[derive(Clone)]
-struct OverlayLoader {
-    root: PathBuf,
-    overlay: Vec<(String, &'static str)>,
-}
-
-impl OverlayLoader {
-    fn new() -> Self {
-        Self {
-            root: images_src_root(),
-            overlay: vec![(CRYPTO_BOOTSTRAP_SPECIFIER.to_string(), CRYPTO_BOOTSTRAP_JS)],
-        }
-    }
-    fn overlay_source(&self, name: &str) -> Option<&'static str> {
-        self.overlay.iter().find(|(k, _)| k == name).map(|(_, v)| *v)
-    }
-}
-
-fn normalize_repo_path(base: &str, name: &str) -> String {
-    let joined = if name.starts_with('.') {
-        let dir = match base.rfind('/') {
-            Some(i) => &base[..i],
-            None => "",
-        };
-        if dir.is_empty() { name.to_string() } else { format!("{dir}/{name}") }
-    } else {
-        name.to_string()
-    };
-    let mut out: Vec<&str> = Vec::new();
-    for seg in joined.split('/') {
-        match seg {
-            "" | "." => {}
-            ".." => { out.pop(); }
-            s => out.push(s),
-        }
-    }
-    let p = out.join("/");
-    p.strip_suffix(".js").unwrap_or(&p).to_string()
-}
-
-impl Resolver for OverlayLoader {
-    fn resolve<'js>(
-        &mut self,
-        _ctx: &Ctx<'js>,
-        base: &str,
-        name: &str,
-        _attrs: Option<ImportAttributes<'js>>,
-    ) -> Result<String> {
-        Ok(normalize_repo_path(base, name))
-    }
-}
-
-impl Loader for OverlayLoader {
-    fn load<'js>(
-        &mut self,
-        ctx: &Ctx<'js>,
-        name: &str,
-        _attrs: Option<ImportAttributes<'js>>,
-    ) -> Result<Module<'js, rquickjs::module::Declared>> {
-        if let Some(src) = self.overlay_source(name) {
-            return Module::declare(ctx.clone(), name, src);
-        }
-        let path = self.root.join(format!("{name}.js"));
-        let src = std::fs::read_to_string(&path)
-            .map_err(|e| Error::new_loading_message(name, format!("{}: {e}", path.display())))?;
-        Module::declare(ctx.clone(), name, src)
-    }
-}
 
 fn actor() -> JsEnvActor {
-    JsEnvActor::spawn(OverlayLoader::new()).expect("spawn actor")
+    let loader = PortableImagesArtifactLoader::from_embedded()
+        .expect("construct loader from the pinned Images artifact")
+        .with_host_module(CRYPTO_BOOTSTRAP_SPECIFIER, CRYPTO_BOOTSTRAP_JS)
+        .expect("register the exact host crypto bootstrap overlay");
+    JsEnvActor::spawn(loader).expect("spawn artifact-backed actor")
 }
 
 /// Guest program shared by the real and the miswired runs.
@@ -138,12 +60,12 @@ fn program(provider_expr: &str) -> String {
   const installed = boot.installNativeCryptoProvider({provider_expr});
 
   const pr  = await import('portable-runtime');
-  const tg  = await import('callable/type-grammar');
-  const sc  = await import('value/scalars');
-  const sk  = await import('language/smalltalk-kernel');
-  const iv2 = await import('callable/interface-v2-artifacts');
-  const iob = await import('callable/image-observation-binding');
-  const cc  = await import('callable/composite-codec');
+  const tg  = await import('src/callable/type-grammar.js');
+  const sc  = await import('src/value/scalars.js');
+  const sk  = await import('src/language/smalltalk-kernel.js');
+  const iv2 = await import('src/callable/interface-v2-artifacts.js');
+  const iob = await import('src/callable/image-observation-binding.js');
+  const cc  = await import('src/callable/composite-codec.js');
 
   const hex = (a) => [...a].map(b => b.toString(16).padStart(2, '0')).join('');
 
