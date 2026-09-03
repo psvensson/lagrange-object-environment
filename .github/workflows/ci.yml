@@ -12,18 +12,25 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           path: lagrange-object-environment
       - name: Check out pinned lagrange-images (sibling, for real-runtime integration tests)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: psvensson/lagrange-images
           ref: ac12a01e7597e2d1c634658cc127a460d46f6150
           path: lagrange-images
-      - uses: actions/setup-node@v4
+      # v5+ runs on the Node.js 24 action runtime (v4 targeted the deprecated
+      # Node.js 20 runtime; Bead u2y). Automatic package-manager caching (a v5
+      # default) is inert here anyway -- package.json declares no packageManager/
+      # devEngines field and this step runs at $GITHUB_WORKSPACE, where neither
+      # checkout (both use `path:`) places a package.json -- but it is disabled
+      # explicitly so the runtime move adds no caching behavior to the lane.
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
+          package-manager-cache: false
       - name: Install dependencies including Beads native binary
         working-directory: lagrange-object-environment
         run: CI= npm install
@@ -64,7 +71,7 @@ jobs:
   linux-host:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           path: lagrange-object-environment
       # Pin the toolchain explicitly: rust-toolchain.toml lives at hosts/linux/
