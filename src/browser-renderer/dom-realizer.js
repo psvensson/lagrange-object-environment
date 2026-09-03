@@ -1,7 +1,7 @@
 /**
  * The DOM realizer — the BROWSER realization of the host-neutral SemanticUi/v1
  * contract (src/semantic-ui.js), for the tool presentation kinds (navigator /
- * inspector / unavailable-reference / unauthorized-reference), behind the
+ * inspector / project / unavailable-reference / unauthorized-reference), behind the
  * BrowserRendererAdapter's kind-dispatch seam (docs/ownership.md).
  *
  * This realizer does NOT interpret a presentationDescriptor's parameters and
@@ -31,7 +31,9 @@
 
 import {semanticUiForPresentation} from '../semantic-ui.js';
 
-const TOOL_KINDS = Object.freeze(['navigator', 'inspector', 'unavailable-reference', 'unauthorized-reference']);
+const TOOL_KINDS = Object.freeze([
+  'navigator', 'inspector', 'project', 'unavailable-reference', 'unauthorized-reference',
+]);
 
 function isToolKind(kind) {
   return TOOL_KINDS.includes(kind);

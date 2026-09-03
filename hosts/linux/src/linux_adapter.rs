@@ -1,7 +1,7 @@
 //! The `LinuxRendererAdapter` (ADR 0013 / Bead e01 L3): ONE native adapter
 //! implementing the EXISTING six-op RendererAdapter contract UNCHANGED
 //! (`docs/contracts/renderer-adapter.md`), dispatching tool kinds
-//! (navigator / inspector / unavailable-reference / unauthorized-reference) to
+//! (navigator / inspector / project / unavailable-reference / unauthorized-reference) to
 //! the L2 GTK realizer and the `glb` kind to the L1 `GlbHost` offscreen path.
 //!
 //! This is the SIBLING of the browser's `BrowserRendererAdapter`: it proves the
@@ -61,12 +61,24 @@ pub trait RendererAdapterOps {
 const TOOL_KINDS: &[&str] = &[
     "navigator",
     "inspector",
+    "project",
     "unavailable-reference",
     "unauthorized-reference",
 ];
 
 fn is_tool_kind(kind: &str) -> bool {
     TOOL_KINDS.contains(&kind)
+}
+
+#[cfg(test)]
+mod tool_kind_tests {
+    use super::is_tool_kind;
+
+    #[test]
+    fn project_dispatches_to_the_semantic_gtk_route() {
+        assert!(is_tool_kind("project"));
+        assert!(!is_tool_kind("glb"));
+    }
 }
 
 /// A GLB async runner: the host wiring that bridges the SYNC adapter ops to
@@ -112,7 +124,7 @@ static NEXT_HANDLE: AtomicU64 = AtomicU64::new(0);
 /// One surface's native realization. A surface starts EMPTY (`create_surface`
 /// only allocates the slot + size) and is realized by `attach_presentation`.
 enum Realization {
-    /// A native GTK tool pane (navigator / inspector / unavailable /
+    /// A native GTK tool pane (navigator / inspector / project / unavailable /
     /// unauthorized). Carries the SemanticUi document's source descriptor so
     /// the fixture can resolve key->ref via `descriptor_references`.
     Gtk {

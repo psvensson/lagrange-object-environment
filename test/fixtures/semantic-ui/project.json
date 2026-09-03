@@ -1,0 +1,41 @@
+{
+  "kind": "semantic-ui",
+  "version": 1,
+  "root": {
+    "kind": "group",
+    "title": "Project: Alpha",
+    "children": [
+      {
+        "kind": "text",
+        "role": "heading",
+        "text": "Project: Alpha"
+      },
+      {
+        "kind": "field",
+        "label": "Project ID",
+        "text": "project-alpha"
+      },
+      {
+        "kind": "field",
+        "label": "Namespace",
+        "text": "-> workspace"
+      },
+      {
+        "kind": "collection",
+        "label": "Members",
+        "items": [
+          {
+            "kind": "action",
+            "key": 0,
+            "label": "member/a [source] -> image-a/obj-a"
+          },
+          {
+            "kind": "action",
+            "key": 1,
+            "label": "member/b [dependency] -> image-b/obj-b"
+          }
+        ]
+      }
+    ]
+  }
+}
