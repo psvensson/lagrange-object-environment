@@ -22,9 +22,55 @@
 //!       * a push producer sends a `HostPush` on the owner's command mpsc
 //!         (-> the owner injects it into JS on the owner thread).
 //!     Neither ever touches QuickJS.
-//!   - Shutdown: dropping the actor joins the owner thread after draining; a
-//!     pending capability's oneshot sender drop rejects the JS promise (no
-//!     use-after-free, no hang).
+//!   - Shutdown (Bead b41): `shutdown()` / `shutdown_within(grace)` is a BOUNDED
+//!     DRAIN — see "Shutdown policy" below. Dropping the actor WITHOUT calling
+//!     shutdown is NOT a full shutdown: `Drop` only records the default deadline
+//!     and enqueues `Shutdown` (non-blocking, no join), so a leaked actor's owner
+//!     thread self-terminates instead of parking forever; a pending capability's
+//!     oneshot sender drop rejects the JS promise (no use-after-free).
+//!
+//! # Shutdown policy (Bead b41): a bounded drain, never a cancel of finite work
+//!
+//! `EvalAsync`/`Push` are serialized: the owner loop does NOT poll for later
+//! commands while one is in flight (`await_command_with_timer_pump`), so a queued
+//! `Shutdown` is only received after the in-flight command settles. A guest
+//! Promise that never settles (no timer, no capability completion) would keep the
+//! loop there forever. Policy:
+//!
+//!   - Shutdown never cancels FINITE work: a command that settles before the
+//!     deadline completes normally and its caller gets its real result (the 9sp
+//!     contract, `shutdown_queued_behind_timer_command_drains_in_order`).
+//!   - The bound is ONE absolute deadline for the WHOLE drain (recorded before the
+//!     `Shutdown` command is enqueued): `shutdown()` uses `DEFAULT_SHUTDOWN_GRACE`,
+//!     `shutdown_within(grace)` makes it explicit. It is checked at the TOP of every
+//!     pump iteration (never as a trailing `select!` branch: a continuously-ready
+//!     timer branch — `wait == 0` with the 1 ms clamped observation follow — would
+//!     starve it) and the pump's sleep is clamped to it.
+//!   - Past the deadline the in-flight async command is ABANDONED: its pinned
+//!     `async_with` future is dropped and its caller receives an EXPLICIT error
+//!     naming the command kind (the std-channel `push_blocking` producer unblocks
+//!     with it too); never a silent drop. Every later `EvalAsync`/`Push` dequeued
+//!     before `Shutdown` is abandoned the same way. `shutdown*` reports
+//!     `ShutdownOutcome::AbandonedInFlight` (else `Clean`; `OwnerGone` if the
+//!     owner thread exited without answering).
+//!   - Abandonment abandons the OBSERVATION, not the guest computation: the
+//!     normal post-command `drain_jobs` + no-op-spawn kick still runs (it also
+//!     repairs the scheduler waker slot on this path), so ready continuations of
+//!     the abandoned chain may still execute before the runtime is dropped.
+//!   - Dropping the abandoned future frees JS values OUTSIDE the runtime lock
+//!     (`Value::drop`/`Ctx::drop` call `JS_FreeValue`/`JS_FreeContext` immediately;
+//!     upstream routes `AsyncContext` handle drops through a deferred channel for
+//!     this class of problem but defers no value frees). That is sound here ONLY
+//!     because of this architecture: all QuickJS contact is on the owner thread,
+//!     and between polls no other task on it runs and no other thread can hold
+//!     the lock. Do not move the drop elsewhere.
+//!   - NOT covered by the bound (documented escape hatches): ANY non-returning
+//!     SYNCHRONOUS JavaScript, whichever command carries it — a sync `Eval`/
+//!     `WithContext`, or a `while(true){}` inside an `EvalAsync`/`Push` body (the
+//!     pump cannot preempt a single poll; needs a QuickJS interrupt handler — a
+//!     separate semantic decision); a sync command dequeued after the deadline
+//!     (it still runs to completion); and a self-perpetuating job storm inside
+//!     `drain_jobs` (`while ctx.execute_pending_job() {}` is unbounded).
 //!
 //! This is the "one explicit JS-runtime execution owner" the charter demands,
 //! established by the wrapper rather than assumed from `parallel`.
@@ -58,9 +104,37 @@
 use std::future::Future;
 use std::sync::mpsc as std_mpsc;
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use rquickjs::{Error, Result};
-use tokio::sync::{mpsc as tokio_mpsc, oneshot};
+use tokio::sync::{mpsc as tokio_mpsc, oneshot, watch};
+
+/// The default whole-drain grace for `shutdown()` (Bead b41). Generous on purpose:
+/// every existing caller is a test whose finite work must keep draining first; a
+/// hung binary now fails within this bound instead of the CI job timeout.
+pub const DEFAULT_SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+
+/// What a bounded shutdown drain did (Bead b41). `Clean`: every queued command
+/// settled before the deadline. `AbandonedInFlight`: at least one `EvalAsync`/
+/// `Push` was abandoned past the deadline (each such caller got the explicit
+/// abandonment error). `OwnerGone`: the owner thread exited or panicked without
+/// answering the `Shutdown` command — nothing is known about queued commands
+/// (their callers see `owner dropped response`). Deliberately NOT `#[must_use]`:
+/// existing statement-position callers are fine ignoring it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShutdownOutcome {
+    Clean,
+    AbandonedInFlight,
+    OwnerGone,
+}
+
+/// Result of awaiting one asynchronous owner command under the shutdown deadline.
+enum CommandOutcome<T> {
+    Completed(T),
+    /// The whole-drain deadline passed while the command was in flight; its
+    /// future was dropped (see the module doc "Shutdown policy").
+    Abandoned,
+}
 
 use super::JsEnvOwner;
 
@@ -93,8 +167,9 @@ pub enum OwnerCommand {
         payload: String,
         done: std_mpsc::Sender<Result<()>>,
     },
-    /// Shut the owner down: drain and exit the thread loop.
-    Shutdown { done: oneshot::Sender<()> },
+    /// Shut the owner down: drain (bounded by the recorded deadline) and exit the
+    /// thread loop, reporting whether anything was abandoned.
+    Shutdown { done: oneshot::Sender<ShutdownOutcome> },
 }
 
 /// Handle to the dedicated JS-runtime owner thread. Cheap to clone the sender
@@ -102,6 +177,9 @@ pub enum OwnerCommand {
 pub struct JsEnvActor {
     tx: tokio_mpsc::UnboundedSender<OwnerCommand>,
     thread: Option<JoinHandle<()>>,
+    /// The whole-drain shutdown deadline (None until a shutdown is requested).
+    /// Owner-visible through the paired receiver; see the module doc.
+    shutdown_deadline: watch::Sender<Option<Instant>>,
     /// The OS thread id of the owner thread (for ownership assertions).
     owner_thread: std::thread::ThreadId,
 }
@@ -120,6 +198,7 @@ impl JsEnvActor {
     {
         let (tx, mut rx) = tokio_mpsc::unbounded_channel::<OwnerCommand>();
         let (ready_tx, ready_rx) = std_mpsc::channel::<std::result::Result<std::thread::ThreadId, String>>();
+        let (shutdown_deadline, mut deadline_rx) = watch::channel::<Option<Instant>>(None);
 
         let thread = std::thread::Builder::new()
             .name("js-env-owner".to_string())
@@ -163,6 +242,10 @@ impl JsEnvActor {
 
                     // Handshake: report this thread's id as the owner.
                     let _ = ready_tx.send(Ok(std::thread::current().id()));
+
+                    // Set when an in-flight async command is abandoned past the
+                    // shutdown deadline; reported through Shutdown's completion.
+                    let mut abandoned_in_flight = false;
 
                     // Command loop: process commands; drive() runs concurrently on
                     // the LocalSet so JS continuations progress between commands.
@@ -217,11 +300,19 @@ impl JsEnvActor {
                                 let _ = done.send(r);
                             }
                             OwnerCommand::EvalAsync { source, done } => {
-                                let r = await_command_with_timer_pump(
+                                let r = match await_command_with_timer_pump(
                                     &owner,
                                     eval_async_on_owner(&owner, &source),
+                                    &mut deadline_rx,
                                 )
-                                .await;
+                                .await
+                                {
+                                    CommandOutcome::Completed(r) => r,
+                                    CommandOutcome::Abandoned => {
+                                        abandoned_in_flight = true;
+                                        Err(abandonment_error("EvalAsync"))
+                                    }
+                                };
                                 let _ = done.send(r);
                             }
                             OwnerCommand::WithContext { f, done } => {
@@ -229,15 +320,27 @@ impl JsEnvActor {
                                 let _ = done.send(r);
                             }
                             OwnerCommand::Push { payload, done } => {
-                                let r = await_command_with_timer_pump(
+                                let r = match await_command_with_timer_pump(
                                     &owner,
                                     deliver_push_on_owner(&owner, payload),
+                                    &mut deadline_rx,
                                 )
-                                .await;
+                                .await
+                                {
+                                    CommandOutcome::Completed(r) => r,
+                                    CommandOutcome::Abandoned => {
+                                        abandoned_in_flight = true;
+                                        Err(abandonment_error("Push"))
+                                    }
+                                };
                                 let _ = done.send(r); // std channel: wakes any blocked producer
                             }
                             OwnerCommand::Shutdown { done } => {
-                                let _ = done.send(());
+                                let _ = done.send(if abandoned_in_flight {
+                                    ShutdownOutcome::AbandonedInFlight
+                                } else {
+                                    ShutdownOutcome::Clean
+                                });
                                 break;
                             }
                         }
@@ -258,7 +361,7 @@ impl JsEnvActor {
             .recv()
             .map_err(|e| format!("owner handshake: {e}"))??;
 
-        Ok(Self { tx, thread: Some(thread), owner_thread })
+        Ok(Self { tx, thread: Some(thread), owner_thread, shutdown_deadline })
     }
 
     /// The OS thread id of the dedicated JS-runtime owner.
@@ -318,15 +421,68 @@ impl JsEnvActor {
         JsEnvSender { tx: self.tx.clone() }
     }
 
-    /// Shut the owner thread down and join it.
-    pub async fn shutdown(mut self) {
+    /// Shut the owner thread down and join it: a bounded drain with the default
+    /// grace (`DEFAULT_SHUTDOWN_GRACE`). See the module doc "Shutdown policy".
+    pub async fn shutdown(self) -> ShutdownOutcome {
+        self.shutdown_within(DEFAULT_SHUTDOWN_GRACE).await
+    }
+
+    /// Shut the owner thread down and join it, completing the WHOLE drain within
+    /// `grace`: finite queued work drains first; past the deadline any in-flight
+    /// `EvalAsync`/`Push` is abandoned with an explicit error to its caller.
+    pub async fn shutdown_within(mut self, grace: Duration) -> ShutdownOutcome {
         let (done, rx) = oneshot::channel();
-        let _ = self.tx.send(OwnerCommand::Shutdown { done });
-        let _ = rx.await;
+        self.request_shutdown(grace, done);
+        let outcome = rx.await.unwrap_or(ShutdownOutcome::OwnerGone);
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
+        outcome
     }
+
+    /// Record the whole-drain deadline BEFORE enqueuing `Shutdown`, so the owner
+    /// observes the bound while still inside any in-flight command. A deadline
+    /// only ever TIGHTENS: a later request (e.g. `Drop` after an abandoned
+    /// `shutdown_within(50 ms)` future) never lengthens one already in force.
+    fn request_shutdown(&self, grace: Duration, done: oneshot::Sender<ShutdownOutcome>) {
+        let requested = Instant::now().checked_add(grace).unwrap_or_else(far_future);
+        let deadline = match *self.shutdown_deadline.borrow() {
+            Some(existing) => existing.min(requested),
+            None => requested,
+        };
+        let _ = self.shutdown_deadline.send(Some(deadline));
+        let _ = self.tx.send(OwnerCommand::Shutdown { done });
+    }
+}
+
+impl Drop for JsEnvActor {
+    /// Dropping the actor without `shutdown*` is NOT a full shutdown (nothing is
+    /// joined), but it must not leave the owner thread parked forever either:
+    /// record the default deadline and enqueue `Shutdown`, non-blocking. A
+    /// blocking join here would deadlock a `current_thread` runtime and would
+    /// duplicate lifecycle policy in a second locus.
+    fn drop(&mut self) {
+        if self.thread.is_some() {
+            let (done, _rx) = oneshot::channel();
+            self.request_shutdown(DEFAULT_SHUTDOWN_GRACE, done);
+        }
+    }
+}
+
+/// A deadline that never arrives (for a grace too large to add to `Instant::now()`).
+fn far_future() -> Instant {
+    Instant::now() + Duration::from_secs(60 * 60 * 24 * 365)
+}
+
+/// The explicit error an abandoned command's caller receives (never a silent
+/// drop). The command was either in flight when the deadline passed or was
+/// dequeued after it (whole-drain bound: it is then never polled at all).
+fn abandonment_error(kind: &str) -> Error {
+    let message = format!(
+        "owner shutting down: {kind} abandoned past the shutdown deadline (bounded drain, Bead b41)"
+    );
+    eprintln!("js_env: {message}");
+    Error::new_from_js_message("actor", "shutdown", message)
 }
 
 /// A clonable sender for non-JS threads to reach the JS owner. Holds only the
@@ -464,35 +620,70 @@ async fn deliver_push_on_owner(owner: &JsEnvOwner, payload: String) -> Result<()
 /// `OwnerCommand::recv` here, so later commands remain serialized behind the
 /// in-flight command. Globally due guest timers may run while it is suspended,
 /// which is the event-loop re-entry required for an awaited `setTimeout`.
-async fn await_command_with_timer_pump<F>(owner: &JsEnvOwner, command: F) -> F::Output
+async fn await_command_with_timer_pump<F>(
+    owner: &JsEnvOwner,
+    command: F,
+    shutdown_deadline: &mut watch::Receiver<Option<Instant>>,
+) -> CommandOutcome<F::Output>
 where
     F: Future,
 {
     tokio::pin!(command);
     let timer_notify = owner.timer_notify();
+    // Once the actor handle (the watch sender) is gone the deadline is final;
+    // stop polling `changed()` (it would resolve Err immediately, every poll).
+    let mut deadline_closed = false;
 
     loop {
+        // SHUTDOWN BOUND (Bead b41): checked FIRST, every iteration, never as a
+        // trailing select branch (a continuously-ready timer branch would starve
+        // it). Returning here drops `command`: that IS the abandonment; see the
+        // module doc for why the off-lock drop is sound.
+        let deadline = *shutdown_deadline.borrow_and_update();
+        if let Some(deadline) = deadline {
+            if Instant::now() >= deadline {
+                return CommandOutcome::Abandoned;
+            }
+        }
+
         // The registry is authoritative. Notify intentionally coalesces changes;
         // after every wake we re-read the earliest deadline rather than trying to
-        // associate a notification with one particular timer.
+        // associate a notification with one particular timer. The sleep is
+        // clamped to the shutdown deadline when one is recorded.
         let next_due_ms = next_timer_due_ms(owner).await;
-        if let Some(due_ms) = next_due_ms {
-            let wait = due_ms.saturating_sub(epoch_ms());
-            tokio::select! {
-                // Prefer a command that completed at the same instant as a timer;
-                // its normal post-command drain below remains responsible for any
-                // already-ready jobs.
-                biased;
-                output = &mut command => return output,
-                _ = tokio::time::sleep(std::time::Duration::from_millis(wait)) => {}
-                _ = timer_notify.notified() => {}
+        let timer_wait = next_due_ms.map(|due_ms| Duration::from_millis(due_ms.saturating_sub(epoch_ms())));
+        let deadline_wait = deadline.map(|d| d.saturating_duration_since(Instant::now()));
+        let wait = match (timer_wait, deadline_wait) {
+            (Some(t), Some(d)) => Some(t.min(d)),
+            (Some(t), None) => Some(t),
+            (None, Some(d)) => Some(d),
+            (None, None) => None,
+        };
+        let sleep = async {
+            match wait {
+                Some(d) => tokio::time::sleep(d).await,
+                None => std::future::pending::<()>().await,
             }
-        } else {
-            tokio::select! {
-                biased;
-                output = &mut command => return output,
-                _ = timer_notify.notified() => {}
+        };
+        let deadline_changed = async {
+            if deadline_closed {
+                std::future::pending::<()>().await
+            } else if shutdown_deadline.changed().await.is_err() {
+                deadline_closed = true;
             }
+        };
+        tokio::select! {
+            // Prefer a command that completed at the same instant as a timer;
+            // its normal post-command drain below remains responsible for any
+            // already-ready jobs.
+            biased;
+            output = &mut command => return CommandOutcome::Completed(output),
+            _ = sleep => {}
+            _ = timer_notify.notified() => {}
+            // A (re)recorded shutdown deadline changes nothing in the guest: go
+            // straight back to the top-of-loop check and re-clamp the sleep —
+            // no timer fire, no drain (a deadline is not a tick).
+            _ = deadline_changed => continue,
         }
 
         // A deadline or registry change woke us. Fire what is now due, flush the
