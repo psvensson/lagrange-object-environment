@@ -55,17 +55,24 @@ The Component binary and the GLB assets (`box.glb`, `box-big.glb`) are consumed
 ## Run
 
 ```
-rustup run stable cargo test            # the L1 falsification suite
-rustup run stable cargo run -- --dump-ppm /tmp/frame.ppm   # manual, writes a frame
+cargo test --locked --test l1_portability   # the L1 falsification suite (headless)
+xvfb-run -a cargo test --locked             # the whole native suite (GTK tests need a display)
+cargo run --release --locked -- --dump-ppm /tmp/frame.ppm   # manual, writes a frame
 ```
 
-The tests run headless (offscreen surface); a real GPU/Vulkan driver is used if
-present, otherwise Mesa (llvmpipe/lavapipe). No X11/Wayland display is required.
+The L1 tests run headless (offscreen surface); a real GPU/Vulkan driver is used
+if present, otherwise Mesa (llvmpipe/lavapipe). The L2/L3 GTK tests call
+`gtk4::init()` and need a display (CI uses Xvfb, see `.github/workflows/ci.yml`).
 
 ## Toolchain / dependency pins (reproducibility)
 
 - **Rust** pinned via `rust-toolchain.toml` (`1.98.0`, minimal). wasmtime 47
-  requires rustc >= 1.94; the repo's default stable (1.89) is too old.
+  requires rustc >= 1.94. Always let the toolchain file select the compiler
+  (plain `cargo ...`, never `rustup run stable cargo ...`, which bypasses the
+  pin) and pass `--locked` so Cargo.lock is never silently rewritten. Note the
+  sibling `renderer-component/rust-toolchain.toml` deliberately pins a DIFFERENT
+  compiler (1.89.0): it is the one that reproduces the checked-in Component
+  bytes this host pins by sha256 (see `docs/renderer-component.md`).
 - **wasi-gfx-runtime** pinned to an **exact git revision**
   (`772bc344d3d0e24ba2d3ee29fc0033fc6ccea81d`), NOT `main` — the
   Wasmtime/wgpu/wit-bindgen combination is tightly coupled. That revision pins

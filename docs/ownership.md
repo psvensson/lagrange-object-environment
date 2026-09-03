@@ -36,6 +36,7 @@ A planned owner reserves responsibility but does not claim implementation exists
 | Short durable agent discoveries | Beads memory | `bd remember` | Architectural discoveries must also be promoted to tests/docs/ADR when they change project truth. |
 | Architecture decision history | ADR set | `docs/decisions/` | Why durable decisions were made. |
 | Current ownership map | Ownership registry | this file | Must change whenever a major owner/boundary changes. |
+| Renderer Component build tooling + artifact byte identity | `renderer-component/build.sh` (+ `renderer-component/rust-toolchain.toml`, `Cargo.toml`/`Cargo.lock`) | current (Bead ocj) | Sole owner of HOW the checked-in GLB Component artifacts under `test/browser/components/glb/` are produced and of the artifact's byte identity: the exact toolchain (rustc 1.89.0 via the nested toolchain file, wasm-tools 1.244.0, jco 1.32.1) and the `--locked` dependency set, and the executable identity gate (`EXPECTED_COMPONENT_SHA256`, deliberate re-pin only via `ALLOW_COMPONENT_SHA_CHANGE=1`). The `hosts/linux` sha256 pins (`tests/l1_portability.rs`, `src/main.rs`) CONSUME that identity and are the only executable assertion of ADR 0013's same-bytes claim today; the browser proofs load the artifact but pin no sha (Bead iwu). Neither co-owns the identity. CI never builds the Component; regeneration is a manual, gated, reviewed act. |
 
 ## Interaction owners
 
