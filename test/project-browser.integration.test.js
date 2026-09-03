@@ -221,7 +221,11 @@ test('real durable Project browse -> canonical members -> separately-authorized 
     });
     let inspector = compositor.durableIntent().find(({viewId}) => viewId === shell.inspectorViewId);
     assert.equal(inspector.presentationDescriptor.kind, 'unauthorized-reference');
-    assert.deepEqual(inspector.presentationDescriptor.subject, ref(IMAGE_B, cross.objectId));
+    assert.equal(inspector.presentationDescriptor.subject.kind, 'unauthorized-ref');
+    assert.equal(inspector.presentationDescriptor.subject.imageId, IMAGE_B);
+    assert.equal(inspector.presentationDescriptor.subject.objectId, cross.objectId,
+      'unauthorized materialization preserves the exact denied cross-Image identity');
+    assert.equal(typeof inspector.presentationDescriptor.subject.reason, 'string');
 
     // The exact same visible member succeeds only with an explicit target grant;
     // its cross-Image ref traverses the generic navigation path unchanged.
