@@ -206,18 +206,53 @@ export function setup({imageId, blockIds, seededObjectIds}) {
     });
     session.navigatorSurfaceHandle = navigatorSurfaceHandle;
     session.inspectorSurfaceHandle = inspectorSurfaceHandle;
-    return {navigatorSurfaceHandle, inspectorSurfaceHandle};
+    return {
+      navigatorSurfaceHandle,
+      inspectorSurfaceHandle,
+      rootObjectId,
+      primaryObjectId: seededObjectIds.b,
+    };
   };
 
-  session.select = async (objectId) => {
+  const selectObject = async (objectId) => {
     await shell.selectObject(ref(objectId), {authority: inertAuthority, readBlockId: blockIds.read});
-    return true;
+  };
+
+  session.selectPrimary = async () => {
+    await selectObject(seededObjectIds.b);
+    return {selected: true};
   };
 
   // A FRESH port read of the object's current title (the image state, NOT the UI).
-  session.title = async (objectId) => probeValue(await adapter.readObject({
+  const readTitle = async (objectId) => probeValue(await adapter.readObject({
     imageId, objectId, authority: inertAuthority, blockId: blockIds.read,
   }));
+  session.imageTitle = async () => readTitle(seededObjectIds.b);
+
+  // A guest-side EXTERNAL advance behind the shell's back. It deliberately
+  // crosses the same adapter -> Images capability port as every Environment
+  // operation, but never routes through Shell/CommandRouter or uses the
+  // shell-held token. Opaque tokens remain guest-side; only exact booleans cross.
+  session.externalMutate = async (text) => {
+    const objectId = seededObjectIds.b;
+    const current = await adapter.readObject({
+      imageId, objectId, authority: inertAuthority, blockId: blockIds.read,
+    });
+    const previousToken = current?.versionToken ?? null;
+    const result = await adapter.mutateObject({
+      imageId,
+      objectId,
+      value: {'probe-title': {value: text}},
+      authority: inertAuthority,
+      blockId: blockIds.mutation,
+      versionToken: previousToken,
+    });
+    const nextToken = result?.versionToken ?? null;
+    return {
+      committed: typeof nextToken === 'string' && nextToken.length > 0,
+      tokenAdvanced: previousToken !== null && nextToken !== previousToken,
+    };
+  };
 
   // The displayed title in the Compositor's durable intent (proves a reread
   // LANDED via presentOn, not a shadow). Also the presentation kind (for the
@@ -233,11 +268,13 @@ export function setup({imageId, blockIds, seededObjectIds}) {
 
   // The shell's transient token state (boolean/equality only; the token string
   // NEVER crosses). tokenIsFresh compares against a fresh port read.
-  session.tokenState = async (objectId) => {
+  session.tokenState = async () => {
+    const objectId = seededObjectIds.b;
     const t = shell._inspectorToken();
     const fresh = (await adapter.readObject({imageId, objectId, authority: inertAuthority, blockId: blockIds.read}))?.versionToken ?? null;
     return {
-      hasToken: Boolean(t.token), objectId: t.objectId,
+      hasToken: Boolean(t.token),
+      objectIdMatchesPrimary: t.objectId === objectId,
       tokenIsFresh: t.token !== null && t.token === fresh,
       obsEvents: session.obsEvents,
     };
@@ -245,7 +282,7 @@ export function setup({imageId, blockIds, seededObjectIds}) {
 
   session.obsPollCount = () => globalThis.__obsPollCount ?? 0;
 
-  session.follow = (objectId) => {
+  session.follow = () => {
     session.followHandle = shell.followSelected({
       observe: (id, opts) => adapter.observe(id, opts),
       imageId, authority: inertAuthority,
@@ -297,9 +334,10 @@ export function setup({imageId, blockIds, seededObjectIds}) {
 
   // The stale-token proof: capture the shell's held token at edit entry and the
   // image's CURRENT token (a fresh read), computing usedStaleToken GUEST-SIDE
-  // (boolean only; the token string never crosses). The caller (Rust) performs
-  // the external mutation FIRST (via its own cloned port tx), then calls this.
-  session.staleEditEntryState = async (objectId) => {
+  // (boolean only; the token string never crosses). The shared driver invokes
+  // externalMutate FIRST through this guest adapter, then calls this seam.
+  session.staleEditEntryState = async () => {
+    const objectId = seededObjectIds.b;
     const held = shell._inspectorToken().token;
     const current = (await adapter.readObject({imageId, objectId, authority: inertAuthority, blockId: blockIds.read}))?.versionToken ?? null;
     // tokenAtEditEntry: the shell reads its held token SYNCHRONOUSLY at
@@ -309,6 +347,25 @@ export function setup({imageId, blockIds, seededObjectIds}) {
       && tokenAtEditEntry === held
       && held !== current;
     return {usedStaleToken, heldIsNull: held === null, differsFromCurrent: held !== current};
+  };
+
+  session.prepareDeniedWrite = async () => {
+    const objectId = seededObjectIds.deniedMutate;
+    await selectObject(objectId);
+    return {
+      expectedTitle: session.inspector().title,
+      sameObjectAsPrimary: objectId === seededObjectIds.b,
+    };
+  };
+
+  session.deniedWriteState = async () => ({
+    imageTitle: await readTitle(seededObjectIds.deniedMutate),
+    inspectorTitle: session.inspector().title,
+  });
+
+  session.selectDeniedRead = async () => {
+    await selectObject(seededObjectIds.deniedRead);
+    return {selected: true};
   };
 
   // C1 falsifier: the token must be ABSENT from durable intent, every
@@ -328,6 +385,11 @@ export function setup({imageId, blockIds, seededObjectIds}) {
     let leaks = 0;
     for (const sink of sinks) for (const token of tokens) if (sink.includes(token)) leaks += 1;
     return {tokensChecked: tokens.length, sinksChecked: sinks.length, leaks};
+  };
+
+  session.teardown = async () => {
+    await compositor.destroy();
+    return {destroyed: true};
   };
 
   return session;
