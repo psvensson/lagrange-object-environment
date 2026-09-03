@@ -66,14 +66,16 @@ function createGuestImagesAdapter(port) {
   api.mutateObject = async ({imageId, objectId, value, authority = null, blockId, versionToken = null} = {}) =>
     port.mutateObject(objectId, value, versionToken, {imageId, authority, blockId});
   // observe composes the REAL observeChanges over the port's observePull lane.
-  // The poll closure counts polls (the live-follow anchor-sync seam: the fake's
+  // The poll closure counts completed successful pulls (the live-follow
+  // anchor-sync seam: the fake's
   // live-follow-from-high-water has NO backlog, so the test must wait for >=1
   // poll before any external mutation).
   api.observe = (imageId, {authority = null, blockId, afterCursor, signal, intervalMs} = {}) =>
     observeChanges({
-      poll: (cursor) => {
+      poll: async (cursor) => {
+        const result = await port.observePull(cursor, {imageId, authority, blockId});
         globalThis.__obsPollCount = (globalThis.__obsPollCount ?? 0) + 1;
-        return port.observePull(cursor, {imageId, authority, blockId});
+        return result;
       },
       afterCursor, signal, intervalMs,
     });
@@ -196,7 +198,7 @@ export function setup({imageId, blockIds, seededObjectIds}) {
     });
     const navigatorSurfaceHandle = compositor.surfaceHandleForView('navigator-view');
     const inspectorSurfaceHandle = compositor.surfaceHandleForView('inspector-view');
-    shell.bindIntents({
+    session.unsubscribeIntents = shell.bindIntents({
       adapter: intentAdapter, navigatorSurfaceHandle, inspectorSurfaceHandle,
       commandRouter, commandId: 'set-title', authority: inertAuthority, readBlockId: blockIds.read,
       // Diagnostic capture: the bindIntents path is otherwise fire-and-forget
@@ -283,15 +285,28 @@ export function setup({imageId, blockIds, seededObjectIds}) {
   session.obsPollCount = () => globalThis.__obsPollCount ?? 0;
 
   session.follow = () => {
+    const observeForFollow = (id, opts) => {
+      const lane = adapter.observe(id, opts);
+      session.followLaneIsAsyncIterable = Boolean(
+        lane && typeof lane[Symbol.asyncIterator] === 'function',
+      );
+      if (!session.followLaneIsAsyncIterable) {
+        throw new TypeError('follow observation lane must be an async iterable');
+      }
+      return lane;
+    };
     session.followHandle = shell.followSelected({
-      observe: (id, opts) => adapter.observe(id, opts),
+      observe: observeForFollow,
       imageId, authority: inertAuthority,
       observationBlockId: blockIds.observation, readBlockId: blockIds.read,
       onUpdate: () => { session.obsEvents += 1; },
       onError: () => { session.obsError = (session.obsError ?? 0) + 1; },
       onDeferred: () => { session.onDeferredCount += 1; },
     });
-    return true;
+    return {
+      following: Boolean(session.followHandle),
+      asyncIterable: session.followLaneIsAsyncIterable === true,
+    };
   };
   session.unfollow = () => { if (session.followHandle) { session.followHandle.stop(); session.followHandle = null; } return true; };
 
@@ -368,6 +383,11 @@ export function setup({imageId, blockIds, seededObjectIds}) {
     return {selected: true};
   };
 
+  session.selectUnavailable = async () => {
+    await selectObject(seededObjectIds.unavailable);
+    return {selected: true};
+  };
+
   // C1 falsifier: the token must be ABSENT from durable intent, every
   // presentation descriptor's parameters, SemanticUi-derived output (the Rust
   // projector is a pure fn of the descriptor, so descriptor+GTK-text absence
@@ -375,19 +395,29 @@ export function setup({imageId, blockIds, seededObjectIds}) {
   // guest-side; returns ONLY counts/booleans (the token strings never cross).
   session.c1Check = ({gtkVisibleText = [], gtkDescriptorJson = '[]'} = {}) => {
     const current = shell._inspectorToken().token;
-    const tokens = [...new Set([current].filter(Boolean))];
-    const sinks = [
-      JSON.stringify(compositor.durableIntent()),
-      ...compositor.durableIntent().map((v) => JSON.stringify(v.presentationDescriptor?.parameters ?? {})),
-      gtkDescriptorJson,
-      JSON.stringify(gtkVisibleText),
-    ];
+    const creationTokens = [];
+    const tokens = [...new Set([current, ...creationTokens].filter(Boolean))];
+    const durableSinks = [JSON.stringify(compositor.durableIntent())];
+    const presentationParameterSinks = compositor.durableIntent()
+      .map((v) => JSON.stringify(v.presentationDescriptor?.parameters ?? {}));
+    const gtkSinks = [gtkDescriptorJson, JSON.stringify(gtkVisibleText)];
+    const sinks = [...durableSinks, ...presentationParameterSinks, ...gtkSinks];
     let leaks = 0;
     for (const sink of sinks) for (const token of tokens) if (sink.includes(token)) leaks += 1;
-    return {tokensChecked: tokens.length, sinksChecked: sinks.length, leaks};
+    return {
+      currentTokenChecked: typeof current === 'string' && current.length > 0 && tokens.includes(current),
+      creationTokensChecked: creationTokens.length,
+      tokensChecked: tokens.length,
+      durableSinksChecked: durableSinks.length,
+      presentationParameterSinksChecked: presentationParameterSinks.length,
+      gtkSinksChecked: gtkSinks.length,
+      leaks,
+    };
   };
 
   session.teardown = async () => {
+    session.unfollow();
+    session.unsubscribeIntents?.();
     await compositor.destroy();
     return {destroyed: true};
   };
