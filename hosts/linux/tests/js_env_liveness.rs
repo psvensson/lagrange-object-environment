@@ -23,7 +23,7 @@
 //! test encodes the correct behavior: the continuation MUST run with ZERO
 //! further JS commands. It goes RED without the kick (the continuation stalls).
 
-use lagrange_host_linux::js_env::actor::JsEnvActor;
+use lagrange_host_linux::js_env::actor::{JsEnvActor, ShutdownOutcome};
 use lagrange_host_linux::js_env::EmbeddedLoader;
 
 use rquickjs::prelude::Async;
@@ -495,4 +495,202 @@ async fn capability_only_wait_does_not_busy_poll_the_timer_hook() {
         "7"
     );
     actor.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------
+// Bead b41: shutdown is a BOUNDED DRAIN (see actor.rs "Shutdown policy").
+// ---------------------------------------------------------------------------
+
+const SHORT_GRACE: std::time::Duration = std::time::Duration::from_millis(100);
+const LONG_GRACE: std::time::Duration = std::time::Duration::from_secs(60);
+const ABANDONED: &str = "abandoned past the shutdown deadline";
+
+/// A never-settling guest Promise (no timer, no capability) keeps the in-flight
+/// command open forever. Shutdown must still complete within its grace, report
+/// the abandonment, and hand the command's caller the SPECIFIC abandonment
+/// error (a bare `is_err()` would also pass under a thread-kill implementation,
+/// which yields "owner dropped response").
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_abandons_never_settling_eval_within_grace() {
+    let actor = JsEnvActor::spawn(EmbeddedLoader::new()).expect("spawn actor");
+    let started = Arc::new(AtomicBool::new(false));
+    {
+        let started_fn = Arc::clone(&started);
+        actor
+            .with_context(move |ctx| {
+                ctx.globals().set(
+                    "__neverStarted",
+                    Function::new(ctx.clone(), move || started_fn.store(true, Ordering::SeqCst))
+                        .map_err(rquickjs::Error::from)?,
+                )?;
+                Ok(())
+            })
+            .await
+            .expect("install start signal");
+    }
+    let sender = actor.clone_sender();
+    let waiter = tokio::spawn(async move {
+        sender.eval_async("(async () => { __neverStarted(); await new Promise(() => {}); })()").await
+    });
+    wait_flag("never-settling command did not start", &started).await;
+
+    let outcome = bounded("bounded shutdown behind a never-settling command", actor.shutdown_within(SHORT_GRACE)).await;
+    assert_eq!(outcome, ShutdownOutcome::AbandonedInFlight);
+    let err = bounded("abandoned waiter", waiter).await.expect("join").expect_err("abandoned command must error");
+    let text = format!("{err}");
+    assert!(text.contains(ABANDONED) && text.contains("EvalAsync"), "unexpected error: {text}");
+}
+
+/// The same bound must reach a `push_blocking` producer: a plain OS thread
+/// blocked on the Push's std channel is the only path with a foreseeable
+/// production caller (the GTK intent hot path) and the worst failure mode (a
+/// permanently blocked thread). It must unblock with the explicit error and join.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_abandons_never_settling_push_and_unblocks_the_producer_thread() {
+    let actor = JsEnvActor::spawn(EmbeddedLoader::new()).expect("spawn actor");
+    let started = Arc::new(AtomicBool::new(false));
+    {
+        let started_fn = Arc::clone(&started);
+        actor
+            .with_context(move |ctx| {
+                ctx.globals().set(
+                    "__pushStarted",
+                    Function::new(ctx.clone(), move || started_fn.store(true, Ordering::SeqCst))
+                        .map_err(rquickjs::Error::from)?,
+                )?;
+                Ok(())
+            })
+            .await
+            .expect("install start signal");
+    }
+    actor
+        .eval("globalThis.__jsenv_on_push = () => { __pushStarted(); return new Promise(() => {}); };")
+        .await
+        .expect("install never-settling push handler");
+    let sender = actor.clone_sender();
+    let producer = std::thread::spawn(move || sender.push_blocking("{\"kind\":\"never\"}"));
+    wait_flag("never-settling push did not start", &started).await;
+
+    let outcome = bounded("bounded shutdown behind a never-settling push", actor.shutdown_within(SHORT_GRACE)).await;
+    assert_eq!(outcome, ShutdownOutcome::AbandonedInFlight);
+    let joined = tokio::task::spawn_blocking(move || producer.join());
+    let result = bounded("producer thread join", joined).await.expect("spawn_blocking").expect("producer did not panic");
+    let text = result.expect_err("abandoned push must error");
+    assert!(text.contains(ABANDONED) && text.contains("Push"), "unexpected error: {text}");
+}
+
+/// Abandon a command pending on a NEVER-released gated `Async` capability: the
+/// spawned capability future is still live in the runtime's scheduler when the
+/// owner drops the runtime. Proves that drop is clean (no hang, no panic) with a
+/// pending spawned task — a path no earlier test exercised (every gate is
+/// released before shutdown elsewhere). The gate sender is kept alive until
+/// after shutdown so the future is genuinely pending, not rejected.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_abandons_command_pending_on_unreleased_capability() {
+    let actor = JsEnvActor::spawn(EmbeddedLoader::new()).expect("spawn actor");
+    let (gate_tx, started) = install_gated_capability(&actor, "__neverReleasedGate").await;
+    let sender = actor.clone_sender();
+    let waiter = tokio::spawn(async move { sender.eval_async("__neverReleasedGate()").await });
+    wait_flag("gated capability did not start", &started).await;
+
+    let outcome = bounded("bounded shutdown behind an unreleased capability", actor.shutdown_within(SHORT_GRACE)).await;
+    assert_eq!(outcome, ShutdownOutcome::AbandonedInFlight);
+    let err = bounded("abandoned waiter", waiter).await.expect("join").expect_err("abandoned command must error");
+    assert!(format!("{err}").contains(ABANDONED));
+    drop(gate_tx); // only now; the runtime was dropped with the future pending
+}
+
+/// NEGATIVE CONTROL (distinguishes the bounded drain from force-cancel): with a
+/// long grace, shutdown queued behind a FINITE gated command stays Pending, the
+/// pending-but-not-due deadline introduces NO tick (the guest fire hook is not
+/// called across the window), and once the gate is released the drain is Clean
+/// and the command's caller gets its REAL result.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn long_grace_shutdown_waits_for_finite_work_without_ticking() {
+    let actor = JsEnvActor::spawn(EmbeddedLoader::new()).expect("spawn actor");
+    let (gate_tx, started) = install_gated_capability(&actor, "__finiteGate").await;
+    let fire_calls = Arc::new(AtomicUsize::new(0));
+    {
+        let fire_calls = Arc::clone(&fire_calls);
+        actor
+            .with_context(move |ctx| {
+                let count_fire = Function::new(ctx.clone(), move |_now: f64| {
+                    fire_calls.fetch_add(1, Ordering::SeqCst);
+                    0
+                })
+                .map_err(rquickjs::Error::from)?;
+                ctx.globals().set("__jsenv_fire_due", count_fire)?;
+                Ok(())
+            })
+            .await
+            .expect("install timer-fire counter");
+    }
+    let sender = actor.clone_sender();
+    let command = tokio::spawn(async move { sender.eval_async("__finiteGate()").await });
+    wait_flag("finite gated command did not start", &started).await;
+
+    let shutdown = actor.shutdown_within(LONG_GRACE);
+    tokio::pin!(shutdown);
+    // Poll ONCE first: an async fn body runs only when polled, and this first poll
+    // is what records the deadline and enqueues Shutdown. Only after it is the
+    // new code path live, so the measurement window below is meaningful.
+    assert!(
+        matches!(futures::poll!(&mut shutdown), std::task::Poll::Pending),
+        "shutdown must be causally enqueued behind the gated command"
+    );
+    let baseline = fire_calls.load(Ordering::SeqCst);
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(
+        matches!(futures::poll!(&mut shutdown), std::task::Poll::Pending),
+        "a long-grace shutdown must not abandon finite in-flight work"
+    );
+    assert_eq!(
+        fire_calls.load(Ordering::SeqCst),
+        baseline,
+        "a pending-but-not-due shutdown deadline must not introduce a tick"
+    );
+    gate_tx.send(()).expect("release finite gate");
+    assert_eq!(
+        bounded("finite command before shutdown", command).await.expect("command task").expect("command result"),
+        "7"
+    );
+    assert_eq!(bounded("clean drain", &mut shutdown).await, ShutdownOutcome::Clean);
+}
+
+/// Dropping the actor WITHOUT calling shutdown is not a full shutdown, but it
+/// must not leave the owner thread parked forever: `Drop` records the default
+/// deadline and enqueues Shutdown non-blocking. Proof: a never-settling command
+/// in flight through a clone_sender still gets the explicit abandonment error
+/// after the actor handle is dropped (takes ~DEFAULT_SHUTDOWN_GRACE).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dropping_the_actor_still_bounds_a_never_settling_command() {
+    let actor = JsEnvActor::spawn(EmbeddedLoader::new()).expect("spawn actor");
+    let started = Arc::new(AtomicBool::new(false));
+    {
+        let started_fn = Arc::clone(&started);
+        actor
+            .with_context(move |ctx| {
+                ctx.globals().set(
+                    "__dropStarted",
+                    Function::new(ctx.clone(), move || started_fn.store(true, Ordering::SeqCst))
+                        .map_err(rquickjs::Error::from)?,
+                )?;
+                Ok(())
+            })
+            .await
+            .expect("install start signal");
+    }
+    let sender = actor.clone_sender();
+    let waiter = tokio::spawn(async move {
+        sender.eval_async("(async () => { __dropStarted(); await new Promise(() => {}); })()").await
+    });
+    wait_flag("never-settling command did not start", &started).await;
+    drop(actor);
+    let bound = lagrange_host_linux::js_env::actor::DEFAULT_SHUTDOWN_GRACE + std::time::Duration::from_secs(3);
+    let err = tokio::time::timeout(bound, waiter)
+        .await
+        .expect("dropped actor must still bound the in-flight command")
+        .expect("join")
+        .expect_err("abandoned command must error");
+    assert!(format!("{err}").contains(ABANDONED));
 }
