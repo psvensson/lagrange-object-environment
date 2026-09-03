@@ -9,6 +9,8 @@
 //! Rust string literal, so that B2 and B3 reuse the SAME source verbatim instead
 //! of re-deriving it, and so it is reviewable as the module it is.
 
+pub mod portable_artifact;
+
 /// The guest bootstrap that adapts the generic host crypto primitives to the
 /// `lagrange-images` crypto-provider contract and installs them through the
 /// public `setDefaultCryptoProvider` seam.
