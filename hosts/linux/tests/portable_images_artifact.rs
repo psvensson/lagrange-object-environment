@@ -18,9 +18,9 @@ use sha2::{Digest, Sha256};
 fn embedded_portable_runtime_artifact_is_the_pinned_canonical_material() {
     assert_eq!(
         PORTABLE_RUNTIME_SOURCE_REVISION,
-        "c7f2f97c2cbb316364cf2a706459caed4313b0ea"
+        "34ad6c20a16cf542cbf34e209bb3702385d41ba1"
     );
-    assert_eq!(PORTABLE_RUNTIME_ARTIFACT_BYTES.len(), 1_061_921);
+    assert_eq!(PORTABLE_RUNTIME_ARTIFACT_BYTES.len(), 1_063_727);
     assert_eq!(PORTABLE_RUNTIME_ARTIFACT_BYTES.last(), Some(&b'}'));
 
     let digest = Sha256::digest(PORTABLE_RUNTIME_ARTIFACT_BYTES);
@@ -110,10 +110,33 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
               const exact = await import('src/portable-runtime.js');
               const alias = await import('portable-runtime');
               const host = await import('host/probe');
+              const requiredEnvironmentExports = [
+                'installSmalltalkKernel',
+                'findSmalltalkKernel',
+                'defineClass',
+                'installCallableInterfaceV2',
+                'installImageCreationBinding',
+                'installImageMutationBinding',
+                'installImageObjectReadBinding',
+                'installImageObservationBinding',
+                'objectRef',
+                'textValue',
+                'referencesOfValue',
+                'objectResource',
+                'parseObjectResource',
+                'objectVersionToken',
+                'packCompositeValue',
+                'unpackCompositeValue',
+                'normalizeTypeDeclarations',
+              ];
               return {
                 sameModule: exact.setDefaultCryptoProvider === alias.setDefaultCryptoProvider,
                 marker: host.marker,
                 exportedCreate: typeof exact.createPortableRuntime,
+                requiredEnvironmentExportCount: requiredEnvironmentExports.length,
+                missingEnvironmentExports: requiredEnvironmentExports.filter(
+                  (name) => typeof alias[name] !== 'function',
+                ),
               };
             })()"#,
         )
@@ -123,6 +146,12 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
     assert_eq!(report["sameModule"], true);
     assert_eq!(report["marker"], "host-overlay");
     assert_eq!(report["exportedCreate"], "function");
+    assert_eq!(report["requiredEnvironmentExportCount"], 17);
+    assert_eq!(
+        report["missingEnvironmentExports"],
+        serde_json::json!([]),
+        "every B3 composition helper must be callable through the sole public portable-runtime alias"
+    );
 
     actor.shutdown().await;
 }

@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: psvensson/lagrange-images
-          ref: c7f2f97c2cbb316364cf2a706459caed4313b0ea
+          ref: 34ad6c20a16cf542cbf34e209bb3702385d41ba1
           path: lagrange-images
       - uses: actions/setup-node@v4
         with:
@@ -101,7 +101,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: psvensson/lagrange-images
-          ref: c7f2f97c2cbb316364cf2a706459caed4313b0ea
+          ref: 34ad6c20a16cf542cbf34e209bb3702385d41ba1
           path: lagrange-images
       # L1 (Component graphics) + L2b (GTK semantic UI). The GTK tests need
       # gtk4::init(), which requires a display — run the whole native suite
