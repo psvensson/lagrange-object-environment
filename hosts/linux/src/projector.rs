@@ -7,9 +7,9 @@
 //! DOM realizer consume the identical description from the identical
 //! descriptor. It re-implements the projector (which is small and pure) rather
 //! than re-deciding semantics: the vocabulary, the heading/reason composition,
-//! the valueText normalization, and the rows->action(key) mapping are a literal
-//! port, conformance-tested against the SAME checked-in fixture corpus the JS
-//! projector is tested against.
+//! the valueText normalization, reference/member rows->action(key) mapping and
+//! Project summary are a literal port, conformance-tested against the SAME
+//! checked-in fixture corpus the JS projector is tested against.
 
 use crate::semantic_ui::{validate_and_parse, SemanticUi};
 use serde_json::{json, Map, Value};
@@ -59,6 +59,7 @@ pub fn project(descriptor: &Value) -> Result<SemanticUi, String> {
     let params = descriptor.get("parameters").cloned().unwrap_or(Value::Object(Map::new()));
     let subject = descriptor.get("subject").cloned().unwrap_or(Value::Object(Map::new()));
     let object_id = subject.get("objectId").and_then(|o| o.as_str()).unwrap_or("");
+    let project = params.get("project").cloned().unwrap_or(Value::Object(Map::new()));
 
     let mut children: Vec<Value> = Vec::new();
 
@@ -66,11 +67,58 @@ pub fn project(descriptor: &Value) -> Result<SemanticUi, String> {
     let heading = match kind {
         "navigator" => format!("Navigator: {object_id}"),
         "inspector" => format!("Inspector: {object_id}"),
+        "project" => format!(
+            "Project: {}",
+            project.get("name").and_then(|n| n.as_str()).unwrap_or("")
+        ),
         _ => kind.to_string(), // unavailable-reference | unauthorized-reference
     };
     children.push(json!({"kind": "text", "role": "heading", "text": heading}));
 
-    if kind == "unavailable-reference" || kind == "unauthorized-reference" {
+    if kind == "project" {
+        children.push(json!({
+            "kind": "field",
+            "label": "Project ID",
+            "text": project.get("projectId").map(value_text).unwrap_or_default(),
+        }));
+        children.push(json!({
+            "kind": "field",
+            "label": "Namespace",
+            "text": project.get("namespace").map(value_text).unwrap_or_default(),
+        }));
+        let empty_members: Vec<Value> = Vec::new();
+        let members = project.get("members").and_then(|m| m.as_array()).unwrap_or(&empty_members);
+        if !members.is_empty() {
+            let items: Vec<Value> = members
+                .iter()
+                .enumerate()
+                .map(|(index, member)| {
+                    let member_key = member
+                        .get("key")
+                        .and_then(|k| k.as_str())
+                        .map(|key| key.to_string())
+                        .unwrap_or_else(|| index.to_string());
+                    let role = member.get("role").and_then(|r| r.as_str()).unwrap_or("");
+                    let image_id = member
+                        .get("target")
+                        .and_then(|t| t.get("imageId"))
+                        .and_then(|i| i.as_str())
+                        .unwrap_or("");
+                    let target_object_id = member
+                        .get("target")
+                        .and_then(|t| t.get("objectId"))
+                        .and_then(|o| o.as_str())
+                        .unwrap_or("");
+                    json!({
+                        "kind": "action",
+                        "key": index,
+                        "label": format!("{member_key} [{role}] -> {image_id}/{target_object_id}"),
+                    })
+                })
+                .collect();
+            children.push(json!({"kind": "collection", "label": "Members", "items": items}));
+        }
+    } else if kind == "unavailable-reference" || kind == "unauthorized-reference" {
         let base = if kind == "unauthorized-reference" { "Not authorized" } else { "Unavailable" };
         let reason = match params.get("reason").and_then(|r| r.as_str()) {
             Some(r) => format!("{base}: {object_id} ({r})"),

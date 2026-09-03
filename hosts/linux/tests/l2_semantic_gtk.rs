@@ -39,7 +39,7 @@ fn read_fixture(name: &str) -> String {
 /// browser validator accepts).
 #[test]
 fn accepts_green_fixtures() {
-    for name in ["navigator.json", "inspector.json", "unavailable.json", "unauthorized.json"] {
+    for name in ["navigator.json", "inspector.json", "project.json", "unavailable.json", "unauthorized.json"] {
         let json = read_fixture(name);
         let doc = parse_semantic_ui(&json).unwrap_or_else(|e| panic!("green fixture {name} must validate: {e}"));
         assert_eq!(doc.kind, "semantic-ui");
@@ -153,6 +153,19 @@ fn fixtures_drive_real_gtk_controls_and_identical_intents() {
         intent_json, canonical,
         "the GTK edit-field intent serializes to the SAME bytes the DOM emits (edit-field-intent.json)"
     );
+
+    // --- Project: name + identity fields + stable member key/role/cross-Image
+    // target text. Activation still emits only the transient integer key.
+    let project = realize(&parse_semantic_ui(&read_fixture("project.json")).expect("project validates"));
+    let project_text = project.visible_text();
+    for expected in ["Project: Alpha", "Project ID", "project-alpha", "Namespace", "-> workspace"] {
+        assert!(project_text.iter().any(|text| text == expected), "Project text {expected:?}: {project_text:?}");
+    }
+    assert_eq!(project.action_labels(), vec![
+        "member/a [source] -> image-a/obj-a".to_string(),
+        "member/b [dependency] -> image-b/obj-b".to_string(),
+    ]);
+    assert_eq!(project.activate(1), Some(Intent::activate_item(1)));
 
     // --- unavailable + unauthorized: reason lines, no refs/actions.
     let un = realize(&parse_semantic_ui(&read_fixture("unavailable.json")).unwrap());

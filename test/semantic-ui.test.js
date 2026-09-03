@@ -9,6 +9,7 @@ import {
   validateSemanticUi,
   valueText,
 } from '../src/semantic-ui.js';
+import {isToolKind} from '../src/browser-renderer/dom-realizer.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = join(HERE, 'fixtures', 'semantic-ui');
@@ -22,6 +23,7 @@ const ref = (objectId) => ({kind: 'ref', imageId: 'img', objectId});
 const CASES = {
   navigator: {kind: 'navigator', subject: ref('obj-root'), parameters: {fields: {'slot-title': {kind: 'text', value: 'Root'}}, references: [ref('obj-b'), ref('obj-c')]}},
   inspector: {kind: 'inspector', subject: ref('obj-b'), parameters: {fields: {'slot-title': {kind: 'text', value: 'B'}, 'slot-count': {kind: 'int', value: 17}}, writable: ['slot-title'], references: [ref('obj-c')]}},
+  project: {kind: 'project', subject: {kind: 'project', imageId: 'image-a', projectId: 'project-alpha'}, parameters: {project: {format: 'lagrange-project/v1', projectId: 'project-alpha', name: 'Alpha', namespace: {kind: 'ref', imageId: 'image-a', objectId: 'workspace'}, members: [{key: 'member/a', role: 'source', target: {kind: 'ref', imageId: 'image-a', objectId: 'obj-a'}}, {key: 'member/b', role: 'dependency', target: {kind: 'ref', imageId: 'image-b', objectId: 'obj-b'}}]}}},
   unavailable: {kind: 'unavailable-reference', subject: ref('obj-gone'), parameters: {reason: 'not found'}},
   unauthorized: {kind: 'unauthorized-reference', subject: ref('obj-secret'), parameters: {reason: 'denied'}},
 };
@@ -109,6 +111,22 @@ test('action keys stay descriptor-local integers (the PR #33 security property)'
     collection.items.every((a) => typeof a.key === 'number' && !('ref' in a) && !('subject' in a)),
     'no action carries a ref/subject',
   );
+});
+
+test('Project members expose durable identity as text but actions carry only transient indices', () => {
+  assert.equal(isToolKind('project'), true, 'the browser dispatches Project through the SemanticUi DOM route');
+  const doc = semanticUiForPresentation(CASES.project);
+  const collection = doc.root.children.find((child) => child.kind === 'collection');
+  assert.equal(collection.label, 'Members');
+  assert.deepEqual(collection.items.map(({key}) => key), [0, 1]);
+  assert.deepEqual(collection.items.map(({label}) => label), [
+    'member/a [source] -> image-a/obj-a',
+    'member/b [dependency] -> image-b/obj-b',
+  ]);
+  assert.ok(collection.items.every((action) => (
+    Number.isSafeInteger(action.key)
+    && !('ref' in action) && !('target' in action) && !('subject' in action)
+  )), 'a Project action contains no member target/ref/subject');
 });
 
 test('valueText normalizes leaf Values to display text (owned here, not in a realizer)', () => {

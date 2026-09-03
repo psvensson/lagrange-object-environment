@@ -222,7 +222,7 @@ test('CI: the dispatch seam is INJECTED, not a hard-coded kind switch (sentinel 
 // the CHECKED-IN fixtures (the SAME bytes the Linux GTK realizer consumes).
 // This also covers the unavailable/unauthorized kinds, which had NO DOM-level
 // coverage before L2.
-test('CI: the browser realizer renders the checked-in SemanticUi fixtures (all four kinds)', {skip: !available && 'no Chrome available'}, async () => {
+test('CI: the browser realizer renders the checked-in SemanticUi fixtures (all five kinds)', {skip: !available && 'no Chrome available'}, async () => {
   const {server, browser, page} = await launch();
   try {
     const result = await page.evaluate(async () => {
@@ -247,6 +247,13 @@ test('CI: the browser realizer renders the checked-in SemanticUi fixtures (all f
       // The canonical cross-host intent fixture (the SAME bytes the GTK test
       // asserts its serialized intent against).
       out.canonicalEditIntent = await (await fetch('../fixtures/semantic-ui/edit-field-intent.json')).json();
+      // project: canonical Project fields + stable member identity/role/target
+      // display, with only a descriptor-local integer in the emitted intent.
+      const project = await window.__lagrangeProof.renderSemanticUiFixture('../fixtures/semantic-ui/project.json', 'project');
+      out.project = {heading: project.heading, fields: project.fields, fieldValues: project.fieldValues, buttons: project.buttons};
+      project.clickButton(1);
+      out.projectIntent = project.takeIntents();
+      project.dispose();
       // unavailable + unauthorized: heading + an explicit reason line, no refs.
       const un = await window.__lagrangeProof.renderSemanticUiFixture('../fixtures/semantic-ui/unavailable.json', 'unavailable-reference');
       out.unavailable = {heading: un.heading, reason: un.reason, buttons: un.buttons};
@@ -279,6 +286,16 @@ test('CI: the browser realizer renders the checked-in SemanticUi fixtures (all f
     // source of truth for the intent shape/kind-string/key across both hosts.
     assert.deepEqual(result.inspEditIntent[0], result.canonicalEditIntent,
       'the DOM edit-field intent matches the canonical cross-host bytes (edit-field-intent.json)');
+    // Project
+    assert.equal(result.project.heading, 'Project: Alpha');
+    assert.deepEqual(result.project.fields, ['Project ID', 'Namespace']);
+    assert.deepEqual(result.project.fieldValues, ['project-alpha', '-> workspace']);
+    assert.deepEqual(result.project.buttons, [
+      'member/a [source] -> image-a/obj-a',
+      'member/b [dependency] -> image-b/obj-b',
+    ]);
+    assert.deepEqual(result.projectIntent, [{kind: 'activate-item', key: 1}],
+      'Project activation emits only its descriptor-local integer key');
     // unavailable + unauthorized (the previously-uncovered kinds)
     assert.equal(result.unavailable.heading, 'unavailable-reference');
     assert.equal(result.unavailable.reason, 'Unavailable: obj-gone (not found)');

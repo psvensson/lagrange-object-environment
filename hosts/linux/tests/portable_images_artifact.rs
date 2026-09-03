@@ -18,9 +18,9 @@ use sha2::{Digest, Sha256};
 fn embedded_portable_runtime_artifact_is_the_pinned_canonical_material() {
     assert_eq!(
         PORTABLE_RUNTIME_SOURCE_REVISION,
-        "34ad6c20a16cf542cbf34e209bb3702385d41ba1"
+        "ac12a01e7597e2d1c634658cc127a460d46f6150"
     );
-    assert_eq!(PORTABLE_RUNTIME_ARTIFACT_BYTES.len(), 1_063_727);
+    assert_eq!(PORTABLE_RUNTIME_ARTIFACT_BYTES.len(), 1_101_070);
     assert_eq!(PORTABLE_RUNTIME_ARTIFACT_BYTES.last(), Some(&b'}'));
 
     let digest = Sha256::digest(PORTABLE_RUNTIME_ARTIFACT_BYTES);
@@ -33,7 +33,7 @@ fn embedded_portable_runtime_artifact_is_the_pinned_canonical_material() {
         serde_json::from_slice(PORTABLE_RUNTIME_ARTIFACT_BYTES).expect("pinned artifact is JSON");
     assert_eq!(artifact["format"], PORTABLE_RUNTIME_ARTIFACT_FORMAT);
     assert_eq!(artifact["entry"], PORTABLE_RUNTIME_ARTIFACT_ENTRY);
-    assert_eq!(artifact["modules"].as_array().map(Vec::len), Some(107));
+    assert_eq!(artifact["modules"].as_array().map(Vec::len), Some(109));
     assert!(
         artifact.get("provenance").is_none(),
         "canonical material must not contain the external source provenance"
@@ -128,6 +128,10 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
                 'packCompositeValue',
                 'unpackCompositeValue',
                 'normalizeTypeDeclarations',
+                'authorizedReadProjectDescriptor',
+                'createProject',
+                'addProjectMember',
+                'projectObjectId',
               ];
               return {
                 sameModule: exact.setDefaultCryptoProvider === alias.setDefaultCryptoProvider,
@@ -146,7 +150,7 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
     assert_eq!(report["sameModule"], true);
     assert_eq!(report["marker"], "host-overlay");
     assert_eq!(report["exportedCreate"], "function");
-    assert_eq!(report["requiredEnvironmentExportCount"], 17);
+    assert_eq!(report["requiredEnvironmentExportCount"], 21);
     assert_eq!(
         report["missingEnvironmentExports"],
         serde_json::json!([]),

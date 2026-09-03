@@ -195,13 +195,15 @@ function valueText(value) {
  *
  * Owns ALL semantic shaping that used to live in the DOM realizer: the heading
  * text, the unavailable-vs-unauthorized reason line, the field normalization,
- * and the reference rows -> action(key) mapping.
+ * the reference rows -> action(key) mapping, and the durable Project summary +
+ * member rows (display strings plus descriptor-local keys only).
  */
 function semanticUiForPresentation(presentationDescriptor) {
   const kind = presentationDescriptor?.kind;
   const params = presentationDescriptor?.parameters ?? {};
   const subject = presentationDescriptor?.subject ?? {};
   const objectId = subject.objectId ?? '';
+  const project = params.project ?? {};
 
   const children = [];
 
@@ -210,10 +212,33 @@ function semanticUiForPresentation(presentationDescriptor) {
     ? `Navigator: ${objectId}`
     : kind === 'inspector'
       ? `Inspector: ${objectId}`
+      : kind === 'project'
+        ? `Project: ${typeof project.name === 'string' ? project.name : ''}`
       : kind; // unavailable-reference | unauthorized-reference
   children.push({kind: 'text', role: 'heading', text: heading});
 
-  if (kind === 'unavailable-reference' || kind === 'unauthorized-reference') {
+  if (kind === 'project') {
+    children.push({kind: 'field', label: 'Project ID', text: valueText(project.projectId)});
+    children.push({kind: 'field', label: 'Namespace', text: valueText(project.namespace)});
+    const members = Array.isArray(project.members) ? project.members : [];
+    if (members.length > 0) {
+      children.push({
+        kind: 'collection',
+        label: 'Members',
+        items: members.map((member, index) => {
+          const key = typeof member?.key === 'string' ? member.key : String(index);
+          const role = typeof member?.role === 'string' ? member.role : '';
+          const imageId = typeof member?.target?.imageId === 'string' ? member.target.imageId : '';
+          const targetObjectId = typeof member?.target?.objectId === 'string' ? member.target.objectId : '';
+          return {
+            kind: 'action',
+            key: index, // transient descriptor-local index; durable identity stays member.key
+            label: `${key} [${role}] -> ${imageId}/${targetObjectId}`,
+          };
+        }),
+      });
+    }
+  } else if (kind === 'unavailable-reference' || kind === 'unauthorized-reference') {
     // An explicit reason, nothing else.
     const reason = `${kind === 'unauthorized-reference' ? 'Not authorized' : 'Unavailable'}: ${objectId}${params.reason ? ` (${params.reason})` : ''}`;
     children.push({kind: 'text', role: 'reason', text: reason});

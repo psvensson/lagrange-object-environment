@@ -45,8 +45,8 @@ pub const PORTABLE_RUNTIME_ARTIFACT_ENTRY: &str = "src/portable-runtime.js";
 
 /// External provenance only; it is not part of the canonical artifact material.
 pub const PORTABLE_RUNTIME_SOURCE_REVISION: &str =
-    "34ad6c20a16cf542cbf34e209bb3702385d41ba1";
+    "ac12a01e7597e2d1c634658cc127a460d46f6150";
 
 /// Images-published identity over the exact canonical material bytes above.
 pub const PORTABLE_RUNTIME_CONTENT_IDENTITY: &str =
-    "sha256:2b847d2d295d72ad4e26a350a6e3f2bcf636768b6f1ed4c361577f8256c63c76";
+    "sha256:1d28e9ded67915cb9a4b8fd92218c6989d0142f0383b7ef39427e43328f11a8c";

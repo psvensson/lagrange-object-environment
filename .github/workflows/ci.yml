@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: psvensson/lagrange-images
-          ref: 34ad6c20a16cf542cbf34e209bb3702385d41ba1
+          ref: ac12a01e7597e2d1c634658cc127a460d46f6150
           path: lagrange-images
       - uses: actions/setup-node@v4
         with:

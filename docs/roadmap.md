@@ -79,7 +79,8 @@ Do not design a common scene graph before the low-level Component boundary is pr
 
 ## Phase 3 — generic live tools
 
-- [ ] image/Project browser
+- [x] first read-only durable Project browser: authorized canonical descriptor, Project Presentation, DOM+GTK SemanticUi, member activation through generic cross-Image navigation, explicit refresh/retarget and observation-driven reread (`src/project-browser.js`; Bead mky)
+- [ ] broader image browser/query roots
 - [ ] object inspector/editor
 - [ ] history browser
 - [ ] search/query presentations
@@ -94,7 +95,7 @@ Success: built-in development feels like inhabiting the image rather than using 
 
 The underlying Project model/history remains in Lagrange Images. This phase makes it pleasant to inhabit.
 
-- [ ] Project navigation and relationship presentations
+- [x] read-only Project navigation and member relationship presentation (canonical Images descriptor, no shadow Project model; Bead mky)
 - [ ] creation/editing commands over image-level Project APIs
 - [ ] mixed native/OpenSmalltalk Project browser
 - [ ] working-view and object/Project-diff presentations

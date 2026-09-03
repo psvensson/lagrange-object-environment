@@ -33,7 +33,7 @@ function makeShell({records = {}, readError = null, authorityFor = null, writabl
   const readCalls = [];
   const adapter = {
     async readObject({imageId, objectId, authority, blockId} = {}) {
-      readCalls.push({objectId});
+      readCalls.push({imageId, objectId, authority, blockId});
       if (readError) throw readError;
       if (authorityFor && !authorityFor({imageId, objectId, authority})) {
         const denied = new Error(`not authorized: object/read ${objectId}`);
@@ -115,7 +115,7 @@ test('inspectSelected re-navigates the selected object (the observation->reread 
   assert.equal(readCalls.length, 3, 'exactly the navigate() reads the loop implies (no shadow-model pre-reads)');
 });
 
-test('handleActivateItem resolves a descriptor-local key to a ref; a stale key is a no-op (never a wrong ref)', async () => {
+test('handleActivateItem defaults to navigator resolution; a stale key is a no-op (never a wrong ref)', async () => {
   const records = {
     'obj-root': {slots: {'slot-b': ref('obj-b'), 'slot-c': ref('obj-c')}, indexed: []},
     'obj-b': {slots: {'slot-title': {kind: 'text', value: 'B'}}, indexed: []},
@@ -133,6 +133,57 @@ test('handleActivateItem resolves a descriptor-local key to a ref; a stale key i
   // A non-number key is a no-op too.
   assert.equal(await shell.handleActivateItem({key: 'obj-c'}), null, 'a key is an index, never a ref');
   await shell.destroy?.();
+});
+
+test('handleActivateItem resolves against the named view current descriptor and preserves a cross-Image ref', async () => {
+  const first = {kind: 'ref', imageId: 'other-image', objectId: 'obj-b'};
+  const retargeted = {kind: 'ref', imageId: 'third-image', objectId: 'obj-c'};
+  const records = {
+    'obj-root': {slots: {}, indexed: []},
+    'obj-b': {slots: {'slot-title': {kind: 'text', value: 'B'}}, indexed: []},
+    'obj-c': {slots: {'slot-title': {kind: 'text', value: 'C'}}, indexed: []},
+  };
+  const {shell, selectionModel, compositor, readCalls} = makeShell({records});
+  await shell.openWorkspace(ref('obj-root'), {});
+  const projectDescriptor = (target) => ({
+    kind: 'project',
+    subject: {kind: 'project', imageId: 'project-image', projectId: 'p'},
+    parameters: {project: {members: [{key: 'stable', role: 'source', target}]}},
+  });
+  await compositor.openView({
+    viewId: 'project-view',
+    viewDescriptor: {kind: 'canvas', width: 64, height: 64},
+    presentationDescriptor: projectDescriptor(first),
+  });
+  const seen = [];
+  const resolveItem = (descriptor, key) => {
+    seen.push(descriptor);
+    if (!Number.isSafeInteger(key)) return null;
+    return descriptor?.parameters?.project?.members[key]?.target ?? null;
+  };
+
+  const authority = {opaque: true};
+  const selectedFirst = await shell.handleActivateItem({
+    key: 0, viewId: 'project-view', resolveItem, authority, readBlockId: 'read-lane',
+  });
+  assert.equal(selectedFirst, first, 'the resolver result crosses the shell unchanged');
+  assert.deepEqual(selectionModel.selectedSubject(), first);
+  assert.deepEqual(readCalls.at(-1), {
+    imageId: 'other-image', objectId: 'obj-b', authority, blockId: 'read-lane',
+  }, 'the cross-Image ref and explicit read context reach ObjectNavigator unchanged');
+  assert.equal(compositor.focusedView(), 'project-view', 'selection focuses its actual source view');
+
+  const current = projectDescriptor(retargeted);
+  await compositor.presentOn('project-view', current);
+  const selectedRetargeted = await shell.handleActivateItem({key: 0, viewId: 'project-view', resolveItem});
+  assert.equal(seen.at(-1), current, 'the resolver receives the current Compositor descriptor, not a cached copy');
+  assert.equal(selectedRetargeted, retargeted);
+  assert.deepEqual(selectionModel.selectedSubject(), retargeted,
+    'the same local key follows the current descriptor cross-Image target unchanged');
+
+  assert.equal(await shell.handleActivateItem({key: 9, viewId: 'project-view', resolveItem}), null);
+  assert.deepEqual(selectionModel.selectedSubject(), retargeted, 'a stale key cannot change selection');
+  await compositor.destroy();
 });
 
 test('bindDomIntents routes a DOM activate-item from the navigator surface to selection', async () => {
@@ -193,6 +244,53 @@ test('bindIntents routes an edit-field intent from the inspector surface to hand
   for (const fn of handlers) fn({kind: 'activate-item', key: 0}, 'nav-surface');
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(calls.length, 1, 'a wrong-surface edit-field and the navigator activate-item do NOT reach the edit router');
+  await compositor.destroy();
+});
+
+test('bindIntents routes activation bindings by surface to their named view resolver', async () => {
+  const target = {kind: 'ref', imageId: 'other-image', objectId: 'obj-b'};
+  const records = {
+    'obj-root': {slots: {}, indexed: []},
+    'obj-b': {slots: {'slot-title': {kind: 'text', value: 'B'}}, indexed: []},
+  };
+  const {shell, selectionModel, compositor} = makeShell({records});
+  await shell.openWorkspace(ref('obj-root'), {});
+  await compositor.openView({
+    viewId: 'project-view',
+    viewDescriptor: {kind: 'canvas', width: 64, height: 64},
+    presentationDescriptor: {
+      kind: 'project', subject: {kind: 'project', imageId: 'img', projectId: 'p'},
+      parameters: {target},
+    },
+  });
+  const handlers = new Set();
+  const adapter = {onIntent: (fn) => { handlers.add(fn); return () => handlers.delete(fn); }};
+  assert.throws(() => shell.bindIntents({
+    adapter,
+    navigatorSurfaceHandle: 'shared-surface',
+    activationBindings: [{
+      surfaceHandle: 'shared-surface', viewId: 'project-view', resolveItem: () => target,
+    }],
+  }), /surfaceHandle bindings must be unique/,
+  'one renderer surface cannot ambiguously own two activation resolutions');
+  shell.bindIntents({
+    adapter,
+    activationBindings: [{
+      surfaceHandle: 'project-surface',
+      viewId: 'project-view',
+      resolveItem: (descriptor, key) => key === 0 ? descriptor.parameters.target : null,
+    }],
+  });
+
+  for (const fn of handlers) fn({kind: 'activate-item', key: 0}, 'project-surface');
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual(selectionModel.selectedSubject(), target);
+  assert.equal(compositor.focusedView(), 'project-view');
+
+  selectionModel.clear();
+  for (const fn of handlers) fn({kind: 'activate-item', key: 0}, 'other-surface');
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(selectionModel.selectedSubject(), null, 'an unbound surface cannot activate an item');
   await compositor.destroy();
 });
 

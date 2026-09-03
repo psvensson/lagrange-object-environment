@@ -8,7 +8,7 @@ That distinction matters because a Project should remain useful to headless agen
 
 ## Image-level Project model
 
-Lagrange Images should define a language-neutral Project convention represented by ordinary image objects and refs. It does not need a special backend table or record kind.
+Lagrange Images defines the language-neutral durable Project convention using ordinary image objects and refs, not a special backend table or environment-owned record kind. Its authorized Project read returns the canonical descriptor `{format, projectId, name, namespace, members:[{key, role, target}]}`; Images alone owns storage translation, canonical key ordering and authorization-before-existence.
 
 A Project may relate:
 
@@ -40,7 +40,24 @@ The Object Environment owns human interaction over Projects:
 - sharing/invitation flows
 - Project-specific Perspectives
 
-Those should not create a shadow Project/history model.
+Those must not create a shadow Project/history model.
+
+## Current read-only browser
+
+The first vertical slice is implemented by `ProjectBrowser` and the existing generic environment owners:
+
+```text
+Project subject {imageId, projectId}
+  -> ImageClientAdapter.readProject (explicit Project authority)
+  -> canonical Images ProjectDescriptor
+  -> exact-one Project Presentation
+  -> SemanticUi Project view (DOM and GTK)
+  -> activate descriptor-local member index
+  -> EnvironmentShell resolves current member target
+  -> ObjectNavigator reads that target under separate explicit authority
+```
+
+The Presentation retains the canonical descriptor by identity; it does not copy or normalize membership. The durable member key remains member identity when a target is changed, while the renderer sees only a transient integer action key. Observation events are metadata-only invalidations: the browser performs a fresh authorized Project read before presenting an update. This slice is deliberately read-only—there are no Project mutation Commands yet.
 
 ## Files and Git are projections
 

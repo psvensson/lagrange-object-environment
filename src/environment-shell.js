@@ -4,7 +4,7 @@
  * authorized root/reference NAVIGATOR pane beside a generic INSPECTOR pane,
  * arranged in a split composition.
  *
- * OWNERSHIP (narrow, fenced): the shell owns TWO descriptor-local couplings:
+ * OWNERSHIP (narrow, fenced): the shell owns THREE descriptor-local couplings:
  *  (1) "when the semantic selection changes, choose/update the inspector view's
  *      Presentation" (nothing else owns it: SelectionModel owns selection state;
  *      the Compositor owns views; neither couples them);
@@ -14,6 +14,10 @@
  *      row in docs/ownership.md). It does NOT dispatch, build Commands, or own
  *      value semantics — CommandRouter retains semantic-intent -> Command/
  *      authority/dispatch ownership.
+ *  (3) "resolve a renderer activate-item key against the CURRENT descriptor of
+ *      its bound source view, then select the resulting ref". The descriptor-
+ *      local resolver is injected by that view's semantic owner; the shell owns
+ *      only renderer action -> selection orchestration.
  * The shell does NOT:
  *  - read the image directly (every read goes through ObjectNavigator.navigate,
  *    which owns the unauthorized-ref/unavailable-ref materialization);
@@ -39,6 +43,17 @@
 
 const NAVIGATOR_VIEW_ID = 'navigator-view';
 const INSPECTOR_VIEW_ID = 'inspector-view';
+
+function resolveNavigatorItem(presentationDescriptor, key) {
+  const references = presentationDescriptor?.parameters?.references;
+  if (!Array.isArray(references)
+      || !Number.isSafeInteger(key) || key < 0 || key >= references.length) {
+    return null;
+  }
+  const ref = references[key];
+  if (!ref || typeof ref.objectId !== 'string') return null;
+  return ref;
+}
 
 // Project an ObjectNavigator navigate result's Presentation to the
 // presentationDescriptor the Compositor consumes: {kind, subject, parameters}.
@@ -149,17 +164,19 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
     return Object.freeze({navigatorViewId: NAVIGATOR_VIEW_ID, inspectorViewId: INSPECTOR_VIEW_ID});
   }
 
-  // The user activates a ref (a SELECTION gesture): select it, focus the
-  // navigator pane (the user is interacting there; the inspector passively
-  // follows), and update the inspector to the newly-selected object. Ref
-  // activation is NOT a CommandRouter dispatch (no Command runs on selection).
+  // The user activates a ref (a SELECTION gesture): select it, focus its source
+  // view (navigator by default; the inspector passively follows), and update
+  // the inspector to the newly-selected object. Ref activation is NOT a
+  // CommandRouter dispatch (no Command runs on selection).
   // Returns the inspector's new presentationDescriptor.
-  async function selectObject(ref, {authority = null, readBlockId} = {}) {
+  async function selectObject(ref, {
+    authority = null, readBlockId, sourceViewId = NAVIGATOR_VIEW_ID,
+  } = {}) {
     // The inspected subject is changing: drop the prior object's transient
     // token immediately (it is meaningless for the new subject).
     pairInspectorToken(null, null);
     selectionModel.select(ref);
-    compositor.focusView(NAVIGATOR_VIEW_ID);
+    compositor.focusView(sourceViewId);
     const descriptor = await inspectSelected({authority, readBlockId});
     return descriptor;
   }
@@ -245,23 +262,26 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
   }
 
   // The 'activate-item' intent handler (the shell-boundary interaction owner for
-  // DOM ref-row activation -> selection; NOT CommandRouter). A DOM realizer emits
-  // {kind:'activate-item', key} where `key` is a DESCRIPTOR-LOCAL index into the
-  // navigator view's CURRENT presentationDescriptor.parameters.references. The
-  // shell resolves key -> ref against the Compositor's OWN Presentation data,
-  // then selects it. A STALE/out-of-range key resolves to null and does NOT
-  // select (never throws, never resolves a wrong ref). Returns the selected ref
-  // (or null). This is the ONLY place a renderer-supplied key becomes a semantic
-  // ref — the key itself is meaningless without the current descriptor.
-  async function handleActivateItem({key, authority = null, readBlockId} = {}) {
-    const view = compositor.durableIntent().find((v) => v.viewId === NAVIGATOR_VIEW_ID);
-    const references = view?.presentationDescriptor?.parameters?.references;
-    if (!Array.isArray(references) || typeof key !== 'number' || key < 0 || key >= references.length) {
-      return null; // stale / out-of-range key: no selection, no throw.
+  // renderer item activation -> selection; NOT CommandRouter). A host emits
+  // {kind:'activate-item', key} where `key` is meaningful only to one view's
+  // CURRENT presentationDescriptor. The shell asks that view's injected pure
+  // resolver for a ref, then owns the ref -> selection interaction. Navigator
+  // reference indexing remains the default; ProjectBrowser injects its own
+  // member resolver without moving Project semantics into this module.
+  async function handleActivateItem({
+    key,
+    viewId = NAVIGATOR_VIEW_ID,
+    resolveItem = resolveNavigatorItem,
+    authority = null,
+    readBlockId,
+  } = {}) {
+    if (typeof resolveItem !== 'function') {
+      throw new TypeError('handleActivateItem requires a descriptor-local resolveItem function');
     }
-    const ref = references[key];
+    const view = compositor.durableIntent().find((candidate) => candidate.viewId === viewId);
+    const ref = resolveItem(view?.presentationDescriptor ?? null, key);
     if (!ref || typeof ref.objectId !== 'string') return null;
-    await selectObject(ref, {authority, readBlockId});
+    await selectObject(ref, {authority, readBlockId, sourceViewId: viewId});
     return ref;
   }
 
@@ -366,21 +386,67 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
   // intents {kind:'activate-item'|'edit-field', key, ...} are not DOM-specific;
   // a browser DOM adapter, the Linux GTK bridge, or any host supplies an
   // `onIntent` seam and the surface handles). Routes:
-  //   {kind:'activate-item'} from the NAVIGATOR surface -> handleActivateItem
-  //     (selection; the shell's navigator row),
+  //   {kind:'activate-item'} from a configured activation surface ->
+  //     handleActivateItem (selection; the shell's action row),
   //   {kind:'edit-field'} from the INSPECTOR surface -> handleEditField
   //     (the shell's inspector edit row -> CommandRouter).
   // Other intents (e.g. a Component pointer 'activate') are ignored here
   // (CommandRouter owns those). `commandRouter` + `inspectorSurfaceHandle` are
   // required only when edit-field routing is wanted. Returns an unsubscribe.
-  function bindIntents({adapter, navigatorSurfaceHandle = null, inspectorSurfaceHandle = null, commandRouter = null, commandId = 'set-title', authority = null, readBlockId, onEdited = null, onEditError = null} = {}) {
+  function bindIntents({
+    adapter,
+    navigatorSurfaceHandle = null,
+    activationBindings = [],
+    inspectorSurfaceHandle = null,
+    commandRouter = null,
+    commandId = 'set-title',
+    authority = null,
+    readBlockId,
+    onEdited = null,
+    onEditError = null,
+  } = {}) {
     if (!adapter || typeof adapter.onIntent !== 'function') {
       throw new TypeError('bindIntents requires an adapter with onIntent');
     }
+    if (!Array.isArray(activationBindings)) {
+      throw new TypeError('activationBindings must be an array');
+    }
+    const bindings = [];
+    if (navigatorSurfaceHandle !== null) {
+      bindings.push({
+        surfaceHandle: navigatorSurfaceHandle,
+        viewId: NAVIGATOR_VIEW_ID,
+        resolveItem: resolveNavigatorItem,
+      });
+    }
+    for (const binding of activationBindings) {
+      if (!binding || binding.surfaceHandle === null || binding.surfaceHandle === undefined
+          || typeof binding.viewId !== 'string' || binding.viewId.length === 0
+          || typeof binding.resolveItem !== 'function') {
+        throw new TypeError('each activation binding requires surfaceHandle, viewId and resolveItem');
+      }
+      if (bindings.some(({surfaceHandle}) => surfaceHandle === binding.surfaceHandle)) {
+        throw new TypeError('activation surfaceHandle bindings must be unique');
+      }
+      bindings.push({
+        surfaceHandle: binding.surfaceHandle,
+        viewId: binding.viewId,
+        resolveItem: binding.resolveItem,
+      });
+    }
     return adapter.onIntent((intent, surfaceHandle) => {
-      if (intent?.kind === 'activate-item' && surfaceHandle === navigatorSurfaceHandle) {
+      const activation = intent?.kind === 'activate-item'
+        ? bindings.find((binding) => binding.surfaceHandle === surfaceHandle)
+        : null;
+      if (activation) {
         // Fire-and-forget; errors route nowhere (the handler is best-effort UI).
-        handleActivateItem({key: intent.key, authority, readBlockId}).catch(() => {});
+        handleActivateItem({
+          key: intent.key,
+          viewId: activation.viewId,
+          resolveItem: activation.resolveItem,
+          authority,
+          readBlockId,
+        }).catch(() => {});
       } else if (intent?.kind === 'edit-field' && surfaceHandle === inspectorSurfaceHandle && commandRouter) {
         handleEditField({
           key: intent.key, text: intent.text, commandId, commandRouter,
