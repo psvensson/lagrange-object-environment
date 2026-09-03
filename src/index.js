@@ -34,6 +34,17 @@ export {createCommandRegistry} from './command-registry.js';
 export {UNAVAILABLE_REF_KIND, UNAUTHORIZED_REF_KIND, createObjectNavigator} from './object-navigator.js';
 
 export {
+  PROJECT_PRESENTATION_KIND,
+  PROJECT_SUBJECT_KIND,
+  PROJECT_VIEW_ID,
+  ProjectPresentationError,
+  createProjectBrowser,
+  createProjectPresentationProvider,
+  createProjectSubject,
+  resolveProjectMemberTarget,
+} from './project-browser.js';
+
+export {
   createObjectInspectorProvider,
   createUnavailableRefProvider,
   createUnauthorizedRefProvider,

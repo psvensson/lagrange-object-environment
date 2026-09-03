@@ -10,11 +10,11 @@ The environment does not own image storage or image identity. It observes and in
 
 A Project is language-neutral semantic organization inside an image: a useful root or relationship structure for code, notes, tasks, data, artifacts and other Projects.
 
-The **durable Project model belongs to Lagrange Images**, because Projects should be usable by headless agents, compilers/tooling, import/export services and alternate frontends. It should still be represented with ordinary image objects and refs rather than by turning Project into a storage/backend primitive.
+The **durable Project model belongs to Lagrange Images**, because Projects must be usable by headless agents, compilers/tooling, import/export services and alternate frontends. Images exposes an authorized canonical `ProjectDescriptor`; this environment consumes it without copying membership into a second model.
 
-This environment owns Project presentations and interaction: browsing, navigation, editing workflows, working views, history/diff/merge UX, collaboration and sharing commands.
+The current read-only `ProjectBrowser` owns Project-specific browsing orchestration: authorized descriptor read, exact-one Project Presentation selection, open/refresh/follow requests, and current-descriptor member-key resolution. SemanticUi projects the same Project presentation into browser DOM and native GTK controls. Activating a member uses the ordinary EnvironmentShell -> ObjectNavigator path; membership never supplies target authority. Editing workflows, working views, history/diff/merge UX, collaboration and sharing commands remain later work.
 
-Projects should not recreate filesystem assumptions. An object may participate in several projects or relationships, and project composition need not imply exclusive ownership.
+Projects do not recreate filesystem assumptions. An object may participate in several Projects or relationships, and Project composition does not imply exclusive ownership.
 
 ## Presentation
 
