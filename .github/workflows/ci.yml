@@ -83,7 +83,7 @@ jobs:
             libxkbcommon-dev libssl-dev \
             mesa-vulkan-drivers libgl1-mesa-dri vulkan-tools \
             libgtk-4-dev xvfb
-      # These three gates consume only the checked-in portable artifact. Run
+      # These four gates consume only the checked-in portable artifact. Run
       # them before a sibling checkout exists so accidental repository-tree
       # fallback is an executable CI failure, not merely a code-review claim.
       - name: Prove artifact-backed Images gates without a sibling checkout
@@ -93,7 +93,8 @@ jobs:
           cargo test --locked \
             --test b0_portable_runtime \
             --test native_crypto_images \
-            --test portable_images_observe
+            --test portable_images_observe \
+            --test real_images_semantics
       # The separate 64j native JS-core acceptance (native_js_loop) still
       # drives the real Images repository through its public API. Pin that
       # sibling to the exact revision that produced the checked-in artifact.
