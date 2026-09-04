@@ -76,7 +76,8 @@ test('Phase 1 end-to-end: open -> present -> navigate -> command -> authorized m
     packCompositeValue: imagesApi.packCompositeValue,
     unpackCompositeValue: imagesApi.unpackCompositeValue,
     normalizeTypeDeclarations: imagesApi.normalizeTypeDeclarations,
-    authorizedReadProjectDescriptor: imagesApi.authorizedReadProjectDescriptor,
+    authorizedReadProject: imagesApi.authorizedReadProject,
+    authorizedRenameProject: imagesApi.authorizedRenameProject,
   });
   await adapter.ensureSchema(IMAGE, IDS);
 

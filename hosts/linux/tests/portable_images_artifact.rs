@@ -167,27 +167,18 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
                 'packCompositeValue',
                 'unpackCompositeValue',
                 'normalizeTypeDeclarations',
-                'authorizedReadProjectDescriptor',
+                'authorizedReadProject',
+                'authorizedRenameProject',
                 'createProject',
                 'addProjectMember',
                 'projectObjectId',
               ];
-              // ADMISSION FACT (okv Slice A): the pinned revision carries the
-              // Project mutation-service seams (Images ADR 0080). NOT part of
-              // requiredEnvironmentExports: nothing in the Environment consumes
-              // them yet (Slice B). This presence check distinguishes the pin from
-              // any revision that does NOT yet carry the ADR 0080 seams (it is
-              // RED against the previous pin ac12a01e); a later superset passes.
-              const admittedProjectSeams = ['authorizedReadProject', 'authorizedRenameProject'];
               return {
                 sameModule: exact.setDefaultCryptoProvider === alias.setDefaultCryptoProvider,
                 marker: host.marker,
                 exportedCreate: typeof exact.createPortableRuntime,
                 requiredEnvironmentExportCount: requiredEnvironmentExports.length,
                 missingEnvironmentExports: requiredEnvironmentExports.filter(
-                  (name) => typeof alias[name] !== 'function',
-                ),
-                missingAdmittedProjectSeams: admittedProjectSeams.filter(
                   (name) => typeof alias[name] !== 'function',
                 ),
               };
@@ -199,16 +190,11 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
     assert_eq!(report["sameModule"], true);
     assert_eq!(report["marker"], "host-overlay");
     assert_eq!(report["exportedCreate"], "function");
-    assert_eq!(report["requiredEnvironmentExportCount"], 21);
+    assert_eq!(report["requiredEnvironmentExportCount"], 22);
     assert_eq!(
         report["missingEnvironmentExports"],
         serde_json::json!([]),
         "every B3 composition helper must be callable through the sole public portable-runtime alias"
-    );
-    assert_eq!(
-        report["missingAdmittedProjectSeams"],
-        serde_json::json!([]),
-        "the pinned Images revision must carry the admitted Project seams (authorizedReadProject, authorizedRenameProject; Images ADR 0080)"
     );
 
     actor.shutdown().await;

@@ -273,14 +273,15 @@ function createImageClientAdapter(client) {
     packCompositeValue,
     unpackCompositeValue,
     normalizeTypeDeclarations,
-    authorizedReadProjectDescriptor,
+    authorizedReadProject,
+    authorizedRenameProject,
   } = client;
 
   if (typeof authorityService.require !== 'function') {
     throw new TypeError('lagrange-images client authority service is missing required operation: require');
   }
 
-  for (const [name, fn] of Object.entries({defineClass, installCallableInterfaceV2, installImageCreationBinding, installImageMutationBinding, installImageObjectReadBinding, installImageObservationBinding, findSmalltalkKernel, objectRef, objectResource, parseObjectResource, objectVersionToken, textValue, packCompositeValue, unpackCompositeValue, normalizeTypeDeclarations, authorizedReadProjectDescriptor})) {
+  for (const [name, fn] of Object.entries({defineClass, installCallableInterfaceV2, installImageCreationBinding, installImageMutationBinding, installImageObjectReadBinding, installImageObservationBinding, findSmalltalkKernel, objectRef, objectResource, parseObjectResource, objectVersionToken, textValue, packCompositeValue, unpackCompositeValue, normalizeTypeDeclarations, authorizedReadProject, authorizedRenameProject})) {
     if (typeof fn !== 'function') {
       throw new TypeError(`lagrange-images client is missing required helper: ${name}`);
     }
@@ -289,19 +290,50 @@ function createImageClientAdapter(client) {
   const objectIdFromVersionToken = makeObjectIdDecoder(objectResource, parseObjectResource);
 
   /**
-   * Read one durable Project through Images' authorized semantic seam.
+   * Read one durable Project through Images' authorized VERSION-AWARE semantic
+   * seam (Images ADR 0080 `authorizedReadProject`).
    *
-   * Images owns the demand, authorization-before-existence ordering, backing
-   * member storage unit, and canonical ProjectDescriptor. The adapter owns only
-   * bridging the caller's opaque authority context to the injected runtime's
-   * check-only `require(context, demand)` operation. It never constructs,
-   * inspects, caches, or broadens a demand/context.
+   * Returns Images' result UNCHANGED: `{descriptor, versionToken}` — the
+   * canonical ProjectDescriptor plus an OPAQUE version token that describes the
+   * Project object the descriptor was read from (one read; Images owns the
+   * coupling and the token's scope). Images owns the demand,
+   * authorization-before-existence ordering, backing member storage unit and
+   * canonicalization. The adapter owns only bridging the caller's opaque
+   * authority context to the injected runtime's check-only
+   * `require(context, demand)`. It never constructs, inspects, caches or
+   * broadens a demand/context; it never names the Project's backing object id
+   * or a slot; it never inspects, decodes, defaults or mints the token.
    */
   async function readProject({imageId, projectId, authority = null} = {}) {
-    return authorizedReadProjectDescriptor({
+    return authorizedReadProject({
       images,
       imageId,
       projectId,
+      require: (demand) => authorityService.require(authority, demand),
+    });
+  }
+
+  /**
+   * Rename one durable Project through Images' authorized rename seam (Images
+   * ADR 0080 `authorizedRenameProject`). The ONLY translation here is the
+   * argument name: the Environment's `versionToken` (the token paired with the
+   * Project read the caller holds) becomes Images' `expectedVersionToken`, a
+   * storage CAS precondition Images enforces. Returns Images' result unchanged
+   * (`{versionToken}`, the new opaque token). The adapter forwards the token
+   * VERBATIM — no default, no validation, no fetch — and performs no conflict
+   * translation: a stale token surfaces as Images' own
+   * ObjectMutationConflictError, which CommandDispatcher (the Environment's
+   * Command error owner) maps to CommandConflictError. Not routed through the
+   * generic object/slot mutation lane: Images owns the Project's field -> slot
+   * translation.
+   */
+  async function renameProject({imageId, projectId, name, versionToken, authority = null} = {}) {
+    return authorizedRenameProject({
+      images,
+      imageId,
+      projectId,
+      name,
+      expectedVersionToken: versionToken,
       require: (demand) => authorityService.require(authority, demand),
     });
   }
@@ -941,6 +973,7 @@ function createImageClientAdapter(client) {
     savePerspective,
     loadPerspective,
     readProject,
+    renameProject,
     readObject,
     authorizedReadObject,
     resolveAssetBytes,

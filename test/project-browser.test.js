@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {Presentation} from '../src/model.js';
+import {Perspective, Presentation} from '../src/model.js';
 import {createPresentationRegistry} from '../src/presentation-registry.js';
 import {
   PROJECT_VIEW_ID,
@@ -30,10 +30,22 @@ function ref(imageId, objectId) {
   return Object.freeze({kind: 'ref', imageId, objectId});
 }
 
+// The version-aware read's shape: {descriptor, versionToken}. Tokens here are
+// opaque strings; the browser must never interpret them.
+let tokenSeq = 0;
+const read = (descriptor, versionToken = `tok-${++tokenSeq}`) => ({descriptor, versionToken});
+
 function fakeCompositor() {
   const views = new Map();
   const calls = [];
   return Object.freeze({
+    liveView(viewId) {
+      const view = views.get(viewId);
+      return view ? {viewId, presentationDescriptor: view.presentationDescriptor} : null;
+    },
+    durableIntent() {
+      return [...views.entries()].map(([viewId, view]) => ({viewId, viewDescriptor: view.viewDescriptor, presentationDescriptor: view.presentationDescriptor}));
+    },
     async openView({viewId, viewDescriptor, presentationDescriptor}) {
       if (views.has(viewId)) throw new TypeError(`duplicate view ${viewId}`);
       views.set(viewId, {viewDescriptor, presentationDescriptor});
@@ -78,7 +90,7 @@ test('Project provider preserves the canonical descriptor and identity includes 
     Object.freeze({key: 'member/a', role: 'source', target: ref('b', 'target')}),
   ]);
   const adapter = {
-    readProject: async () => canonical,
+    readProject: async () => read(canonical),
     observe: () => idleObservation(new AbortController().signal),
   };
   const browser = createProjectBrowser({
@@ -100,7 +112,7 @@ test('Project provider preserves the canonical descriptor and identity includes 
 test('ProjectBrowser alone enforces exact-one Project presentation selection and surfaces provider failures', async () => {
   const subject = createProjectSubject({imageId: 'img', projectId: 'p'});
   const canonical = project('p', 'P');
-  const adapter = {readProject: async () => canonical, observe: () => idleObservation(new AbortController().signal)};
+  const adapter = {readProject: async () => read(canonical), observe: () => idleObservation(new AbortController().signal)};
 
   const none = createPresentationRegistry();
   none.register({id: 'broken-project', present() { throw new Error('provider broke'); }});
@@ -163,7 +175,7 @@ test('follow rereads and explicit refresh share one lane, so the later explicit 
         followReadStarted.resolve();
         return followRead.promise;
       }
-      return descriptors[index];
+      return read(descriptors[index]);
     },
     observe(_imageId, {signal}) {
       return (async function* changes() {
@@ -181,7 +193,7 @@ test('follow rereads and explicit refresh share one lane, so the later explicit 
   const follow = browser.follow({observationBlockId: 'observe'});
   await followReadStarted.promise;
   const explicit = browser.refresh();
-  followRead.resolve(descriptors[1]);
+  followRead.resolve(read(descriptors[1]));
   await explicit;
 
   assert.equal(compositor.descriptor(PROJECT_VIEW_ID).parameters.project.name, 'explicit-new');
@@ -205,13 +217,13 @@ test('stopping follow releases its unresolved read and suppresses every late eff
   const adapter = {
     async readProject() {
       reads += 1;
-      if (reads === 1) return project('p', 'Open');
+      if (reads === 1) return read(project('p', 'Open'));
       if (reads === 2) {
         staleReadStarted.resolve();
         return staleRead.promise;
       }
       explicitReadStarted.resolve();
-      return project('p', 'Explicit');
+      return read(project('p', 'Explicit'));
     },
     observe(_imageId, {signal}) {
       return (async function* changes() {
@@ -237,7 +249,7 @@ test('stopping follow releases its unresolved read and suppresses every late eff
   assert.equal(compositor.descriptor(PROJECT_VIEW_ID).parameters.project.name, 'Explicit',
     'a later explicit refresh completes while the stopped read remains unresolved');
 
-  staleRead.resolve(project('p', 'Late stale follow'));
+  staleRead.resolve(read(project('p', 'Late stale follow')));
   await Promise.resolve();
   await Promise.resolve();
   assert.equal(compositor.descriptor(PROJECT_VIEW_ID).parameters.project.name, 'Explicit');
@@ -259,7 +271,7 @@ test('replacement open bypasses an unresolved old follow read and fails with no 
   const adapter = {
     async readProject({projectId}) {
       reads += 1;
-      if (reads === 1) return project('old', 'Old');
+      if (reads === 1) return read(project('old', 'Old'));
       if (reads === 2) {
         oldReadStarted.resolve();
         return oldRead.promise;
@@ -296,7 +308,7 @@ test('replacement open bypasses an unresolved old follow read and fails with no 
     'failed replacement closes the old view and admits no new one');
   assert.equal(browser.activeSubject(), null);
 
-  oldRead.resolve(project('old', 'Late old result'));
+  oldRead.resolve(read(project('old', 'Late old result')));
   await Promise.resolve();
   await Promise.resolve();
   assert.equal(compositor.viewStatus(PROJECT_VIEW_ID), null,
@@ -312,13 +324,13 @@ test('successful replacement bypasses an unresolved old follow read and admits o
   const adapter = {
     async readProject() {
       reads += 1;
-      if (reads === 1) return project('old', 'Old');
+      if (reads === 1) return read(project('old', 'Old'));
       if (reads === 2) {
         oldReadStarted.resolve();
         return oldRead.promise;
       }
       replacementReadStarted.resolve();
-      return project('new', 'New');
+      return read(project('new', 'New'));
     },
     observe(_imageId, {signal}) {
       return (async function* changes() {
@@ -341,10 +353,190 @@ test('successful replacement bypasses an unresolved old follow read and admits o
   assert.deepEqual(compositor.descriptor(PROJECT_VIEW_ID).subject,
     {kind: 'project', imageId: 'b', projectId: 'new'});
 
-  oldRead.resolve(project('old', 'Late old result'));
+  oldRead.resolve(read(project('old', 'Late old result')));
   await Promise.resolve();
   await Promise.resolve();
   assert.deepEqual(compositor.descriptor(PROJECT_VIEW_ID).subject,
     {kind: 'project', imageId: 'b', projectId: 'new'},
     'the late stale descriptor cannot overwrite the replacement');
+});
+
+// ---------------------------------------------------------------------------
+// okv Slice B: the TRANSIENT Project edit token, paired with the exact displayed
+// descriptor + generation + subject, live-checked through the Compositor.
+// ---------------------------------------------------------------------------
+
+test('B3: after open() the token is paired with the exact displayed descriptor and is absent from every presentation/serialization sink', async () => {
+  const {semanticUiForPresentation} = await import('../src/semantic-ui.js');
+  const {encodePresentations} = await import('../src/perspective-projection.js');
+  const canonical = project('p', 'P', [Object.freeze({key: 'k', role: 'r', target: ref('img', 't')})]);
+  const adapter = {readProject: async () => read(canonical, 'tok-SECRET-1'), observe: () => idleObservation(new AbortController().signal)};
+  const compositor = fakeCompositor();
+  const browser = createProjectBrowser({adapter, presentationRegistry: registryWithProjectProvider(), compositor});
+  const subject = createProjectSubject({imageId: 'img', projectId: 'p'});
+  const opened = await browser.open(subject);
+  const displayed = compositor.liveView('project-view').presentationDescriptor;
+  assert.equal(displayed, opened.presentationDescriptor, 'the Compositor holds the exact descriptor object the browser presented');
+  assert.equal(browser.tokenFor(displayed), 'tok-SECRET-1', 'the token is paired with the displayed descriptor');
+  assert.equal(displayed.parameters.project, canonical, 'the Images descriptor object reaches the descriptor by identity (no copy where a token could hide)');
+  // Sinks: the token string must not occur anywhere a Presentation can be serialized or projected.
+  const presentation = (await browser.browse(subject)).presentation;
+  for (const [name, sink] of Object.entries({
+    presentationJson: JSON.stringify(presentation),
+    presentationKeys: JSON.stringify(Object.keys(presentation)),
+    descriptorJson: JSON.stringify(displayed),
+    durableIntent: JSON.stringify(compositor.durableIntent()),
+    semanticUi: JSON.stringify(semanticUiForPresentation(displayed)),
+  })) {
+    assert.ok(!sink.includes('tok-SECRET-1'), `the token must not appear in ${name}`);
+  }
+  // The Perspective sink is structurally unreachable for a project Presentation
+  // (non-ref subject; refs inside the context): the projection refuses it, so a
+  // token could never be persisted through a Perspective even by accident.
+  const perspective = new Perspective({id: 'persp', subject: ref('img', 'root'), presentations: [presentation]});
+  assert.throws(() => encodePresentations(perspective), /ref|subject/i);
+  // browse() is public and token-free: a browse-obtained result carries no token.
+  assert.deepEqual(Object.keys(await browser.browse(subject)).sort(), ['failures', 'presentation']);
+});
+
+test('F4/B7: only the exact paired object yields a token — a structurally equal copy, a foreign re-open of project-view, and a closed view all yield null', async () => {
+  const canonical = project('p', 'P');
+  const adapter = {readProject: async () => read(canonical, 'tok-1'), observe: () => idleObservation(new AbortController().signal)};
+  const compositor = fakeCompositor();
+  const browser = createProjectBrowser({adapter, presentationRegistry: registryWithProjectProvider(), compositor});
+  const subject = createProjectSubject({imageId: 'img', projectId: 'p'});
+  const {presentationDescriptor} = await browser.open(subject);
+  assert.equal(browser.tokenFor(presentationDescriptor), 'tok-1');
+  assert.equal(browser.tokenFor(JSON.parse(JSON.stringify(presentationDescriptor))), null, 'a structurally equal but distinct descriptor is not the paired one');
+  assert.equal(browser.tokenFor(null), null);
+  // A foreign re-presentation of project-view (no ProjectBrowser read): the live
+  // descriptor is not the paired one -> null, and the paired one is no longer live -> null.
+  const foreign = {...presentationDescriptor, parameters: {...presentationDescriptor.parameters}};
+  await compositor.presentOn('project-view', foreign);
+  assert.equal(browser.tokenFor(foreign), null, 'a view reconstructed without a ProjectBrowser read has no token');
+  assert.equal(browser.tokenFor(presentationDescriptor), null, 'the paired descriptor is no longer what the Compositor shows');
+  // Closed view: nothing is live.
+  await compositor.closeView('project-view');
+  assert.equal(browser.tokenFor(presentationDescriptor), null);
+});
+
+test('B4: refresh replaces descriptor AND token together; the old descriptor loses its token', async () => {
+  let reads = 0;
+  const adapter = {
+    readProject: async () => { reads += 1; return read(project('p', `P${reads}`), `tok-${reads}`); },
+    observe: () => idleObservation(new AbortController().signal),
+  };
+  const compositor = fakeCompositor();
+  const browser = createProjectBrowser({adapter, presentationRegistry: registryWithProjectProvider(), compositor});
+  const subject = createProjectSubject({imageId: 'img', projectId: 'p'});
+  const first = (await browser.open(subject)).presentationDescriptor;
+  assert.equal(browser.tokenFor(first), 'tok-1');
+  const second = (await browser.refresh()).presentationDescriptor;
+  assert.notEqual(second, first);
+  assert.equal(browser.tokenFor(second), 'tok-2', 'the refreshed descriptor pairs with the token of ITS read');
+  assert.equal(browser.tokenFor(first), null, 'the previous descriptor has no token');
+});
+
+test('B5/B6/F3: replacing the active Project clears the old token BEFORE the replacement read succeeds; a failed replacement leaves no usable token; a presentation the Compositor rejects is never paired', async () => {
+  const gate = deferred();
+  let reads = 0;
+  const adapter = {
+    async readProject({projectId}) {
+      reads += 1;
+      if (reads === 1) return read(project('old', 'Old'), 'tok-old');
+      if (reads === 2) return gate.promise; // the replacement read, gated
+      throw Object.assign(new Error(`denied ${projectId}`), {name: 'AuthorityError'});
+    },
+    observe: () => idleObservation(new AbortController().signal),
+  };
+  const compositor = fakeCompositor();
+  const browser = createProjectBrowser({adapter, presentationRegistry: registryWithProjectProvider(), compositor});
+  const oldSubject = createProjectSubject({imageId: 'img', projectId: 'old'});
+  const oldDescriptor = (await browser.open(oldSubject)).presentationDescriptor;
+  assert.equal(browser.tokenFor(oldDescriptor), 'tok-old');
+  const replacement = browser.open(createProjectSubject({imageId: 'img', projectId: 'new'}));
+  await new Promise((r) => setTimeout(r, 5)); // the replacement read is now pending on the gate
+  assert.equal(browser.tokenFor(oldDescriptor), null, 'the old token is unusable the instant a replacement begins');
+  gate.resolve(read(project('new', 'New'), 'tok-new'));
+  const newDescriptor = (await replacement).presentationDescriptor;
+  assert.equal(browser.tokenFor(newDescriptor), 'tok-new');
+  assert.equal(browser.tokenFor(oldDescriptor), null);
+  // Failed replacement: no usable token for anything.
+  await assert.rejects(browser.open(createProjectSubject({imageId: 'img', projectId: 'denied'})), (e) => e?.name === 'AuthorityError');
+  assert.equal(browser.tokenFor(newDescriptor), null);
+  // F3: a descriptor the Compositor REJECTS is never paired.
+  const rejecting = fakeCompositor();
+  const failingCompositor = {...rejecting, openView: async () => { throw new Error('attach failed'); }};
+  const browser2 = createProjectBrowser({
+    adapter: {readProject: async () => read(project('p', 'P'), 'tok-x'), observe: () => idleObservation(new AbortController().signal)},
+    presentationRegistry: registryWithProjectProvider(), compositor: failingCompositor,
+  });
+  await assert.rejects(browser2.open(createProjectSubject({imageId: 'img', projectId: 'p'})), /attach failed/);
+  assert.equal(browser2.activeSubject(), null);
+  assert.equal(rejecting.liveView('project-view'), null, 'the rejecting compositor admitted nothing');
+  assert.equal(browser2.tokenFor(null), null, 'nothing was admitted, so nothing is paired (documentation of intent; the catch-clear + liveness carry the property)');
+});
+
+test('ATTACH LOSS with the REAL Compositor: a project view that becomes lost (its old descriptor retained by durable intent) yields no token even though nothing else changed', async () => {
+  const {createCompositor} = await import('../src/compositor.js');
+  const {createFakeRendererAdapter} = await import('../src/fake-renderer-adapter.js');
+  const rendererAdapter = createFakeRendererAdapter();
+  const compositor = createCompositor({rendererAdapter});
+  const canonical = project('p', 'P');
+  const adapter = {readProject: async () => read(canonical, 'tok-live'), observe: () => idleObservation(new AbortController().signal)};
+  const browser = createProjectBrowser({adapter, presentationRegistry: registryWithProjectProvider(), compositor});
+  const {presentationDescriptor} = await browser.open(createProjectSubject({imageId: 'img', projectId: 'p'}));
+  assert.equal(browser.tokenFor(presentationDescriptor), 'tok-live');
+  // Lose the realization underneath the browser (no browser call involved).
+  rendererAdapter.failNext('detachPresentation');
+  await assert.rejects(compositor.presentOn('project-view', presentationDescriptor));
+  assert.equal(compositor.viewStatus('project-view'), 'lost');
+  assert.ok(compositor.durableIntent().some((v) => v.viewId === 'project-view' && v.presentationDescriptor === presentationDescriptor), 'durable intent still lists the lost view with the paired descriptor');
+  assert.equal(browser.tokenFor(presentationDescriptor), null, 'liveness is the Compositor\'s call: a lost view has no usable token');
+  await compositor.destroy();
+});
+
+test('F3 (mid-present invalidation) + B6 (failed reread): a refresh whose presentOn resolves after the generation moved pairs nothing; a denied reread clears the pair fail-closed', async () => {
+  let reads = 0;
+  let denyNext = false;
+  const adapter = {
+    async readProject() {
+      reads += 1;
+      if (denyNext) throw Object.assign(new Error('denied'), {name: 'AuthorityError'});
+      return read(project('p', `P${reads}`), `tok-${reads}`);
+    },
+    observe: () => idleObservation(new AbortController().signal),
+  };
+  const presentGate = deferred();
+  const base = fakeCompositor();
+  let gatePresent = false;
+  const compositor = {...base, async presentOn(viewId, descriptor) { if (gatePresent) await presentGate.promise; return base.presentOn(viewId, descriptor); }};
+  const browser = createProjectBrowser({adapter, presentationRegistry: registryWithProjectProvider(), compositor});
+  const subject = createProjectSubject({imageId: 'img', projectId: 'p'});
+  const first = (await browser.open(subject)).presentationDescriptor;
+  assert.equal(browser.tokenFor(first), 'tok-1');
+  // Refresh whose presentOn is suspended; meanwhile a replacement open() moves the generation.
+  gatePresent = true;
+  const refreshing = browser.refresh();
+  await new Promise((r) => setTimeout(r, 5));
+  const replacement = browser.open(createProjectSubject({imageId: 'img', projectId: 'p'})); // same subject, NEW generation
+  presentGate.resolve();
+  gatePresent = false;
+  const refreshed = await refreshing;
+  const replaced = (await replacement).presentationDescriptor;
+  assert.equal(refreshed, null, 'the stale-generation refresh reports nothing');
+  assert.equal(browser.tokenFor(replaced), `tok-${reads}`, 'only the current generation pairs');
+  // B6: a denied reread clears the pair even though the old descriptor stays displayed.
+  denyNext = true;
+  await assert.rejects(browser.refresh(), (e) => e?.name === 'AuthorityError');
+  assert.equal(compositor.liveView('project-view').presentationDescriptor, replaced, 'the old descriptor is still displayed…');
+  assert.equal(browser.tokenFor(replaced), null, '…but no write may build on its token');
+});
+
+test('browse() rejects an adapter that still returns a bare descriptor, or a result without a token (loud shape check)', async () => {
+  for (const bad of [project('p', 'P'), {descriptor: project('p', 'P')}, {descriptor: project('p', 'P'), versionToken: ''}]) {
+    const adapter = {readProject: async () => bad, observe: () => idleObservation(new AbortController().signal)};
+    const browser = createProjectBrowser({adapter, presentationRegistry: registryWithProjectProvider(), compositor: fakeCompositor()});
+    await assert.rejects(browser.browse(createProjectSubject({imageId: 'img', projectId: 'p'})), /must return \{descriptor, versionToken\}/);
+  }
 });

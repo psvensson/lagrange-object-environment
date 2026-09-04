@@ -89,7 +89,8 @@ async function setup() {
     packCompositeValue: imagesApi.packCompositeValue,
     unpackCompositeValue: imagesApi.unpackCompositeValue,
     normalizeTypeDeclarations: imagesApi.normalizeTypeDeclarations,
-    authorizedReadProjectDescriptor: imagesApi.authorizedReadProjectDescriptor,
+    authorizedReadProject: imagesApi.authorizedReadProject,
+    authorizedRenameProject: imagesApi.authorizedRenameProject,
   });
 
   const schema = await adapter.ensureSchema(IMAGE, IDS);
@@ -143,7 +144,8 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
         packCompositeValue: imagesApi.packCompositeValue,
         unpackCompositeValue: imagesApi.unpackCompositeValue,
         normalizeTypeDeclarations: imagesApi.normalizeTypeDeclarations,
-        authorizedReadProjectDescriptor: imagesApi.authorizedReadProjectDescriptor,
+        authorizedReadProject: imagesApi.authorizedReadProject,
+        authorizedRenameProject: imagesApi.authorizedRenameProject,
       }).ensureSchema('bare', IDS),
       /no Smalltalk kernel/,
     );
@@ -167,7 +169,13 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
       'object/read',
       imagesApi.objectResource(IMAGE, imagesApi.projectObjectId(projectId)),
     );
-    const descriptor = await adapter.readProject({imageId: IMAGE, projectId, authority: projectAuthority});
+    const read = await adapter.readProject({imageId: IMAGE, projectId, authority: projectAuthority});
+    // The version-aware seam: {descriptor, versionToken} returned UNCHANGED.
+    assert.deepEqual(Object.keys(read).sort(), ['descriptor', 'versionToken']);
+    assert.ok(Object.isFrozen(read), 'Images returns a frozen result; the adapter passes it through');
+    assert.equal(typeof read.versionToken, 'string');
+    assert.ok(read.versionToken.length > 0, 'the token is an opaque non-empty string (never interpreted here)');
+    const {descriptor} = read;
     assert.equal(descriptor.name, 'Adapter Project');
     assert.deepEqual(descriptor.members.map(({key, role, target}) => ({key, role, target})), [
       {key: 'a-first', role: 'source', target: imagesApi.objectRef(IMAGE, 'target-a')},
@@ -937,7 +945,7 @@ test('createImageClientAdapter validates services and helpers (unit, no runtime)
     images: {}, invocations: {}, executor: {}, authority: {require: () => {}},
     defineClass: () => {}, installCallableInterfaceV2: () => {}, installImageCreationBinding: () => {},
     installImageMutationBinding: () => {}, installImageObjectReadBinding: () => {}, installImageObservationBinding: () => {}, findSmalltalkKernel: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
-    objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, unpackCompositeValue: () => {}, normalizeTypeDeclarations: () => {}, authorizedReadProjectDescriptor: () => {},
+    objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, unpackCompositeValue: () => {}, normalizeTypeDeclarations: () => {}, authorizedReadProject: () => {}, authorizedRenameProject: () => {},
   };
   assert.ok(createImageClientAdapter(good));
   const missing = {...good};
@@ -947,8 +955,11 @@ test('createImageClientAdapter validates services and helpers (unit, no runtime)
   delete noObservation.installImageObservationBinding;
   assert.throws(() => createImageClientAdapter(noObservation), /missing required helper: installImageObservationBinding/);
   const noProjectRead = {...good};
-  delete noProjectRead.authorizedReadProjectDescriptor;
-  assert.throws(() => createImageClientAdapter(noProjectRead), /missing required helper: authorizedReadProjectDescriptor/);
+  delete noProjectRead.authorizedReadProject;
+  assert.throws(() => createImageClientAdapter(noProjectRead), /missing required helper: authorizedReadProject/);
+  const noProjectRename = {...good};
+  delete noProjectRename.authorizedRenameProject;
+  assert.throws(() => createImageClientAdapter(noProjectRename), /missing required helper: authorizedRenameProject/);
   const noAuthorityRequire = {...good, authority: {}};
   assert.throws(() => createImageClientAdapter(noAuthorityRequire), /authority service is missing required operation: require/);
 });
@@ -964,12 +975,13 @@ test('readProject delegates the Images-owned demand unchanged to the injected au
     defineClass: () => {}, installCallableInterfaceV2: () => {}, installImageCreationBinding: () => {},
     installImageMutationBinding: () => {}, installImageObjectReadBinding: () => {}, installImageObservationBinding: () => {}, findSmalltalkKernel: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
     objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, unpackCompositeValue: () => {}, normalizeTypeDeclarations: () => {},
-    authorizedReadProjectDescriptor: ({images, imageId, projectId, require}) => {
+    authorizedRenameProject: () => {},
+    authorizedReadProject: ({images, imageId, projectId, require}) => {
       assert.equal(images, client.images);
       assert.equal(imageId, 'img');
       assert.equal(projectId, 'p');
       require(demand);
-      return descriptor;
+      return Object.freeze({descriptor, versionToken: 'tok-owner-opaque'});
     },
   };
 
@@ -977,7 +989,9 @@ test('readProject delegates the Images-owned demand unchanged to the injected au
     imageId: 'img', projectId: 'p', authority: context,
   });
 
-  assert.equal(result, descriptor, 'the canonical descriptor is returned unchanged');
+  assert.equal(result.descriptor, descriptor, 'the canonical descriptor is returned unchanged');
+  assert.equal(result.versionToken, 'tok-owner-opaque', 'the opaque token is returned unchanged (never decoded)');
+  assert.deepEqual(Object.keys(result).sort(), ['descriptor', 'versionToken'], 'the Images result shape crosses unchanged');
   assert.deepEqual(calls, [{receivedContext: context, receivedDemand: demand}],
     'the adapter bridges the opaque context and exact owner-created demand only');
 });
@@ -987,7 +1001,7 @@ test('ensureSchema validates its ids eagerly (unit)', async () => {
     images: {}, invocations: {}, executor: {}, authority: {require: () => {}},
     defineClass: () => {}, installCallableInterfaceV2: () => {}, installImageCreationBinding: () => {},
     installImageMutationBinding: () => {}, installImageObjectReadBinding: () => {}, installImageObservationBinding: () => {}, findSmalltalkKernel: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
-    objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, unpackCompositeValue: () => {}, normalizeTypeDeclarations: () => {}, authorizedReadProjectDescriptor: () => {},
+    objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, unpackCompositeValue: () => {}, normalizeTypeDeclarations: () => {}, authorizedReadProject: () => {}, authorizedRenameProject: () => {},
   };
   const adapter = createImageClientAdapter(good);
   await assert.rejects(adapter.ensureSchema('img', {}), /ids\.shapeId/);
@@ -1035,7 +1049,7 @@ test('no ordinary runtime-facing path calls images.getObject directly (audit)', 
     const next = rest.slice(1).search(/\n  (async )?function \w+\(/);
     return next === -1 ? rest : rest.slice(0, next + 1);
   };
-  for (const name of ['readProject', 'authorizedReadObject', 'readObject', 'loadPerspective']) {
+  for (const name of ['readProject', 'renameProject', 'authorizedReadObject', 'readObject', 'loadPerspective']) {
     assert.ok(
       !bodyOf(name).includes('images.getObject('),
       `${name} must not call images.getObject; it must cross the authorized object/read lane`,
@@ -1069,4 +1083,145 @@ test('the restricted observation path never calls images.history (audit)', () =>
   const observeBody = observeNext === -1 ? observeRest : observeRest.slice(0, observeNext + 1);
   assert.ok(observeBody.includes('observePull'), 'observe must poll through the authorized lane (observePull)');
   assert.ok(!observeBody.includes('history'), 'observe must not touch the history stream');
+});
+
+// ---------------------------------------------------------------------------
+// okv Slice B: the version-aware Project bridge (Images ADR 0080 consumed).
+// ---------------------------------------------------------------------------
+
+test('renameProject delegates to authorizedRenameProject mapping ONLY the argument name, bridges require, makes ZERO images.* calls, returns the result unchanged (unit)', async () => {
+  const context = Object.freeze({opaque: true});
+  const demand = Object.freeze({operation: 'owner/decides', resource: 'owner/opaque'});
+  const calls = [];
+  const imagesCalls = [];
+  // Any touch of the images service by renameProject is a violation (the adapter
+  // must not fetch, mint, default or validate a token).
+  const images = new Proxy({}, {get(_t, prop) { imagesCalls.push(String(prop)); return () => { throw new Error(`renameProject touched images.${String(prop)}`); }; }});
+  const client = {
+    images, invocations: {}, executor: {},
+    authority: {require: (receivedContext, receivedDemand) => calls.push({receivedContext, receivedDemand})},
+    defineClass: () => {}, installCallableInterfaceV2: () => {}, installImageCreationBinding: () => {},
+    installImageMutationBinding: () => {}, installImageObjectReadBinding: () => {}, installImageObservationBinding: () => {}, findSmalltalkKernel: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
+    objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, unpackCompositeValue: () => {}, normalizeTypeDeclarations: () => {},
+    authorizedReadProject: () => {},
+    authorizedRenameProject: ({images: receivedImages, imageId, projectId, name, expectedVersionToken, require, ...rest}) => {
+      assert.equal(receivedImages, images);
+      assert.equal(imageId, 'img');
+      assert.equal(projectId, 'p');
+      assert.equal(name, 'Renamed');
+      assert.equal(expectedVersionToken, 'tok-verbatim', 'the Environment versionToken becomes Images expectedVersionToken, verbatim');
+      assert.deepEqual(rest, {}, 'no other argument crosses');
+      require(demand);
+      return Object.freeze({versionToken: 'tok-new-opaque'});
+    },
+  };
+  const result = await createImageClientAdapter(client).renameProject({
+    imageId: 'img', projectId: 'p', name: 'Renamed', versionToken: 'tok-verbatim', authority: context,
+  });
+  assert.deepEqual(result, {versionToken: 'tok-new-opaque'}, 'the Images result is returned unchanged');
+  assert.deepEqual(calls, [{receivedContext: context, receivedDemand: demand}], 'require is bridged with the opaque context and the owner-created demand only');
+  assert.deepEqual(imagesCalls, [], 'renameProject never touches the images service (no token fetch/default)');
+});
+
+// TOKEN-DECODING AUDIT: the Project bridge must never inspect a Project version
+// token. The adapter legitimately ships a token decoder for its own createObject
+// flow, so this is a BODY-level audit of the two Project seams, not a
+// client-surface check.
+test('readProject/renameProject bodies never decode, parse or split a version token (audit)', () => {
+  const source = readFileSync(resolve(HERE, '../src/image-client-adapter.js'), 'utf8');
+  const bodyOf = (name) => {
+    const start = source.indexOf(`async function ${name}`);
+    assert.notEqual(start, -1, `${name} must exist`);
+    const rest = source.slice(start);
+    const next = rest.slice(1).search(/\n  (async )?function \w+\(/);
+    return next === -1 ? rest : rest.slice(0, next + 1);
+  };
+  for (const name of ['readProject', 'renameProject']) {
+    const body = bodyOf(name);
+    for (const needle of ['objectIdFromVersionToken', 'parseObjectResource', "split(':')", 'objectVersionToken(', 'projectObjectId']) {
+      assert.ok(!body.includes(needle), `${name} must not contain ${needle}: the adapter never decodes/mints a Project token or names a Project object id`);
+    }
+  }
+});
+
+test('Project bridge against real Images: rename with a fresh token; stale token -> ObjectMutationConflictError -> CommandConflictError via the dispatcher; foreign token -> NOT a conflict; token scope: member add changes it, retarget does not', {skip: !available && 'lagrange-images sibling runtime not available'}, async () => {
+  const {runtime, adapter} = await setup();
+  const projectId = 'bridge-project';
+  await imagesApi.createProject({images: runtime.images, imageId: IMAGE, projectId, name: 'Old'});
+  await imagesApi.addProjectMember({
+    images: runtime.images, imageId: IMAGE, projectId,
+    key: 'm', role: 'source', target: imagesApi.objectRef(IMAGE, 'target-1'),
+  });
+  const projectResource = imagesApi.objectResource(IMAGE, imagesApi.projectObjectId(projectId));
+  const readAuthority = grant(runtime, 'object/read', projectResource);
+  const writeAuthority = grant(runtime, 'object/write', projectResource);
+
+  // A successful rename with the token of the current read returns a NEW token;
+  // the change is visible only through a fresh authorized read.
+  const first = await adapter.readProject({imageId: IMAGE, projectId, authority: readAuthority});
+  const renamed = await adapter.renameProject({imageId: IMAGE, projectId, name: 'New', versionToken: first.versionToken, authority: writeAuthority});
+  assert.deepEqual(Object.keys(renamed), ['versionToken'], 'rename returns only the new opaque token (no descriptor: the consumer must reread)');
+  assert.notEqual(renamed.versionToken, first.versionToken);
+  const second = await adapter.readProject({imageId: IMAGE, projectId, authority: readAuthority});
+  assert.equal(second.descriptor.name, 'New');
+  assert.equal(second.versionToken, renamed.versionToken, 'the reread pairs the token the write returned');
+
+  // STALE: the old token now conflicts. The adapter does NOT translate (raw
+  // Images error); the existing dispatcher owner maps it to CommandConflictError.
+  await assert.rejects(
+    adapter.renameProject({imageId: IMAGE, projectId, name: 'Stale', versionToken: first.versionToken, authority: writeAuthority}),
+    (error) => error?.name === 'ObjectMutationConflictError',
+    'the adapter surfaces Images own conflict error untranslated',
+  );
+  const {createCommandDispatcher} = await import('../src/command-dispatcher.js');
+  const dispatcher = createCommandDispatcher({image: ({command, subject, authority, context}) => command.invoke(subject, {...context, authority, adapter})});
+  const renameCommand = new Command({
+    id: 'rename-project-probe', title: 'rename', applies: (subject) => subject?.kind === 'project',
+    invoke: (subject, {adapter: a, authority, text, versionToken}) => a.renameProject({imageId: subject.imageId, projectId: subject.projectId, name: text, versionToken, authority}),
+  });
+  const subject = {kind: 'project', imageId: IMAGE, projectId};
+  await assert.rejects(
+    dispatcher.dispatch({command: renameCommand, subject, authority: writeAuthority, context: {text: 'Stale', versionToken: first.versionToken}}),
+    (error) => error?.name === 'CommandConflictError',
+    'CommandDispatcher (the existing error owner) maps the stale conflict',
+  );
+  // FOREIGN token (well-formed, scoped to another object): NOT a conflict — Images
+  // rejects it before authorization as ObjectVersionTokenError; the dispatcher
+  // reports it as an execution error. A translator that treated every token
+  // failure as a conflict would fail here.
+  const foreign = imagesApi.objectVersionToken(IMAGE, 'some-other-object', 0);
+  await assert.rejects(
+    adapter.renameProject({imageId: IMAGE, projectId, name: 'X', versionToken: foreign, authority: writeAuthority}),
+    (error) => error?.name === 'ObjectVersionTokenError',
+  );
+  await assert.rejects(
+    dispatcher.dispatch({command: renameCommand, subject, authority: writeAuthority, context: {text: 'X', versionToken: foreign}}),
+    (error) => error?.name === 'CommandExecutionError',
+    'a foreign token is not a conflict',
+  );
+  assert.equal((await adapter.readProject({imageId: IMAGE, projectId, authority: readAuthority})).descriptor.name, 'New', 'neither failed rename changed the Project');
+
+  // DENIED write: no rename, AuthorityError (with a well-formed current token,
+  // because Images checks the token shape before authority).
+  await assert.rejects(
+    adapter.renameProject({imageId: IMAGE, projectId, name: 'Denied', versionToken: second.versionToken, authority: readAuthority}),
+    (error) => error?.name === 'AuthorityError',
+  );
+
+  // TOKEN SCOPE (a consumed-contract characterization; Images ADR 0080 owns the
+  // rule): the token describes the Project OBJECT. A member ADD rewrites its
+  // linkage -> new token; a member RETARGET (same key + role) rewrites the member
+  // record only -> same token while the descriptor changed.
+  const beforeAdd = await adapter.readProject({imageId: IMAGE, projectId, authority: readAuthority});
+  await imagesApi.addProjectMember({images: runtime.images, imageId: IMAGE, projectId, key: 'n', role: 'lib', target: imagesApi.objectRef(IMAGE, 'target-2')});
+  const afterAdd = await adapter.readProject({imageId: IMAGE, projectId, authority: readAuthority});
+  assert.notEqual(afterAdd.versionToken, beforeAdd.versionToken, 'member add changes the Project token');
+  assert.equal(afterAdd.descriptor.members.length, 2);
+  await imagesApi.addProjectMember({images: runtime.images, imageId: IMAGE, projectId, key: 'n', role: 'lib', target: imagesApi.objectRef(IMAGE, 'target-3')});
+  const afterRetarget = await adapter.readProject({imageId: IMAGE, projectId, authority: readAuthority});
+  assert.equal(afterRetarget.versionToken, afterAdd.versionToken, 'member retarget does NOT change the Project token (the member record changed, not the Project object)');
+  assert.equal(afterRetarget.descriptor.members.find((m) => m.key === 'n').target.objectId, 'target-3', '…while the descriptor did change');
+  const again = await adapter.readProject({imageId: IMAGE, projectId, authority: readAuthority});
+  assert.equal(again.versionToken, afterRetarget.versionToken, 'two reads with no write yield the same token');
+  await runtime.close();
 });
