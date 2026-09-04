@@ -694,3 +694,89 @@ async fn dropping_the_actor_still_bounds_a_never_settling_command() {
         .expect_err("abandoned command must error");
     assert!(format!("{err}").contains(ABANDONED));
 }
+
+// ---------------------------------------------------------------------------
+// Bead c4g: ready QuickJS jobs drain in bounded lock-holding batches.
+// ---------------------------------------------------------------------------
+
+/// A synchronous Eval can complete after scheduling a Promise reaction whose
+/// every run schedules another reaction. The command's response is already
+/// delivered, but the old unbounded post-command drain never returns to observe
+/// the b41 whole-drain deadline. This characterization must time out before the
+/// c4g batching fix and complete with ready-job abandonment afterwards. The
+/// first reaction also schedules an async capability; shutdown must remain
+/// bounded without handing the still-nonquiescent raw queue to DriveFuture.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_bounds_a_self_perpetuating_ready_job_chain() {
+    let actor = JsEnvActor::spawn(EmbeddedLoader::new()).expect("spawn actor");
+    let (gate_tx, _started) = install_gated_capability(&actor, "__stormCapability").await;
+    actor
+        .eval(
+            r#"Promise.resolve().then(function startReadyJobStorm() {
+  void __stormCapability();
+  Promise.resolve().then(function readyJobStorm() {
+    Promise.resolve().then(readyJobStorm);
+  });
+});"#,
+        )
+        .await
+        .expect("schedule self-perpetuating ready-job chain");
+
+    let outcome = bounded(
+        "shutdown behind a self-perpetuating ready-job chain",
+        actor.shutdown_within(SHORT_GRACE),
+    )
+    .await;
+    assert_eq!(
+        outcome,
+        ShutdownOutcome::AbandonedReadyJobs,
+        "the Eval completed before only its ready-job chain was abandoned"
+    );
+    drop(gate_tx);
+}
+
+/// The batch size is a lock-holding bound, never a total work limit. A finite
+/// chain much larger than one batch must reach quiescence before the next queued
+/// command observes it, and shutdown must remain clean.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn finite_ready_job_chains_drain_completely_across_batches() {
+    const FINITE_JOBS: usize = 10_000;
+
+    let actor = JsEnvActor::spawn(EmbeddedLoader::new()).expect("spawn actor");
+    let completed = Arc::new(AtomicUsize::new(0));
+    {
+        let completed_in_job = Arc::clone(&completed);
+        actor
+            .with_context(move |ctx| {
+                let count_job = Function::new(ctx.clone(), move || {
+                    completed_in_job.fetch_add(1, Ordering::SeqCst);
+                })
+                .map_err(rquickjs::Error::from)?;
+                ctx.globals().set("__countFiniteReadyJob", count_job)?;
+                Ok(())
+            })
+            .await
+            .expect("install finite ready-job counter");
+    }
+    let source = format!(
+        r#"globalThis.__finiteReadyJobs = 0;
+Promise.resolve().then(function finiteReadyJobs() {{
+  globalThis.__finiteReadyJobs += 1;
+  __countFiniteReadyJob();
+  if (globalThis.__finiteReadyJobs < {FINITE_JOBS}) {{
+    Promise.resolve().then(finiteReadyJobs);
+  }}
+}});"#
+    );
+    actor
+        .eval(&source)
+        .await
+        .expect("schedule finite ready-job chain");
+
+    assert_eq!(actor.shutdown().await, ShutdownOutcome::Clean);
+    assert_eq!(
+        completed.load(Ordering::SeqCst),
+        FINITE_JOBS,
+        "shutdown must drain the complete finite chain, not one fixed total batch"
+    );
+}

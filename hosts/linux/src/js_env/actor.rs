@@ -51,8 +51,11 @@
 //!     naming the command kind (the std-channel `push_blocking` producer unblocks
 //!     with it too); never a silent drop. Every later `EvalAsync`/`Push` dequeued
 //!     before `Shutdown` is abandoned the same way. `shutdown*` reports
-//!     `ShutdownOutcome::AbandonedInFlight` (else `Clean`; `OwnerGone` if the
-//!     owner thread exited without answering).
+//!     `ShutdownOutcome::AbandonedInFlight` (or the combined ready-jobs variant;
+//!     see below). Ready QuickJS jobs are drained in bounded lock-holding batches
+//!     with no fixed total cap; if the same deadline passes while a raw ready-job
+//!     chain remains, that work is abandoned and reported separately. Otherwise
+//!     shutdown is `Clean`; `OwnerGone` means the owner exited without answering.
 //!   - Abandonment abandons the OBSERVATION, not the guest computation: the
 //!     normal post-command `drain_jobs` + no-op-spawn kick still runs (it also
 //!     repairs the scheduler waker slot on this path), so ready continuations of
@@ -64,13 +67,19 @@
 //!     because of this architecture: all QuickJS contact is on the owner thread,
 //!     and between polls no other task on it runs and no other thread can hold
 //!     the lock. Do not move the drop elsewhere.
+//!   - Ready QuickJS jobs are drained to quiescence with NO fixed total job cap,
+//!     but in bounded batches which release the runtime lock and re-observe the
+//!     same whole-drain deadline between batches. While raw jobs remain, this
+//!     actor is their exclusive driver: it does not wake/yield to rquickjs's
+//!     `DriveFuture`, whose own raw-job drain is unbounded. Past the deadline,
+//!     remaining ready jobs are abandoned; the owner skips further timer/job
+//!     drains and proceeds directly through the serialized queue to `Shutdown`.
 //!   - NOT covered by the bound (documented escape hatches): ANY non-returning
 //!     SYNCHRONOUS JavaScript, whichever command carries it — a sync `Eval`/
 //!     `WithContext`, or a `while(true){}` inside an `EvalAsync`/`Push` body (the
 //!     pump cannot preempt a single poll; needs a QuickJS interrupt handler — a
-//!     separate semantic decision); a sync command dequeued after the deadline
-//!     (it still runs to completion); and a self-perpetuating job storm inside
-//!     `drain_jobs` (`while ctx.execute_pending_job() {}` is unbounded).
+//!     separate semantic decision); and a sync command dequeued after the
+//!     deadline (it still runs to completion).
 //!
 //! This is the "one explicit JS-runtime execution owner" the charter demands,
 //! established by the wrapper rather than assumed from `parallel`.
@@ -114,17 +123,27 @@ use tokio::sync::{mpsc as tokio_mpsc, oneshot, watch};
 /// hung binary now fails within this bound instead of the CI job timeout.
 pub const DEFAULT_SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
+/// Maximum raw QuickJS jobs executed while holding the runtime lock once.
+/// This is a batch size, NOT a total limit: finite chains keep draining across
+/// batches until quiescence unless the existing shutdown deadline expires.
+const READY_JOB_BATCH_SIZE: usize = 64;
+
 /// What a bounded shutdown drain did (Bead b41). `Clean`: every queued command
 /// settled before the deadline. `AbandonedInFlight`: at least one `EvalAsync`/
 /// `Push` was abandoned past the deadline (each such caller got the explicit
-/// abandonment error). `OwnerGone`: the owner thread exited or panicked without
-/// answering the `Shutdown` command — nothing is known about queued commands
-/// (their callers see `owner dropped response`). Deliberately NOT `#[must_use]`:
-/// existing statement-position callers are fine ignoring it.
+/// abandonment error). `AbandonedReadyJobs`: a command had completed, but raw
+/// ready jobs it scheduled were abandoned past the deadline.
+/// `AbandonedInFlightAndReadyJobs`: both kinds were abandoned. `OwnerGone`: the
+/// owner thread exited or panicked without answering the `Shutdown` command —
+/// nothing is known about queued commands (their callers see `owner dropped
+/// response`). Deliberately NOT `#[must_use]`: existing statement-position
+/// callers are fine ignoring it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShutdownOutcome {
     Clean,
     AbandonedInFlight,
+    AbandonedReadyJobs,
+    AbandonedInFlightAndReadyJobs,
     OwnerGone,
 }
 
@@ -133,7 +152,14 @@ enum CommandOutcome<T> {
     Completed(T),
     /// The whole-drain deadline passed while the command was in flight; its
     /// future was dropped (see the module doc "Shutdown policy").
-    Abandoned,
+    Abandoned { ready_jobs: bool },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DrainJobsOutcome {
+    Quiescent,
+    MoreReadyJobs,
+    AbandonedReadyJobs,
 }
 
 use super::JsEnvOwner;
@@ -246,6 +272,10 @@ impl JsEnvActor {
                     // Set when an in-flight async command is abandoned past the
                     // shutdown deadline; reported through Shutdown's completion.
                     let mut abandoned_in_flight = false;
+                    // Set when a raw ready-job chain remains at the same deadline.
+                    // Once set, never enter timer/job draining again: doing so would
+                    // immediately re-enter the work shutdown deliberately abandoned.
+                    let mut abandoned_ready_jobs = false;
 
                     // Command loop: process commands; drive() runs concurrently on
                     // the LocalSet so JS continuations progress between commands.
@@ -255,15 +285,27 @@ impl JsEnvActor {
                     // registry uses Date.now() (epoch-ms); the owner reads the same
                     // clock domain via SystemTime.
                     loop {
-                        // Fire any timers already due, then compute when the next
-                        // is due (None = no pending timers -> wait indefinitely).
-                        fire_due_timers(&owner).await;
-                        // Firing a timer resolves a guest `setTimeout` promise via a SYNC
-                        // host callback, enqueuing a bare QuickJS job that wakes nobody —
-                        // drain those ready continuations NOW on the owner thread (the
-                        // image-observation follow is exactly such a continuation).
-                        drain_jobs(&owner).await;
-                        let next_due_ms = next_timer_due_ms(&owner).await;
+                        // Once ready work has been abandoned, go directly to the
+                        // serialized command queue. Firing/draining again would re-enter
+                        // the abandoned storm before the queued Shutdown can be received.
+                        let next_due_ms = if abandoned_ready_jobs {
+                            None
+                        } else {
+                            // Fire any timers already due, then compute when the next
+                            // is due (None = no pending timers -> wait indefinitely).
+                            fire_due_timers(&owner).await;
+                            // Firing a timer resolves a guest `setTimeout` promise via a
+                            // SYNC host callback, enqueuing a bare QuickJS job that wakes
+                            // nobody. Drain those ready continuations on the owner thread.
+                            if drain_jobs(&owner, &deadline_rx).await
+                                == DrainJobsOutcome::AbandonedReadyJobs
+                            {
+                                abandoned_ready_jobs = true;
+                                None
+                            } else {
+                                next_timer_due_ms(&owner).await
+                            }
+                        };
 
                         // Wait for the next command, the next timer's due time,
                         // OR a timer-registry change (a setTimeout registered by a
@@ -272,7 +314,9 @@ impl JsEnvActor {
                         // missed-wakeup fix: without it a timer registered while
                         // the loop is parked (esp. in the no-pending-timers branch)
                         // would never fire until an unrelated command arrived.
-                        let cmd = if let Some(due_ms) = next_due_ms {
+                        let cmd = if abandoned_ready_jobs {
+                            rx.recv().await
+                        } else if let Some(due_ms) = next_due_ms {
                             let now_ms = epoch_ms();
                             let wait = due_ms.saturating_sub(now_ms);
                             tokio::select! {
@@ -308,8 +352,9 @@ impl JsEnvActor {
                                 .await
                                 {
                                     CommandOutcome::Completed(r) => r,
-                                    CommandOutcome::Abandoned => {
+                                    CommandOutcome::Abandoned { ready_jobs } => {
                                         abandoned_in_flight = true;
+                                        abandoned_ready_jobs |= ready_jobs;
                                         Err(abandonment_error("EvalAsync"))
                                     }
                                 };
@@ -328,19 +373,24 @@ impl JsEnvActor {
                                 .await
                                 {
                                     CommandOutcome::Completed(r) => r,
-                                    CommandOutcome::Abandoned => {
+                                    CommandOutcome::Abandoned { ready_jobs } => {
                                         abandoned_in_flight = true;
+                                        abandoned_ready_jobs |= ready_jobs;
                                         Err(abandonment_error("Push"))
                                     }
                                 };
                                 let _ = done.send(r); // std channel: wakes any blocked producer
                             }
                             OwnerCommand::Shutdown { done } => {
-                                let _ = done.send(if abandoned_in_flight {
-                                    ShutdownOutcome::AbandonedInFlight
-                                } else {
-                                    ShutdownOutcome::Clean
-                                });
+                                let outcome = match (abandoned_in_flight, abandoned_ready_jobs) {
+                                    (false, false) => ShutdownOutcome::Clean,
+                                    (true, false) => ShutdownOutcome::AbandonedInFlight,
+                                    (false, true) => ShutdownOutcome::AbandonedReadyJobs,
+                                    (true, true) => {
+                                        ShutdownOutcome::AbandonedInFlightAndReadyJobs
+                                    }
+                                };
+                                let _ = done.send(outcome);
                                 break;
                             }
                         }
@@ -350,8 +400,15 @@ impl JsEnvActor {
                         // jobs on the owner thread so those chains progress even when no
                         // eval is in flight; then yield so the drive task runs spawned
                         // (capability) futures on this thread.
-                        drain_jobs(&owner).await;
-                        tokio::task::yield_now().await;
+                        if !abandoned_ready_jobs {
+                            if drain_jobs(&owner, &deadline_rx).await
+                                == DrainJobsOutcome::AbandonedReadyJobs
+                            {
+                                abandoned_ready_jobs = true;
+                            } else {
+                                tokio::task::yield_now().await;
+                            }
+                        }
                     }
                 });
             })
@@ -642,7 +699,7 @@ where
         let deadline = *shutdown_deadline.borrow_and_update();
         if let Some(deadline) = deadline {
             if Instant::now() >= deadline {
-                return CommandOutcome::Abandoned;
+                return CommandOutcome::Abandoned { ready_jobs: false };
             }
         }
 
@@ -691,7 +748,11 @@ where
         // drain_jobs' no-op-spawn kick so the long-lived DriveFuture reclaims the
         // pinned scheduler waker before the command is polled again.
         fire_due_timers(owner).await;
-        drain_jobs(owner).await;
+        if drain_jobs(owner, shutdown_deadline).await
+            == DrainJobsOutcome::AbandonedReadyJobs
+        {
+            return CommandOutcome::Abandoned { ready_jobs: true };
+        }
     }
 }
 
@@ -704,46 +765,97 @@ fn epoch_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// Drain every READY QuickJS job on the owner thread until quiescence.
+/// Drain READY QuickJS jobs on the owner thread until quiescence or shutdown.
 ///
 /// A guest promise resolved by a SYNC host callback (`fire_due_timers`, a
 /// fire-and-forget push handler's synchronous routing) enqueues a bare QuickJS
 /// job WITHOUT waking the parked `DriveFuture` (only `spawner.push` wakes it).
 /// Left undrained, those continuations stall in any command-quiet embedding
 /// (production, not a poll-happy test harness) — the environment stops reacting.
-/// Draining stops at quiescence — when only SPAWNED capability futures (which the
-/// `DriveFuture` owns) remain pending, there are no more ready QuickJS jobs — so
-/// this never blocks on a suspended continuation; it just flushes the ready ones
-/// the drive task was never woken for.
-async fn drain_jobs(owner: &JsEnvOwner) {
-    owner
-        .with(|ctx| {
-            // `Ctx::execute_pending_job` calls `JS_ExecutePendingJob` directly: it
-            // drains ONE ready QuickJS job per call and does NOT poll the runtime's
-            // spawned-task scheduler. That distinction is load-bearing — the async
-            // `AsyncRuntime::execute_pending_job` polls the scheduler when no job is
-            // ready, and the scheduler keeps a SINGLE waker slot
-            // (`should_poll.waker().register(cx)`, schedular.rs:145, last-poller-wins).
-            // Polling it from here would re-register that slot away from the parked
-            // `DriveFuture`, so a spawned capability/timer future completing later
-            // would wake THIS (already-finished) drain task and the continuation would
-            // never run (the resumed-continuation-timer regression). Draining via the
-            // Ctx touches only bare QuickJS jobs and leaves the scheduler's waker
-            // registered to the drive task.
-            while ctx.execute_pending_job() {}
-            // ...but a command's OWN `WithFuture` (eval_async / push delivery) may
-            // ALREADY have stolen that single slot by polling the scheduler with the
-            // command-loop waker while its promise pended on a job hop. If the command
-            // then completes with no `spawner.push`, a later capability-oneshot
-            // resolution wakes the STALE command-loop waker, and the re-queued spawned
-            // task stalls (a bare-job drain cannot reach spawned tasks). Kick the
-            // DriveFuture so it re-polls, re-registers its OWN waker in the slot, and
-            // drains any re-queued spawned task: a no-op spawn is a `spawner.push`
-            // (spawner.rs:34 wakes every listened waker). It runs after the drain so
-            // the slot is re-registered AFTER the command's steal.
-            ctx.spawn(async {});
-        })
-        .await;
+///
+/// There is deliberately no fixed TOTAL job limit. Each runtime-lock acquisition
+/// executes at most `READY_JOB_BATCH_SIZE` jobs; finite chains continue across as
+/// many batches as they need. Between batches the lock is released and the
+/// existing whole-drain shutdown deadline is re-observed synchronously.
+///
+/// While raw jobs remain this function MUST NOT wake or yield to rquickjs's
+/// `DriveFuture`: its poll implementation drains the raw job queue without a
+/// bound before it polls spawned futures, recreating c4g outside this deadline
+/// loop. The no-op spawn kick is therefore performed only at raw-job quiescence.
+async fn drain_jobs(
+    owner: &JsEnvOwner,
+    shutdown_deadline: &watch::Receiver<Option<Instant>>,
+) -> DrainJobsOutcome {
+    loop {
+        let deadline_reached = shutdown_deadline
+            .borrow()
+            .is_some_and(|deadline| Instant::now() >= deadline);
+
+        let outcome = owner
+            .with(|ctx| {
+                // `Ctx::execute_pending_job` calls `JS_ExecutePendingJob` directly:
+                // it drains ONE raw QuickJS job and never polls the spawned-task
+                // scheduler. `JS_IsJobPending` likewise inspects only QuickJS's raw
+                // job list; `AsyncRuntime::is_job_pending` is intentionally unusable
+                // here because it also counts spawned futures.
+                let raw_jobs_pending = || {
+                    // SAFETY: `owner.with` holds the rquickjs runtime lock, `ctx` is
+                    // live for this closure, and JS_GetRuntime returns its owning
+                    // runtime. JS_IsJobPending is a read-only query on that runtime.
+                    unsafe {
+                        let runtime = rquickjs::qjs::JS_GetRuntime(ctx.as_raw().as_ptr());
+                        rquickjs::qjs::JS_IsJobPending(runtime)
+                    }
+                };
+
+                if deadline_reached {
+                    if raw_jobs_pending() {
+                        return DrainJobsOutcome::AbandonedReadyJobs;
+                    }
+                    // Raw jobs are quiescent, so it is now safe to wake DriveFuture.
+                    ctx.spawn(async {});
+                    return DrainJobsOutcome::Quiescent;
+                }
+
+                for _ in 0..READY_JOB_BATCH_SIZE {
+                    if !ctx.execute_pending_job() {
+                        // A command's `WithFuture` may have stolen the scheduler's
+                        // single waker slot. At raw-job quiescence, a no-op spawn safely
+                        // wakes DriveFuture so it reclaims that slot.
+                        ctx.spawn(async {});
+                        return DrainJobsOutcome::Quiescent;
+                    }
+                }
+
+                if raw_jobs_pending() {
+                    // Do NOT spawn/yield here. Return from owner.with to release the
+                    // lock, then let this same task synchronously re-check the deadline.
+                    DrainJobsOutcome::MoreReadyJobs
+                } else {
+                    ctx.spawn(async {});
+                    DrainJobsOutcome::Quiescent
+                }
+            })
+            .await;
+
+        match outcome {
+            DrainJobsOutcome::Quiescent => return DrainJobsOutcome::Quiescent,
+            DrainJobsOutcome::MoreReadyJobs => {
+                let deadline_reached = shutdown_deadline
+                    .borrow()
+                    .is_some_and(|deadline| Instant::now() >= deadline);
+                if deadline_reached {
+                    return DrainJobsOutcome::AbandonedReadyJobs;
+                }
+                // More raw jobs remain, but no deadline has passed. Continue in this
+                // task immediately: even yield_now would let DriveFuture enter its own
+                // unbounded raw-job drain before scheduler work.
+            }
+            DrainJobsOutcome::AbandonedReadyJobs => {
+                return DrainJobsOutcome::AbandonedReadyJobs;
+            }
+        }
+    }
 }
 
 /// Fire every guest timer whose `due <= now` on the owner thread. Called by the
