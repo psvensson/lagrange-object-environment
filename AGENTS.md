@@ -131,6 +131,20 @@ A green test that cannot distinguish the intended design from the tempting wrong
 
 ## Verification gate
 
+### Thermal-safe local execution
+
+Local builds and tests must protect the development machine from sustained thermal load.
+
+- Never run build or test commands concurrently, including commands delegated to subagents. Reviewers must remain source-only while another build or test is active.
+- Before each build or test stage, inspect CPU temperature with `sensors`. If the CPU package is at or above 75°C, do not start the stage; wait and recheck until it is below 70°C.
+- Compile Rust with one job (`CARGO_BUILD_JOBS=1`) and run Rust tests with one test thread (`-- --test-threads=1`).
+- Run Node tests with one worker (`node --test --test-concurrency=1 ...`), not the unconstrained `npm test` command.
+- Run expensive commands at reduced scheduling priority with `nice -n 15` where available.
+- Recheck temperature after each stage. If it reaches 80°C, stop launching work and allow the machine to cool below 70°C before continuing.
+- After interrupting a command, confirm that it left no child compiler or test-worker processes behind before starting anything else.
+
+These constraints apply even when parallel execution would otherwise reduce latency. Remote CI may retain its configured concurrency because it does not load the local machine.
+
 Before calling implementation complete:
 
 1. targeted tests pass
