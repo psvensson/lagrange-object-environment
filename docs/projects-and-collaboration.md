@@ -19,7 +19,9 @@ A Project may relate:
 - work items / quests / investigations
 - package manifests and locks
 - imported binary/JAR/component/WASM artifacts
-- runtime definitions and interfaces
+- language import/provenance artifacts
+- native-imported classes, methods and application roots
+- explicit runtime definitions and interfaces that deliberately remain foreign
 - other Projects
 
 Relationships need not be single-parent or exclusive. One object can matter to several Projects without being copied.
@@ -32,6 +34,8 @@ The Object Environment owns human interaction over Projects:
 
 - Project browsers and navigation
 - creation/editing commands using public Project APIs
+- language/application import commands, progress and diagnostics over public Images import APIs
+- presentation of source/provenance and unsupported-import diagnostics
 - history and working-view presentations
 - object/Project diff views
 - merge/conflict explanation and resolution interaction
@@ -40,7 +44,7 @@ The Object Environment owns human interaction over Projects:
 - sharing/invitation flows
 - Project-specific Perspectives
 
-Those must not create a shadow Project/history model.
+Those must not create a shadow Project/history/import model.
 
 ## Current read-only browser
 
@@ -96,20 +100,27 @@ The Object Environment owns the human model built on those primitives:
 
 The environment should not implement a shadow revision database merely to get a branch UI. If it needs a generic primitive, that pressure should go down through a public `lagrange-images` API.
 
-## Mixed-language projects
+## Mixed-language projects and native import
 
-The image-level Project model can relate image-native and foreign/runtime-backed code without pretending they share a physical heap:
+ADR 0085 in `lagrange-images` makes progressive native import the primary convergence path. Language origin and execution representation are therefore deliberately separate.
+
+A Project may contain both the inputs/provenance of an imported ecosystem and the native image structures produced from them:
 
 ```text
 Project
-  +-> Symmetric Smalltalk classes/methods
-  +-> imported Cuis package/class/method structures
+  +-> Cuis source/package/provenance artifacts
+  +-> native-imported Smalltalk classes/methods/application roots
   +-> Rust source + Cargo artifacts
   +-> callable Component/WASM interfaces
+  +-> explicit foreign runtime/service boundaries, where deliberately retained
   `-> notes/tests/data/work items
 ```
 
-The Object Environment makes those relationships directly navigable and editable without redefining them.
+After successful native import, a Cuis-origin class, method or application object is an ordinary Images-native semantic object. The Object Environment navigates and edits it through the same public Images APIs used for other native objects. It may present origin/provenance such as "imported from Cuis", but that provenance must not select a second identity, storage or mutation path.
+
+In particular, the environment must not preserve a shadow `CuisExportClass`/Spur-object world as the editable application model once Images has produced the native class/object. Behaviorless semantic-export objects may still be inspected as import/provenance artifacts when useful.
+
+OpenSmalltalkVM remains Images-owned importer/oracle/explicit foreign-service machinery. The environment may expose commands and diagnostics around those operations, but it does not decide whether unsupported native semantics silently fall back to the VM; ADR 0085 forbids that fallback.
 
 ## Collaboration
 
