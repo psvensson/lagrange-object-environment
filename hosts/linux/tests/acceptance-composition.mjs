@@ -198,8 +198,11 @@ export function setup({imageId, blockIds, seededObjectIds}) {
     });
     const navigatorSurfaceHandle = compositor.surfaceHandleForView('navigator-view');
     const inspectorSurfaceHandle = compositor.surfaceHandleForView('inspector-view');
+    // Bindings name LOGICAL views (navigator/inspector); the Compositor resolves
+    // each emitted GTK handle to the live view at interaction time (Bead 4o8).
+    // The handles below are kept ONLY for the native side's intent labelling.
     session.unsubscribeIntents = shell.bindIntents({
-      adapter: intentAdapter, navigatorSurfaceHandle, inspectorSurfaceHandle,
+      adapter: intentAdapter, navigator: true, inspector: true,
       commandRouter, commandId: 'set-title', authority: inertAuthority, readBlockId: blockIds.read,
       // Diagnostic capture: the bindIntents path is otherwise fire-and-forget
       // (errors swallowed + reread). Capture the last edit error name so the
@@ -333,7 +336,7 @@ export function setup({imageId, blockIds, seededObjectIds}) {
     let edited = false;
     await shell.handleEditField({
       key, text, commandId: 'set-title', commandRouter,
-      inspectorSurfaceHandle: session.inspectorSurfaceHandle,
+      surfaceHandle: session.inspectorSurfaceHandle,
       authority: inertAuthority, readBlockId: blockIds.read,
       onEdited: () => { edited = true; },
       // The error arm never dead-ends: it offers a fresh authorized reread so the

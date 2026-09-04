@@ -375,6 +375,21 @@ function createCompositor({rendererAdapter} = {}) {
     return null;
   }
 
+  // The caller-names-a-view lane: the CURRENT live realization of a logical view
+  // as the same frozen {viewId, presentationDescriptor} snapshot
+  // viewForSurfaceHandle returns, or null when the view is absent or lost. The
+  // liveness predicate lives HERE (status === 'live'), never in a consumer.
+  // The INTENT lane (a renderer emitted a transient handle) MUST use
+  // viewForSurfaceHandle; this accessor exists only for callers that name a
+  // logical view directly. durableIntent() is NOT a substitute for either: it is
+  // persistence/restoration information and includes lost views by design.
+  function liveView(viewId) {
+    const view = views.get(viewId);
+    return view && view.status === 'live'
+      ? Object.freeze({viewId, presentationDescriptor: view.presentationDescriptor})
+      : null;
+  }
+
   // The inverse read-only lookup: a live viewId -> its opaque surface handle (or
   // null). The Compositor owns the view->handle map; this lets a host wire a
   // view's intent stream to its handle without ever persisting the handle
@@ -385,7 +400,7 @@ function createCompositor({rendererAdapter} = {}) {
   }
 
   return Object.freeze({
-    openView, resizeView, presentOn, closeView, destroy, durableIntent, viewStatus, viewForSurfaceHandle, surfaceHandleForView,
+    openView, resizeView, presentOn, closeView, destroy, durableIntent, viewStatus, viewForSurfaceHandle, liveView, surfaceHandleForView,
     focusView, focusedView, clearFocus, interactWithSurface,
   });
 }
