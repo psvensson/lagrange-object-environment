@@ -2,7 +2,9 @@
 
 The early roadmap is ordered to prove the semantic interaction model before investing in polish.
 
-This repository owns the graphical environment plus the human-facing Project/history/collaboration work that previously sat mixed into the `lagrange-images` roadmap. The durable Project model and generic history/versioning semantics remain in `lagrange-images`.
+This repository owns the graphical environment plus the human-facing Project/history/collaboration work that previously sat mixed into the `lagrange-images` roadmap. The durable Project model, native-import semantics and generic history/versioning semantics remain in `lagrange-images`.
+
+`lagrange-images` ADR 0085 makes progressive native import of an existing application the primary language-convergence path. This environment owns the human interaction over that path — import commands/progress/diagnostics, source/provenance presentation and ordinary navigation/editing of the resulting native objects — but it does not own import semantics, runtime fallback or a shadow language-object store.
 
 ## Phase 0 — boundary and vocabulary
 
@@ -17,7 +19,7 @@ This repository owns the graphical environment plus the human-facing Project/his
 - [x] identify command invocation/transaction semantics without adding UI concerns to images (ADR 0010; `src/command-dispatcher.js`)
 - [x] establish Component-backed 2D/3D graphics as ordinary Presentations, with concrete GPU/surface/WIT hosting owned by `RendererAdapter` (ADR 0011; paired with `lagrange-images` ADR 0063)
 
-Success: the environment can represent its semantic state without inventing storage, Project, history, authorization or graphics-object machinery.
+Success: the environment can represent its semantic state without inventing storage, Project, history, authorization, import or graphics-object machinery.
 
 ## Phase 1 — first live object loop ✅ **COMPLETE**
 
@@ -87,27 +89,29 @@ Do not design a common scene graph before the low-level Component boundary is pr
 - [ ] evaluator/transcript
 - [ ] process/activation/runtime views where exposed by images
 - [ ] debugger built from semantic presentations and commands
-- [ ] inspect OpenSmalltalkVM-backed exported structures through explicit image identities/adapters
+- [ ] inspect native-imported classes/methods/objects through the ordinary generic object/language paths
+- [ ] inspect semantic-export/source/provenance artifacts as import evidence without treating them as the editable runtime object model
 
-Success: built-in development feels like inhabiting the image rather than using an external IDE.
+Success: built-in development feels like inhabiting the image rather than using an external IDE. A Cuis-origin object that has been native-imported is edited as the same ordinary Images object any other tool sees.
 
 ## Phase 4 — Project and collaborative-work interaction
 
-The underlying Project model/history remains in Lagrange Images. This phase makes it pleasant to inhabit.
+The underlying Project model/history and native-import semantics remain in Lagrange Images. This phase makes them pleasant to inhabit.
 
 - [x] read-only Project navigation and member relationship presentation (canonical Images descriptor, no shadow Project model; Bead mky)
 - [ ] creation/editing commands over image-level Project APIs — first slice is **rename**; blocked on an Images-owned authorized seam, proposed in `docs/proposals/authorized-project-rename-lane.md` (Bead okv)
-- [ ] mixed native/OpenSmalltalk Project browser
+- [ ] language/application import command + progress/diagnostic presentation over public Images-owned import APIs
+- [ ] mixed Project browser showing source/provenance, native-imported members and any deliberately retained explicit foreign-service boundaries without conflating them
 - [ ] working-view and object/Project-diff presentations
 - [ ] merge/conflict commands and resolution UX over lower conflict data
 - [ ] Git/file projection commands and progress UX
 - [ ] multi-author conflict and activity UX
 
-Success: Project work manipulates one durable image-level model rather than an IDE-side shadow project.
+Success: Project work manipulates one durable image-level model rather than an IDE-side shadow project, and import UX never becomes a second semantic importer.
 
 ## Phase 5 — language personality integration
 
-Start with Symmetric Smalltalk because it is image-native and exposes the architectural pressure most directly.
+Start with Symmetric Smalltalk because it is image-native and exposes the architectural pressure most directly. The first imported personality pressure should come from the Cuis native-import path in Images, not from a separate Cuis IDE architecture here.
 
 - [ ] source and method presentations
 - [ ] class/protocol browser
@@ -115,9 +119,10 @@ Start with Symmetric Smalltalk because it is image-native and exposes the archit
 - [ ] evaluation and debugging commands
 - [ ] language-contributed presentation/command registration
 - [ ] syntax-aware editing kept above language semantic/compiler APIs
-- [ ] prove a second language personality uses the same environment substrate
+- [ ] present Cuis provenance/import diagnostics without changing native object identity or mutation routes
+- [ ] prove a second language personality uses the same environment substrate after Images has established the reusable native-import boundary
 
-Success: adding another language extends the environment rather than adding another IDE architecture.
+Success: adding another language extends the environment rather than adding another IDE architecture. Language origin may change presentation/editing affordances, but it never selects a second object store or authority path.
 
 ## Phase 6 — identity and collaboration UX
 
