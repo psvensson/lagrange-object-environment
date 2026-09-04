@@ -76,6 +76,24 @@ pub fn project(descriptor: &Value) -> Result<SemanticUi, String> {
     children.push(json!({"kind": "text", "role": "heading", "text": heading}));
 
     if kind == "project" {
+        // Editable Project fields come from the threaded `writable` set (Project
+        // FIELD NAMES, not slot ids); an editable field's key is its index in that
+        // array — mirroring semanticUiForPresentation EXACTLY.
+        let empty_writable: Vec<Value> = Vec::new();
+        let project_writable: Vec<&str> = params
+            .get("writable")
+            .and_then(|w| w.as_array())
+            .unwrap_or(&empty_writable)
+            .iter()
+            .filter_map(|s| s.as_str())
+            .collect();
+        let name_text = project.get("name").map(value_text).unwrap_or_default();
+        match project_writable.iter().position(|f| *f == "name") {
+            Some(name_key) => children.push(json!({
+                "kind": "field", "label": "Name", "text": name_text, "key": name_key as i64, "editable": "text",
+            })),
+            None => children.push(json!({"kind": "field", "label": "Name", "text": name_text})),
+        }
         children.push(json!({
             "kind": "field",
             "label": "Project ID",

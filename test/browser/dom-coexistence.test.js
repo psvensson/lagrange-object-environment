@@ -254,6 +254,13 @@ test('CI: the browser realizer renders the checked-in SemanticUi fixtures (all f
       project.clickButton(1);
       out.projectIntent = project.takeIntents();
       project.dispose();
+      // editable project (okv Slice C): the Name field is the ONLY <input>;
+      // Enter emits the ORDINARY edit-field intent (the same bytes as GTK).
+      const editableProject = await window.__lagrangeProof.renderSemanticUiFixture('../fixtures/semantic-ui/project-editable.json', 'project');
+      out.editableProject = {fields: editableProject.fields, fieldInputs: editableProject.fieldInputs, buttons: editableProject.buttons};
+      editableProject.editField(0, 'New');
+      out.editableProjectIntent = editableProject.takeIntents();
+      editableProject.dispose();
       // unavailable + unauthorized: heading + an explicit reason line, no refs.
       const un = await window.__lagrangeProof.renderSemanticUiFixture('../fixtures/semantic-ui/unavailable.json', 'unavailable-reference');
       out.unavailable = {heading: un.heading, reason: un.reason, buttons: un.buttons};
@@ -288,14 +295,19 @@ test('CI: the browser realizer renders the checked-in SemanticUi fixtures (all f
       'the DOM edit-field intent matches the canonical cross-host bytes (edit-field-intent.json)');
     // Project
     assert.equal(result.project.heading, 'Project: Alpha');
-    assert.deepEqual(result.project.fields, ['Project ID', 'Namespace']);
-    assert.deepEqual(result.project.fieldValues, ['project-alpha', '-> workspace']);
+    assert.deepEqual(result.project.fields, ['Name', 'Project ID', 'Namespace']);
+    assert.deepEqual(result.project.fieldValues, ['Alpha', 'project-alpha', '-> workspace']);
     assert.deepEqual(result.project.buttons, [
       'member/a [source] -> image-a/obj-a',
       'member/b [dependency] -> image-b/obj-b',
     ]);
     assert.deepEqual(result.projectIntent, [{kind: 'activate-item', key: 1}],
       'Project activation emits only its descriptor-local integer key');
+    // Editable Project: only Name renders an <input>; its commit is the ordinary intent.
+    assert.deepEqual(result.editableProject.fields, ['Name', 'Project ID', 'Namespace']);
+    assert.deepEqual(result.editableProject.fieldInputs, ['Alpha'], 'only the Name field renders an <input>');
+    assert.deepEqual(result.editableProjectIntent, [{kind: 'edit-field', key: 0, text: 'New'}],
+      'Enter on the Name input emits the ordinary raw-string edit-field intent');
     // unavailable + unauthorized (the previously-uncovered kinds)
     assert.equal(result.unavailable.heading, 'unavailable-reference');
     assert.equal(result.unavailable.reason, 'Unavailable: obj-gone (not found)');

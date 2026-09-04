@@ -218,6 +218,17 @@ function semanticUiForPresentation(presentationDescriptor) {
   children.push({kind: 'text', role: 'heading', text: heading});
 
   if (kind === 'project') {
+    // The Project's editable fields come from the threaded `writable` set — here
+    // PROJECT FIELD NAMES (the adapter's Images-contract fact), not slot ids —
+    // and each editable field's descriptor-local key is its index in that array
+    // (the same array ProjectBrowser's resolver indexes). Name is the only field
+    // that can be editable; Project ID and Namespace stay read-only; members
+    // stay activation actions.
+    const projectWritable = Array.isArray(params.writable) ? params.writable : [];
+    const nameKey = projectWritable.indexOf('name');
+    children.push(nameKey >= 0
+      ? {kind: 'field', label: 'Name', text: valueText(project.name), key: nameKey, editable: 'text'}
+      : {kind: 'field', label: 'Name', text: valueText(project.name)});
     children.push({kind: 'field', label: 'Project ID', text: valueText(project.projectId)});
     children.push({kind: 'field', label: 'Namespace', text: valueText(project.namespace)});
     const members = Array.isArray(project.members) ? project.members : [];

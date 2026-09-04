@@ -158,7 +158,7 @@ fn fixtures_drive_real_gtk_controls_and_identical_intents() {
     // target text. Activation still emits only the transient integer key.
     let project = realize(&parse_semantic_ui(&read_fixture("project.json")).expect("project validates"));
     let project_text = project.visible_text();
-    for expected in ["Project: Alpha", "Project ID", "project-alpha", "Namespace", "-> workspace"] {
+    for expected in ["Project: Alpha", "Name", "Alpha", "Project ID", "project-alpha", "Namespace", "-> workspace"] {
         assert!(project_text.iter().any(|text| text == expected), "Project text {expected:?}: {project_text:?}");
     }
     assert_eq!(project.action_labels(), vec![
@@ -166,6 +166,22 @@ fn fixtures_drive_real_gtk_controls_and_identical_intents() {
         "member/b [dependency] -> image-b/obj-b".to_string(),
     ]);
     assert_eq!(project.activate(1), Some(Intent::activate_item(1)));
+    assert!(project.editable_texts().is_empty(), "a read-only Project pane has no editable field");
+    // EDITABLE PROJECT (okv Slice C, the first non-inspector edit producer): the
+    // Name field is the ONLY editable entry; committing it emits the ORDINARY
+    // edit-field intent (identical bytes to the DOM), keyed by the field's index
+    // in the threaded `writable` set. Id/namespace stay read-only; members stay
+    // activation actions.
+    let editable_project =
+        realize(&parse_semantic_ui(&read_fixture("project-editable.json")).expect("editable project validates"));
+    assert_eq!(editable_project.editable_texts(), vec!["Alpha".to_string()], "only Name is editable");
+    assert_eq!(
+        editable_project.edit_field(0, "New"),
+        Some(Intent::edit_field(0, "New".to_string())),
+        "the Name entry emits the ordinary edit-field intent"
+    );
+    assert!(editable_project.edit_field(1, "x").is_none(), "no editable field at key 1 (Project ID is read-only)");
+    assert_eq!(editable_project.activate(0), Some(Intent::activate_item(0)), "members remain activation actions");
 
     // --- unavailable + unauthorized: reason lines, no refs/actions.
     let un = realize(&parse_semantic_ui(&read_fixture("unavailable.json")).unwrap());

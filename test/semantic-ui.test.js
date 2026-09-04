@@ -24,6 +24,9 @@ const CASES = {
   navigator: {kind: 'navigator', subject: ref('obj-root'), parameters: {fields: {'slot-title': {kind: 'text', value: 'Root'}}, references: [ref('obj-b'), ref('obj-c')]}},
   inspector: {kind: 'inspector', subject: ref('obj-b'), parameters: {fields: {'slot-title': {kind: 'text', value: 'B'}, 'slot-count': {kind: 'int', value: 17}}, writable: ['slot-title'], references: [ref('obj-c')]}},
   project: {kind: 'project', subject: {kind: 'project', imageId: 'image-a', projectId: 'project-alpha'}, parameters: {project: {format: 'lagrange-project/v1', projectId: 'project-alpha', name: 'Alpha', namespace: {kind: 'ref', imageId: 'image-a', objectId: 'workspace'}, members: [{key: 'member/a', role: 'source', target: {kind: 'ref', imageId: 'image-a', objectId: 'obj-a'}}, {key: 'member/b', role: 'dependency', target: {kind: 'ref', imageId: 'image-b', objectId: 'obj-b'}}]}}},
+  // The same Project with the threaded edit affordance: Name becomes the ONLY
+  // editable field (key = its index in `writable`); id/namespace stay read-only.
+  'project-editable': {kind: 'project', subject: {kind: 'project', imageId: 'image-a', projectId: 'project-alpha'}, parameters: {project: {format: 'lagrange-project/v1', projectId: 'project-alpha', name: 'Alpha', namespace: {kind: 'ref', imageId: 'image-a', objectId: 'workspace'}, members: [{key: 'member/a', role: 'source', target: {kind: 'ref', imageId: 'image-a', objectId: 'obj-a'}}, {key: 'member/b', role: 'dependency', target: {kind: 'ref', imageId: 'image-b', objectId: 'obj-b'}}]}, writable: ['name']}},
   unavailable: {kind: 'unavailable-reference', subject: ref('obj-gone'), parameters: {reason: 'not found'}},
   unauthorized: {kind: 'unauthorized-reference', subject: ref('obj-secret'), parameters: {reason: 'denied'}},
 };

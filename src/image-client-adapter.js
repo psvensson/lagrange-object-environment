@@ -327,6 +327,13 @@ function createImageClientAdapter(client) {
    * generic object/slot mutation lane: Images owns the Project's field -> slot
    * translation.
    */
+  // The Project fields this adapter can write through an Images-owned seam —
+  // an Images-contract FACT surfaced by the interaction owner (the same way
+  // writableSlots surfaces the mutation lane's map), never a slot id. Exactly
+  // the fields with a seam below: `name` <-> renameProject. Adding a field here
+  // without adding its seam (or vice versa) is a contract error.
+  const PROJECT_WRITABLE_FIELDS = Object.freeze(['name']);
+
   async function renameProject({imageId, projectId, name, versionToken, authority = null} = {}) {
     return authorizedRenameProject({
       images,
@@ -974,6 +981,7 @@ function createImageClientAdapter(client) {
     loadPerspective,
     readProject,
     renameProject,
+    projectWritableFields: PROJECT_WRITABLE_FIELDS,
     readObject,
     authorizedReadObject,
     resolveAssetBytes,

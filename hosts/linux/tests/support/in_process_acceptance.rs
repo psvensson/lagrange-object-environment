@@ -39,6 +39,11 @@ pub struct AcceptanceFlavor<'a> {
     pub denied_write_same_object_as_primary: bool,
     pub expected_creation_tokens: u64,
     pub minimum_c1_tokens: u64,
+    /// An OPTIONAL flavor-specific leg run after the shared protocol and
+    /// BEFORE teardown (the session's Compositor is destroyed by teardown).
+    /// The real-Images flavor runs the Project rename leg here; the fake
+    /// composition has no Project lane and passes `None`.
+    pub before_teardown: Option<fn(&tokio::runtime::Runtime, &JsEnvActor, &mut RendererPortHost)>,
 }
 
 /// Drive a JS async block that triggers renderer ops, pumping the GTK host on
@@ -743,6 +748,10 @@ pub fn run_in_process_acceptance(
         "C1: tokens must be absent from durable intent, parameters, renderer payloads, and GTK text"
     );
 
+    if let Some(leg) = flavor.before_teardown {
+        leg(runtime, actor, host);
+    }
+
     let teardown = run_json_while_pumping(
         runtime,
         actor,
@@ -752,4 +761,102 @@ pub fn run_in_process_acceptance(
     );
     assert_exact_keys(&teardown, &["destroyed"], "teardown");
     assert_eq!(teardown, json!({"destroyed": true}));
+}
+
+
+/// okv Slice C: the PROJECT RENAME leg — run ONLY by the real-Images
+/// acceptance (the fake composition has no Project lane and must never fake
+/// one). Positive path + one negative (denied); stale/conflict and the
+/// follow/rename race are proved in the JS lane against real Images.
+///
+///   openProject -> a real project view (GTK handle) showing Name "Old"
+///   GTK Name entry commit -> the ORDINARY edit-field intent -> push
+///   -> rename-project -> adapter.renameProject -> Images CAS -> reread
+///   -> GTK shows "New" from the FRESH descriptor, token paired by the reread
+///   denied write -> CommandAuthorizationError, nothing changes
+pub fn run_project_leg(
+    runtime: &tokio::runtime::Runtime,
+    actor: &JsEnvActor,
+    host: &mut RendererPortHost,
+) {
+    let opened = run_json_while_pumping(
+        runtime,
+        actor,
+        host,
+        "globalThis.__session.openProject().catch((e) => ({diagnostic: String(e && (e.stack || e.message) || e)}))",
+        "openProject",
+    );
+    if let Some(diagnostic) = opened.get("diagnostic") {
+        panic!("openProject failed: {diagnostic}");
+    }
+    assert_exact_keys(&opened, &["projectSurfaceHandle", "projectId", "name"], "openProject");
+    assert_eq!(opened["name"], json!("Old"), "the Project opens with its current name");
+    let project_handle = opened["projectSurfaceHandle"].as_str().unwrap().to_string();
+
+    // GTK realizes the project view from the SemanticUi document: heading + the
+    // editable Name entry (the only editable field) + read-only id/namespace.
+    let text = host.adapter().gtk_visible_text(&project_handle).expect("GTK project text");
+    assert!(text.iter().any(|t| t == "Project: Old"), "GTK project heading: {text:?}");
+    let editable = host.adapter().gtk_editable_texts(&project_handle).expect("GTK editable texts");
+    assert_eq!(editable, vec![(0, "Old".to_string())], "only the Name field is editable, key 0");
+
+    // The ORDINARY intent from the GTK Name entry, pushed with the LIVE handle.
+    let intent = host
+        .adapter()
+        .edit_gtk_field(&project_handle, 0, "New")
+        .expect("edit")
+        .expect("an edit-field intent");
+    assert_eq!(
+        serde_json::to_value(&intent).expect("serialize"),
+        json!({"kind": "edit-field", "key": 0, "text": "New"}),
+        "the Project Name edit is the ordinary edit-field intent"
+    );
+    let payload = json!({"intent": intent, "surfaceHandle": project_handle}).to_string();
+    runtime.block_on(actor.push(&payload)).expect("push project edit intent");
+    let state = poll_until(
+        runtime,
+        actor,
+        host,
+        "globalThis.__session.projectState()",
+        |v| v["name"] == json!("New") && v["tokenIsFresh"] == json!(true),
+        "project renamed and reread",
+    );
+    assert_exact_keys(&state, &["name", "hasToken", "tokenIsFresh", "lastEdit"], "projectState");
+    assert_eq!(state["lastEdit"]["edited"], json!(true), "the edit was routed and committed: {state}");
+    assert_eq!(state["lastEdit"]["error"], json!(null));
+    assert_eq!(state["lastEdit"]["rereadError"], json!(null));
+    assert!(
+        !state.to_string().contains("object-version/v0:"),
+        "opaque Images tokens must stay guest-side"
+    );
+    // The GTK pane shows the name from the FRESH descriptor (the reread's presentOn).
+    let text = host.adapter().gtk_visible_text(&project_handle).expect("GTK project text after rename");
+    assert!(text.iter().any(|t| t == "Project: New"), "GTK heading after rename: {text:?}");
+    assert!(text.iter().any(|t| t == "New"), "GTK Name after rename: {text:?}");
+
+    // DENIED: a write-less authority -> CommandAuthorizationError; nothing changes.
+    let _ = run_json_while_pumping(
+        runtime,
+        actor,
+        host,
+        "globalThis.__session.prepareProjectDeniedWrite()",
+        "prepareProjectDeniedWrite",
+    );
+    let intent = host
+        .adapter()
+        .edit_gtk_field(&project_handle, 0, "Denied")
+        .expect("edit")
+        .expect("an edit-field intent");
+    let payload = json!({"intent": intent, "surfaceHandle": project_handle}).to_string();
+    runtime.block_on(actor.push(&payload)).expect("push denied project edit");
+    let denied = poll_until(
+        runtime,
+        actor,
+        host,
+        "globalThis.__session.projectState()",
+        |v| v["lastEdit"]["error"] == json!("CommandAuthorizationError"),
+        "denied project rename reported",
+    );
+    assert_eq!(denied["name"], json!("New"), "a denied write changes nothing: {denied}");
+    assert_eq!(denied["lastEdit"]["edited"], json!(false));
 }
