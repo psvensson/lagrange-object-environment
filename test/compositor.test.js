@@ -245,3 +245,22 @@ test('a non-string surface handle from the adapter is rejected', async () => {
     /opaque string surface handle/,
   );
 });
+
+test('liveView(viewId): the current live snapshot for a logical view; null when absent or lost (the caller-names-a-view lane; same predicate as viewForSurfaceHandle)', async () => {
+  const rendererAdapter = createFakeRendererAdapter();
+  const compositor = createCompositor({rendererAdapter});
+  assert.equal(compositor.liveView('v'), null, 'absent');
+  const pd = {kind: 'inspector', subject: {kind: 'ref', imageId: 'img', objectId: 'o'}, parameters: {}};
+  await compositor.openView({viewId: 'v', viewDescriptor: {kind: 'canvas', width: 8, height: 8}, presentationDescriptor: pd});
+  assert.deepEqual(compositor.liveView('v'), {viewId: 'v', presentationDescriptor: pd});
+  assert.deepEqual(compositor.liveView('v'), compositor.viewForSurfaceHandle(compositor.surfaceHandleForView('v')), 'same snapshot as the handle lane');
+  const pd2 = {...pd, parameters: {x: 1}};
+  await compositor.presentOn('v', pd2);
+  assert.equal(compositor.liveView('v').presentationDescriptor, pd2, 'current descriptor');
+  rendererAdapter.failNext('detachPresentation');
+  await assert.rejects(compositor.presentOn('v', pd));
+  assert.equal(compositor.viewStatus('v'), 'lost');
+  assert.equal(compositor.liveView('v'), null, 'lost');
+  assert.ok(compositor.durableIntent().some((x) => x.viewId === 'v'), 'durable intent still lists the lost view (by design)');
+  await compositor.destroy();
+});

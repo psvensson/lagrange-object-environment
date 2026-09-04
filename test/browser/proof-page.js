@@ -241,9 +241,10 @@ window.__lagrangeProof = {
     // inspector descriptor (the S4a path) — making obj-b's title editable in DOM.
     const shell = createEnvironmentShell({navigator, selectionModel, compositor, writableSlots: ['slot-title']});
     await shell.openWorkspace(ref('obj-root'), {viewDescriptorFor: () => ({kind: 'webgpu-canvas', width: 200, height: 200})});
-    // Wire the DOM activate-item intents to selection. The navigator view is
-    // opened first, so its surface handle is browser-surface-0.
-    shell.bindDomIntents({adapter, navigatorSurfaceHandle: 'browser-surface-0'});
+    // Wire the DOM activate-item intents to selection. The binding names the
+    // LOGICAL navigator view; the Compositor resolves each emitted DOM surface
+    // handle to the live view at interaction time (Bead 4o8).
+    shell.bindIntents({adapter, navigator: true});
     return {
       adapter, compositor, selectionModel, shell,
       navigatorButtons: () => Array.from(document.querySelectorAll('#mount .lagrange-tool-navigator .lagrange-tool-references button')),

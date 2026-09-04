@@ -267,7 +267,7 @@ test('S4a: edit-field routes through CommandRouter to a REAL mutation; a stale t
   // --- HAPPY PATH: edit field key 0 (probe-title) -> real mutation -----------
   const happy = await shell.handleEditField({
     key: 0, text: 'edited-via-shell', commandId: 'set-title',
-    commandRouter, inspectorSurfaceHandle: inspHandle,
+    commandRouter, surfaceHandle: inspHandle,
     authority: readAuthority(created.objectId), readBlockId: IDS.readBlockId,
   });
   assert.ok(happy, 'the edit dispatched through CommandRouter');
@@ -284,7 +284,7 @@ test('S4a: edit-field routes through CommandRouter to a REAL mutation; a stale t
   let conflictReread = null;
   await shell.handleEditField({
     key: 0, text: 'stale-edit', commandId: 'set-title',
-    commandRouter, inspectorSurfaceHandle: inspHandle,
+    commandRouter, surfaceHandle: inspHandle,
     authority: readAuthority(created.objectId), readBlockId: IDS.readBlockId,
     onEditError: async (error, {reread}) => {
       conflict = error;
@@ -307,7 +307,7 @@ test('S4a: edit-field routes through CommandRouter to a REAL mutation; a stale t
   // The user can now retry the edit successfully with the fresh token.
   const retry = await shell.handleEditField({
     key: 0, text: 'retry-after-conflict', commandId: 'set-title',
-    commandRouter, inspectorSurfaceHandle: inspHandle,
+    commandRouter, surfaceHandle: inspHandle,
     authority: readAuthority(created.objectId), readBlockId: IDS.readBlockId,
   });
   assert.ok(retry, 'the retry after conflict-recovery dispatched');
@@ -323,7 +323,7 @@ test('S4a: edit-field routes through CommandRouter to a REAL mutation; a stale t
   let deniedReread = null;
   await shell.handleEditField({
     key: 0, text: 'denied-edit', commandId: 'set-title',
-    commandRouter: deniedRouter, inspectorSurfaceHandle: inspHandle,
+    commandRouter: deniedRouter, surfaceHandle: inspHandle,
     authority: readAuthority(created.objectId), readBlockId: IDS.readBlockId,
     onEditError: async (error, {reread}) => {
       denied = error;
@@ -492,7 +492,7 @@ test('olm: edit-during-active-follow defers the self-observation reread; a secon
   gates.set('edit-one', {promise: new Promise((r) => { releaseGate = r; })});
   const editOne = shell.handleEditField({
     key: 0, text: 'edit-one', commandId: 'set-title',
-    commandRouter, inspectorSurfaceHandle: inspHandle,
+    commandRouter, surfaceHandle: inspHandle,
     authority: readAuthority(created.objectId), readBlockId: IDS.readBlockId,
   });
   // Wait until the Command has committed (the gate is now awaited) AND the
@@ -532,7 +532,7 @@ test('olm: edit-during-active-follow defers the self-observation reread; a secon
   const tokenAfterOne = shell._inspectorToken().token;
   await shell.handleEditField({
     key: 0, text: 'edit-two', commandId: 'set-title',
-    commandRouter, inspectorSurfaceHandle: inspHandle,
+    commandRouter, surfaceHandle: inspHandle,
     authority: readAuthority(created.objectId), readBlockId: IDS.readBlockId,
   });
   await assertEventually(async () => {
@@ -552,7 +552,7 @@ test('olm: edit-during-active-follow defers the self-observation reread; a secon
   let conflictReread = null;
   await shell.handleEditField({
     key: 0, text: 'should-not-land', commandId: 'set-title',
-    commandRouter, inspectorSurfaceHandle: inspHandle,
+    commandRouter, surfaceHandle: inspHandle,
     authority: readAuthority(created.objectId), readBlockId: IDS.readBlockId,
     onEditError: async (error, {reread}) => { conflict = error; conflictReread = await reread(); },
   });
@@ -583,7 +583,7 @@ test('olm: edit-during-active-follow defers the self-observation reread; a secon
   gates.set('edit-three', {promise: new Promise((r) => { releaseGate2 = r; })});
   const editThree = shell.handleEditField({
     key: 0, text: 'edit-three', commandId: 'set-title',
-    commandRouter, inspectorSurfaceHandle: inspHandle,
+    commandRouter, surfaceHandle: inspHandle,
     authority: readAuthority(created.objectId), readBlockId: IDS.readBlockId,
   });
   await deferredSeen2; // B's self-observation was seen + deferred (edit in flight)

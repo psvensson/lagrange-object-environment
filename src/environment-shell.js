@@ -9,17 +9,20 @@
  *      Presentation" (nothing else owns it: SelectionModel owns selection state;
  *      the Compositor owns views; neither couples them);
  *  (2) "route a renderer {kind:'edit-field', key, text} through ONE table of
- *      EDIT BINDINGS (surface -> live view + a PURE consumer-owned field resolver
- *      + a consumer-owned transient-token supplier) to CommandRouter" (the
+ *      EDIT BINDINGS (keyed by logical viewId: a PURE consumer-owned field
+ *      resolver + a consumer-owned transient-token supplier; the Compositor
+ *      resolves the emitted handle to the live view) to CommandRouter" (the
  *      edit-field row in docs/ownership.md; Bead 6lm). The inspector is one
  *      binding, built internally (key -> writable slot; the shell's own paired
  *      token; the olm barrier). It does NOT dispatch, build Commands, or own
  *      value semantics — CommandRouter retains semantic-intent -> Command/
  *      authority/dispatch ownership.
- *  (3) "resolve a renderer activate-item key against the CURRENT descriptor of
- *      its bound source view, then select the resulting ref". The descriptor-
+ *  (3) "resolve a renderer activate-item key against the CURRENT LIVE descriptor
+ *      of its bound source view, then select the resulting ref". The descriptor-
  *      local resolver is injected by that view's semantic owner; the shell owns
- *      only renderer action -> selection orchestration.
+ *      only renderer action -> selection orchestration. Bindings (rows 63/64)
+ *      name LOGICAL VIEWS; the Compositor alone maps a renderer's transient
+ *      surface handle to the live view at interaction time (Bead 4o8).
  * The shell does NOT:
  *  - read the image directly (every read goes through ObjectNavigator.navigate,
  *    which owns the unauthorized-ref/unavailable-ref materialization);
@@ -265,13 +268,51 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
     });
   }
 
-  // The 'activate-item' intent handler (the shell-boundary interaction owner for
-  // renderer item activation -> selection; NOT CommandRouter). A host emits
-  // {kind:'activate-item', key} where `key` is meaningful only to one view's
-  // CURRENT presentationDescriptor. The shell asks that view's injected pure
-  // resolver for a ref, then owns the ref -> selection interaction. Navigator
-  // reference indexing remains the default; ProjectBrowser injects its own
-  // member resolver without moving Project semantics into this module.
+  // ---------------------------------------------------------------------------
+  // RENDERER INTENT ROUTING (rows 63/64; Beads 6lm, 4o8+8ik).
+  //
+  // INVARIANT: renderer intents arrive carrying a TRANSIENT surface handle;
+  // bindings name STABLE logical views; the Compositor is the SOLE authority
+  // that maps the transient handle to the currently-live view
+  // (`compositor.viewForSurfaceHandle`). The shell never captures, stores,
+  // refreshes or compares surface handles, keeps no view<->surface state, and
+  // never consults the Compositor's durable intent for interaction (durable
+  // intent is persistence/restoration information; it lists lost views by design
+  // and is never evidence of a live realization). Consequently a binding survives
+  // a close/loss + re-open of its logical view unchanged, and an intent labelled
+  // with a stale/dead handle is ignored before any binding is consulted.
+  //
+  // Two binding kinds, both keyed by viewId (unique WITHIN each kind; one
+  // activation + one edit binding on the same view is legal):
+  //   activation: {viewId, resolveItem(descriptor, key) -> ref | null}
+  //   edit:       {viewId, resolveField(descriptor, key) -> plain object | null,
+  //                tokenFor(descriptor) -> token | null, commandId (required),
+  //                onEdited, onEditError}
+  // Public ACTIVATION bindings may name any view, the navigator and inspector
+  // included: activation carries no shell-internal state (a pure resolver, then
+  // the public selectObject). Public EDIT bindings may NEVER name the inspector,
+  // live, lost or absent: the inspector's edit binding is built internally and is
+  // the only one carrying the shell's paired inspector token, the olm barrier and
+  // the inspector reread. Bindings that carry a `surfaceHandle`, and the retired
+  // `navigatorSurfaceHandle`/`inspectorSurfaceHandle` parameters, are rejected
+  // loudly (a silently ignored key would silently swallow interactions).
+  // ---------------------------------------------------------------------------
+
+  // The 'activate-item' interaction on an already-resolved LIVE view: ask the
+  // view's injected pure resolver for a ref, then own ref -> selection.
+  async function activateOnView({view, resolveItem, key, authority = null, readBlockId}) {
+    const ref = resolveItem(view.presentationDescriptor, key);
+    if (!ref || typeof ref.objectId !== 'string') return null;
+    await selectObject(ref, {authority, readBlockId, sourceViewId: view.viewId});
+    return ref;
+  }
+
+  // The public 'activate-item' handler for a caller that names a logical view
+  // (row 63; ProjectBrowser's integration calls it directly). The descriptor is
+  // the view's CURRENT LIVE presentation from the Compositor's own lookup; an
+  // absent or lost view is an explicit no-op and the resolver is NOT consulted.
+  // Navigator reference indexing remains the default resolver; a view's semantic
+  // owner injects its own without moving its semantics into this module.
   async function handleActivateItem({
     key,
     viewId = NAVIGATOR_VIEW_ID,
@@ -282,49 +323,12 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
     if (typeof resolveItem !== 'function') {
       throw new TypeError('handleActivateItem requires a descriptor-local resolveItem function');
     }
-    const view = compositor.durableIntent().find((candidate) => candidate.viewId === viewId);
-    const ref = resolveItem(view?.presentationDescriptor ?? null, key);
-    if (!ref || typeof ref.objectId !== 'string') return null;
-    await selectObject(ref, {authority, readBlockId, sourceViewId: viewId});
-    return ref;
+    const view = compositor.liveView(viewId);
+    if (!view) return null;
+    return activateOnView({view, resolveItem, key, authority, readBlockId});
   }
 
-  // ---------------------------------------------------------------------------
-  // 'edit-field' routing — the shell's SECOND ownership row (docs/ownership.md
-  // "Renderer edit-field intent -> edit binding -> CommandRouter", Bead 6lm).
-  //
-  // An EDIT BINDING names exactly one renderer surface, the logical view that
-  // surface realizes, a PURE consumer-owned field resolver and an optional
-  // consumer-owned transient-token supplier:
-  //   {surfaceHandle, viewId, resolveField(descriptor, key) -> plain object | null,
-  //    tokenFor(descriptor) -> token | null, commandId, onEdited, onEditError}
-  // On {kind:'edit-field', key, text} from that surface the shell:
-  //   1. resolves the LIVE view for the surface (compositor.viewForSurfaceHandle —
-  //      the same source CommandRouter.consumeIntent uses for the subject, so the
-  //      descriptor and the dispatched subject can never belong to different
-  //      views); `viewId` is an assertion — a mismatch is an explicit no-op;
-  //   2. asks the binding's resolver for the descriptor-local field context:
-  //      null = stale/unknown key = explicit no-op (never a wrong field); a plain
-  //      data-only object (possibly {}) = dispatch; anything else = loud error;
-  //   3. asks the binding's tokenFor(descriptor) for the transient version token
-  //      (the shell stores/interprets NO token for foreign views — concurrency
-  //      semantics stay with the view's owner);
-  //   4. routes through commandRouter.consumeIntent({kind:'edit-field', key},
-  //      {surfaceHandle, context: {commandId, text, versionToken, field}}) — the
-  //      resolver result is NESTED under `field` so it can never collide with the
-  //      shell's own keys (a resolver could otherwise re-target the Command via
-  //      context.commandId). The shell builds NO Command and dispatches nothing
-  //      itself; the RAW text passes through unparsed.
-  // The inspector is ONE such binding, constructed internally: its resolver is
-  // the key -> writable-slot walk over the inspector descriptor, its tokenFor is
-  // the shell's own paired inspector token, and it carries two INTERNAL hooks no
-  // public binding can set — the olm edit barrier (which guards the shell's OWN
-  // followSelected reread ordering) and the inspector reread offered on error.
-  // Nothing here is view-specific beyond that: no field semantics, no storage
-  // representation, no assumption about what a Command does with `field`.
-  // Consumers hold a binding only as long as its surface handle is live: a
-  // re-opened view mints a fresh handle and must be re-bound (Bead 4o8).
-  // ---------------------------------------------------------------------------
+  // ----- edit bindings (row 64) -----
 
   function inspectorResolveField(descriptor, key) {
     const fields = descriptor?.parameters?.fields ?? {};
@@ -346,9 +350,8 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
     return (selected && selected.objectId === inspectorTokenSubjectId) ? inspectorVersionToken : null;
   }
 
-  function inspectorEditBinding({inspectorSurfaceHandle, commandId, onEdited, onEditError, authority, readBlockId}) {
+  function inspectorEditBinding({commandId, onEdited, onEditError, authority, readBlockId}) {
     return Object.freeze({
-      surfaceHandle: inspectorSurfaceHandle,
       viewId: INSPECTOR_VIEW_ID,
       resolveField: inspectorResolveField,
       tokenFor: inspectorTokenFor,
@@ -361,12 +364,34 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
     });
   }
 
-  function normalizeEditBinding(binding) {
+  function rejectHandleKey(binding, label) {
+    if (binding && typeof binding === 'object' && Object.hasOwn(binding, 'surfaceHandle')) {
+      throw new TypeError(`${label} bindings name a logical viewId, never a surfaceHandle (the Compositor resolves the live realization at interaction time)`);
+    }
+  }
+
+  function normalizeActivationBinding(binding) {
+    rejectHandleKey(binding, 'activation');
     if (!binding || typeof binding !== 'object'
-        || binding.surfaceHandle === null || binding.surfaceHandle === undefined
+        || typeof binding.viewId !== 'string' || binding.viewId.length === 0
+        || typeof binding.resolveItem !== 'function') {
+      throw new TypeError('each activation binding requires viewId and resolveItem');
+    }
+    return Object.freeze({viewId: binding.viewId, resolveItem: binding.resolveItem});
+  }
+
+  function normalizeEditBinding(binding) {
+    rejectHandleKey(binding, 'edit');
+    if (!binding || typeof binding !== 'object'
         || typeof binding.viewId !== 'string' || binding.viewId.length === 0
         || typeof binding.resolveField !== 'function') {
-      throw new TypeError('each edit binding requires surfaceHandle, viewId and resolveField');
+      throw new TypeError('each edit binding requires viewId and resolveField');
+    }
+    if (binding.viewId === INSPECTOR_VIEW_ID) {
+      // STRUCTURAL fence, independent of whether the inspector is currently
+      // live, lost or absent: only the internally-built inspector binding may
+      // carry the shell's paired token, the olm barrier and the inspector reread.
+      throw new TypeError('the inspector view is bound through `inspector: true`, never through editBindings');
     }
     if (binding.tokenFor !== undefined && binding.tokenFor !== null && typeof binding.tokenFor !== 'function') {
       throw new TypeError('an edit binding tokenFor must be a function when present');
@@ -376,20 +401,12 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
         throw new TypeError(`an edit binding ${hook} must be a function when present`);
       }
     }
-    if (binding.viewId === INSPECTOR_VIEW_ID) {
-      // The inspector is bound ONLY through inspectorSurfaceHandle: its binding
-      // carries the shell-internal barrier/reread hooks and the shell's own paired
-      // token. A public binding on the inspector view would drive the shell's own
-      // inspector with a foreign token and no barrier.
-      throw new TypeError('the inspector view is bound through inspectorSurfaceHandle, not editBindings');
-    }
     if (typeof binding.commandId !== 'string' || binding.commandId.length === 0) {
       // Required: a binding that inherited the inspector default would silently
       // dispatch whatever Command the router falls back to for its subject.
       throw new TypeError('each edit binding must declare its commandId (a non-empty string)');
     }
     return Object.freeze({
-      surfaceHandle: binding.surfaceHandle,
       viewId: binding.viewId,
       resolveField: binding.resolveField,
       tokenFor: binding.tokenFor ?? null,
@@ -427,18 +444,19 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
     return null;
   }
 
-  // The ONE edit-field handler for every edit binding (inspector included).
-  async function handleEditIntent({binding, key, text, commandRouter}) {
+  // The ONE edit-field handler for every edit binding (inspector included), on
+  // an already-resolved LIVE view. `surfaceHandle` is the EMITTED handle: it is
+  // passed to CommandRouter.consumeIntent unchanged, which resolves the semantic
+  // subject through its own live lookup (no shell-side subject lookup).
+  async function handleEditIntent({binding, view, surfaceHandle, key, text, commandRouter}) {
     if (!commandRouter || typeof commandRouter.consumeIntent !== 'function') {
       throw new TypeError('edit-field routing requires a CommandRouter (consumeIntent)');
     }
-    // 1. The LIVE view for this surface; the binding's viewId is an assertion.
-    const view = compositor.viewForSurfaceHandle(binding.surfaceHandle);
-    if (!view || view.viewId !== binding.viewId) return null;
     const descriptor = view.presentationDescriptor ?? null;
-    // 2. Field resolution (pure, consumer-owned). A stale key is a silent no-op
-    //    BEFORE the barrier (a no-op edit never dispatches, so it must not leak
-    //    the in-flight count); a malformed result is a loud, non-dispatching error.
+    // Field resolution (pure, consumer-owned) over the SAME live snapshot the
+    // binding was selected by. A stale key is a silent no-op BEFORE the barrier
+    // (a no-op edit never dispatches, so it must not leak the in-flight count);
+    // a malformed result is a loud, non-dispatching error.
     let fieldContext;
     try {
       fieldContext = validateFieldContext(binding.resolveField(descriptor, key));
@@ -457,19 +475,20 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
     if (binding.barrier) editInFlight += 1;
     let succeeded = false;
     try {
-      // 3. The consumer's transient token (opaque to the shell).
+      // The consumer's transient token (opaque to the shell).
       let versionToken;
       try {
         versionToken = binding.tokenFor ? binding.tokenFor(descriptor) : null;
       } catch (error) {
         return await reportEditError(binding, error);
       }
-      // 4. Route through the CommandRouter (Command discovery/authority/dispatch
-      //    ownership stays there).
+      // Route through the CommandRouter (Command discovery/authority/dispatch
+      // ownership stays there). The resolver result is NESTED under `field` so it
+      // can never collide with or re-target the shell's own keys.
       try {
         const result = await commandRouter.consumeIntent(
           {kind: 'edit-field', key},
-          {surfaceHandle: binding.surfaceHandle, context: {commandId: binding.commandId, text, versionToken, field: fieldContext}},
+          {surfaceHandle, context: {commandId: binding.commandId, text, versionToken, field: fieldContext}},
         );
         // `result` is the router's result VERBATIM; null means "not routed" (the
         // view is gone / has no subject / no applicable Command), not success.
@@ -520,37 +539,50 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
     }
   }
 
-  // The INSPECTOR edit path (public, source-compatible): resolves an
-  // inspector-local {key, text} against the CURRENT inspector descriptor
-  // (key -> writable slot, nested as context.field.slot) and attaches the
-  // shell's paired transient token, through the one shared handler above.
-  async function handleEditField({key, text, commandId = 'set-title', commandRouter, inspectorSurfaceHandle, authority = null, readBlockId, onEdited = null, onEditError = null}) {
+  // The INSPECTOR edit path (public): an edit-field intent {key, text} that
+  // arrived on `surfaceHandle`. The handle is resolved through the Compositor to
+  // its live view, which must be the inspector; a present handle that resolves
+  // to no live view (or another view) is an explicit no-op, an absent/non-string
+  // handle is a loud error (never a silently swallowed edit).
+  async function handleEditField({key, text, surfaceHandle, commandId = 'set-title', commandRouter, authority = null, readBlockId, onEdited = null, onEditError = null, ...rest} = {}) {
     if (!commandRouter || typeof commandRouter.consumeIntent !== 'function') {
       throw new TypeError('handleEditField requires a CommandRouter (consumeIntent)');
     }
-    const binding = inspectorEditBinding({inspectorSurfaceHandle, commandId, onEdited, onEditError, authority, readBlockId});
-    return handleEditIntent({binding, key, text, commandRouter});
+    if (Object.hasOwn(rest, 'inspectorSurfaceHandle')) {
+      throw new TypeError('handleEditField: `inspectorSurfaceHandle` was retired; pass the emitted `surfaceHandle` (the Compositor resolves the live inspector from it)');
+    }
+    if (typeof surfaceHandle !== 'string' || surfaceHandle.length === 0) {
+      throw new TypeError('handleEditField requires the emitted surfaceHandle (a non-empty string)');
+    }
+    const view = compositor.viewForSurfaceHandle(surfaceHandle);
+    if (!view || view.viewId !== INSPECTOR_VIEW_ID) return null;
+    const binding = inspectorEditBinding({commandId, onEdited, onEditError, authority, readBlockId});
+    return handleEditIntent({binding, view, surfaceHandle, key, text, commandRouter});
   }
 
   // Wire the shell to a host's intent seam (HOST-NEUTRAL: the plain-data
   // intents {kind:'activate-item'|'edit-field', key, ...} are not DOM-specific;
   // a browser DOM adapter, the Linux GTK bridge, or any host supplies an
-  // `onIntent` seam and the surface handles). Routes by (kind, surface):
-  //   {kind:'activate-item'} from a bound activation surface ->
-  //     handleActivateItem (selection; the shell's action row),
-  //   {kind:'edit-field'} from a bound EDIT surface -> handleEditIntent with
-  //     that surface's edit binding (the inspector, when inspectorSurfaceHandle
-  //     is given, is one such binding; `editBindings` adds others).
-  // An activation binding and an edit binding MAY share a surface (a view can
-  // have rows AND editable fields); surfaces are unique WITHIN each kind.
-  // Other intents (e.g. a Component pointer 'activate') are ignored here
-  // (CommandRouter owns those). A CommandRouter is required whenever any edit
-  // binding exists. Returns an unsubscribe.
+  // `onIntent(handler)` seam that calls handler(intent, surfaceHandle)).
+  //   navigator: true  -> the shell's activation binding for the navigator view
+  //                       (reference-row indexing);
+  //   inspector: true  -> the shell's internal edit binding for the inspector view
+  //                       (requires commandRouter; the top-level commandId/
+  //                       onEdited/onEditError apply to THIS binding only);
+  //   activationBindings / editBindings -> view-keyed tables (see the block
+  //                       comment above).
+  // Routing: kind first; then the Compositor resolves the emitted handle to the
+  // live view (a stale/dead handle is ignored before any binding is consulted);
+  // then the binding of that kind for view.viewId, resolved over that SAME live
+  // snapshot. Other intents (e.g. a Component pointer 'activate') are ignored
+  // here (CommandRouter owns those). Returns an unsubscribe.
   function bindIntents({
     adapter,
-    navigatorSurfaceHandle = null,
+    // The public flags are `navigator` / `inspector`; they are aliased locally so
+    // the flag never shadows the injected ObjectNavigator (`navigator`) in scope.
+    navigator: bindNavigator = false,
+    inspector: bindInspector = false,
     activationBindings = [],
-    inspectorSurfaceHandle = null,
     editBindings = [],
     commandRouter = null,
     commandId = 'set-title',
@@ -558,83 +590,62 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
     readBlockId,
     onEdited = null,
     onEditError = null,
+    ...rest
   } = {}) {
     if (!adapter || typeof adapter.onIntent !== 'function') {
       throw new TypeError('bindIntents requires an adapter with onIntent');
     }
-    if (!Array.isArray(activationBindings)) {
-      throw new TypeError('activationBindings must be an array');
-    }
-    if (!Array.isArray(editBindings)) {
-      throw new TypeError('editBindings must be an array');
-    }
-    const bindings = [];
-    if (navigatorSurfaceHandle !== null) {
-      bindings.push({
-        surfaceHandle: navigatorSurfaceHandle,
-        viewId: NAVIGATOR_VIEW_ID,
-        resolveItem: resolveNavigatorItem,
-      });
-    }
-    for (const binding of activationBindings) {
-      if (!binding || binding.surfaceHandle === null || binding.surfaceHandle === undefined
-          || typeof binding.viewId !== 'string' || binding.viewId.length === 0
-          || typeof binding.resolveItem !== 'function') {
-        throw new TypeError('each activation binding requires surfaceHandle, viewId and resolveItem');
+    for (const retired of ['navigatorSurfaceHandle', 'inspectorSurfaceHandle']) {
+      if (Object.hasOwn(rest, retired)) {
+        throw new TypeError(`bindIntents: \`${retired}\` was retired; bindings name logical views — use \`${retired === 'navigatorSurfaceHandle' ? 'navigator' : 'inspector'}: true\``);
       }
-      if (bindings.some(({surfaceHandle}) => surfaceHandle === binding.surfaceHandle)) {
-        throw new TypeError('activation surfaceHandle bindings must be unique');
-      }
-      bindings.push({
-        surfaceHandle: binding.surfaceHandle,
-        viewId: binding.viewId,
-        resolveItem: binding.resolveItem,
-      });
     }
-    const edits = [];
-    if (inspectorSurfaceHandle !== null || editBindings.length > 0) {
+    if (!Array.isArray(activationBindings)) throw new TypeError('activationBindings must be an array');
+    if (!Array.isArray(editBindings)) throw new TypeError('editBindings must be an array');
+    const activations = new Map();
+    const addActivation = (binding) => {
+      if (activations.has(binding.viewId)) {
+        throw new TypeError(`activation bindings must be unique per viewId (${binding.viewId})`);
+      }
+      activations.set(binding.viewId, binding);
+    };
+    if (bindNavigator) addActivation(Object.freeze({viewId: NAVIGATOR_VIEW_ID, resolveItem: resolveNavigatorItem}));
+    for (const binding of activationBindings) addActivation(normalizeActivationBinding(binding));
+    const edits = new Map();
+    if (bindInspector || editBindings.length > 0) {
       if (!commandRouter || typeof commandRouter.consumeIntent !== 'function') {
-        throw new TypeError('bindIntents: edit-field routing (inspectorSurfaceHandle or editBindings) requires a CommandRouter (consumeIntent)');
+        throw new TypeError('bindIntents: edit-field routing (inspector: true or editBindings) requires a CommandRouter (consumeIntent)');
       }
     }
-    if (inspectorSurfaceHandle !== null) {
-      edits.push(inspectorEditBinding({inspectorSurfaceHandle, commandId, onEdited, onEditError, authority, readBlockId}));
+    if (bindInspector) {
+      edits.set(INSPECTOR_VIEW_ID, inspectorEditBinding({commandId, onEdited, onEditError, authority, readBlockId}));
     }
     for (const binding of editBindings) {
       const normalized = normalizeEditBinding(binding);
-      if (edits.some(({surfaceHandle}) => surfaceHandle === normalized.surfaceHandle)) {
-        throw new TypeError('edit surfaceHandle bindings must be unique (the inspector surface is taken by inspectorSurfaceHandle)');
+      if (edits.has(normalized.viewId)) {
+        throw new TypeError(`edit bindings must be unique per viewId (${normalized.viewId})`);
       }
-      edits.push(normalized);
+      edits.set(normalized.viewId, normalized);
     }
     return adapter.onIntent((intent, surfaceHandle) => {
-      if (intent?.kind === 'activate-item') {
-        const activation = bindings.find((binding) => binding.surfaceHandle === surfaceHandle);
-        if (!activation) return;
+      const kind = intent?.kind;
+      if (kind !== 'activate-item' && kind !== 'edit-field') return;
+      // The Compositor is the sole authority for the emitted handle -> live view.
+      const view = compositor.viewForSurfaceHandle(surfaceHandle);
+      if (!view) return; // stale/dead handle: ignored before any binding is consulted
+      if (kind === 'activate-item') {
+        const binding = activations.get(view.viewId);
+        if (!binding) return;
         // Fire-and-forget; errors route nowhere (the handler is best-effort UI).
-        handleActivateItem({
-          key: intent.key,
-          viewId: activation.viewId,
-          resolveItem: activation.resolveItem,
-          authority,
-          readBlockId,
-        }).catch(() => {});
+        activateOnView({view, resolveItem: binding.resolveItem, key: intent.key, authority, readBlockId}).catch(() => {});
         return;
       }
-      if (intent?.kind === 'edit-field') {
-        const edit = edits.find((binding) => binding.surfaceHandle === surfaceHandle);
-        if (!edit) return;
-        // Errors are reported ONCE, inside the handler, via the binding's own
-        // onEditError; without one they are swallowed here (best-effort UI).
-        handleEditIntent({binding: edit, key: intent.key, text: intent.text, commandRouter}).catch(() => {});
-      }
+      const binding = edits.get(view.viewId);
+      if (!binding) return;
+      // Errors are reported ONCE, inside the handler, via the binding's own
+      // onEditError; without one they are swallowed here (best-effort UI).
+      handleEditIntent({binding, view, surfaceHandle, key: intent.key, text: intent.text, commandRouter}).catch(() => {});
     });
-  }
-
-  // Back-compat alias for the browser DOM host (navigator selection only). The
-  // intents were always host-neutral; this name predates the generalization.
-  function bindDomIntents({adapter, navigatorSurfaceHandle, authority = null, readBlockId} = {}) {
-    return bindIntents({adapter, navigatorSurfaceHandle, authority, readBlockId});
   }
 
   return Object.freeze({
@@ -645,7 +656,6 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
     handleActivateItem,
     handleEditField,
     bindIntents,
-    bindDomIntents,
     navigatorViewId: NAVIGATOR_VIEW_ID,
     inspectorViewId: INSPECTOR_VIEW_ID,
     // Read-only inspection seam for tests: the transient token paired with the

@@ -252,10 +252,13 @@ async function setup({imageId, ids}) {
     });
     const navigatorSurfaceHandle = compositor.surfaceHandleForView('navigator-view');
     const inspectorSurfaceHandle = compositor.surfaceHandleForView('inspector-view');
+    // Bindings name LOGICAL views (navigator/inspector); the Compositor resolves
+    // each emitted GTK handle to the live view at interaction time (Bead 4o8).
+    // The handles below are kept ONLY for the native side's intent labelling.
     session.unsubscribeIntents = shell.bindIntents({
       adapter: intentAdapter,
-      navigatorSurfaceHandle,
-      inspectorSurfaceHandle,
+      navigator: true,
+      inspector: true,
       commandRouter,
       commandId: 'set-title',
       authority: authorities.read(primary.objectId),
@@ -392,7 +395,7 @@ async function setup({imageId, ids}) {
       text,
       commandId: 'set-title',
       commandRouter,
-      inspectorSurfaceHandle: session.inspectorSurfaceHandle,
+      surfaceHandle: session.inspectorSurfaceHandle,
       authority: authorities.read(primary.objectId),
       readBlockId: ids.readBlockId,
       onEdited: () => { edited = true; },
