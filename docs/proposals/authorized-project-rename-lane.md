@@ -1,6 +1,6 @@
 # Proposal: version-aware authorized Project read, and an authorized Project rename
 
-**Status:** proposal from `lagrange-object-environment` to the `lagrange-images` owner. Not yet an ADR in either repository. Per environment ADR 0002, this is a downward proposal of a missing image-level semantic contract; the environment does not shadow it with an environment-declared slot mapping, unguarded `putObject`, or UI-side name state. Tracked as environment Bead `lagrange-object-environment-okv`.
+**Status:** ANSWERED. Images accepted and implemented it as ADR 0080 (`authorizedReadProject` in #190, `authorizedRenameProject` + replay identity in #191); the Environment pins that revision (c0f2346) since okv Slice A. The text below is the proposal as sent and is kept as history; §4's description of `createProject`'s old replay check no longer holds (replay identity is now `projectId` alone). Originally: proposal from `lagrange-object-environment` to the `lagrange-images` owner. Per environment ADR 0002, this is a downward proposal of a missing image-level semantic contract; the environment does not shadow it with an environment-declared slot mapping, unguarded `putObject`, or UI-side name state. Tracked as environment Bead `lagrange-object-environment-okv`.
 
 **Requested owner:** Images ownership row *"Image-level Project working-state semantics"* (`src/project/working-state.js`). Environment-side consumption stays with `ImageClientAdapter` (environment `docs/ownership.md`, "Object Environment -> Lagrange Images").
 
