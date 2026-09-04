@@ -1,11 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createServer} from 'node:http';
-import {readFile} from 'node:fs/promises';
-import {join, extname, dirname} from 'node:path';
-import {fileURLToPath} from 'node:url';
-import {execFile} from 'node:child_process';
-import {promisify} from 'node:util';
+import {available, withProofPage} from './support/proof-lane.js';
 
 // The PR C CI browser proof — runs under Xvfb/headless SwiftShader (NO hardware
 // GPU, NO display compositor) and is the GATING automated proof for the GLB
@@ -22,48 +17,6 @@ import {promisify} from 'node:util';
 //   (d) Session destroy/recreate re-injects the bytes and re-renders (proves
 //       the asset flows per-attach, not from ambient page state);
 //   (f) negative: an attach whose byte source lacks the asset fails to render.
-
-const HERE = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = join(HERE, '..', '..');
-const CHROME = process.env.CHROME_PATH ?? '/usr/bin/google-chrome';
-
-const MIME = {
-  '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm',
-  '.glb': 'model/gltf-binary',
-};
-
-async function chromeAvailable() {
-  try {
-    await promisify(execFile)(CHROME, ['--version']);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function serveRepo() {
-  const server = createServer(async (req, res) => {
-    try {
-      const path = req.url === '/' ? '/test/browser/proof.html' : new URL(req.url, 'http://x').pathname;
-      const file = join(REPO_ROOT, path);
-      if (!file.startsWith(REPO_ROOT)) { res.writeHead(403); res.end(); return; }
-      const body = await readFile(file);
-      res.writeHead(200, {'content-type': MIME[extname(file)] ?? 'application/octet-stream'});
-      res.end(body);
-    } catch { res.writeHead(404); res.end(); }
-  });
-  return new Promise((resolve) => {
-    server.listen(0, '127.0.0.1', () => resolve({server, port: server.address().port}));
-  });
-}
-
-const available = await chromeAvailable();
-const puppeteer = available ? (await import('puppeteer-core')).default : null;
-
-const CHROME_FLAGS = [
-  '--no-sandbox', '--enable-blink-features=WebGPU', '--enable-unsafe-webgpu',
-  '--enable-unsafe-swiftshader', '--window-size=1000,900',
-];
 
 // The renderer clears to a dark blue-ish (0.05,0.05,0.08) and shades the Box
 // yellow-ish (r&g clearly > b, brighter than the clear). A coherent render has
@@ -97,17 +50,7 @@ function assertMesh(frame, label) {
 }
 
 test('CI: GLB Component renders a shaded Box (asset transfer + buffers + depth + camera)', {skip: !available && 'no Chrome available'}, async (t) => {
-  const {server, port} = await serveRepo();
-  const browser = await puppeteer.launch({
-    executablePath: CHROME, headless: false, args: CHROME_FLAGS,
-    env: {...process.env, DISPLAY: process.env.DISPLAY ?? ':0'},
-  });
-  try {
-    const page = await browser.newPage();
-    await page.setViewport({width: 1000, height: 900});
-    page.on('pageerror', (e) => console.error('[pageerror]', e.message));
-    await page.goto(`http://127.0.0.1:${port}/test/browser/proof.html`, {waitUntil: 'networkidle0'});
-    await page.waitForFunction('window.__lagrangeProof !== undefined', {timeout: 15000});
+  await withProofPage(async ({page}) => {
 
     const gpuInfo = await page.evaluate(async () => {
       const a = await navigator.gpu?.requestAdapter();
@@ -169,10 +112,7 @@ test('CI: GLB Component renders a shaded Box (asset transfer + buffers + depth +
       negMesh < 320 * 200 * 0.02,
       `a missing asset must not render the Box (mesh ${negMesh}, want ~0)`,
     );
-  } finally {
-    await browser.close();
-    server.close();
-  }
+  });
 });
 
 // Bead 0dm: per-instance asset isolation. TWO simultaneous GLB views each load
@@ -181,17 +121,7 @@ test('CI: GLB Component renders a shaded Box (asset transfer + buffers + depth +
 // big Box, and A STILL renders its small Box AFTER B is instantiated — the
 // critical falsifier against a shared/clobbered provider.
 test('CI: per-instance asset isolation — A and B render their own bytes; A unaffected by B', {skip: !available && 'no Chrome available'}, async (t) => {
-  const {server, port} = await serveRepo();
-  const browser = await puppeteer.launch({
-    executablePath: CHROME, headless: false, args: CHROME_FLAGS,
-    env: {...process.env, DISPLAY: process.env.DISPLAY ?? ':0'},
-  });
-  try {
-    const page = await browser.newPage();
-    await page.setViewport({width: 1000, height: 900});
-    page.on('pageerror', (e) => console.error('[pageerror]', e.message));
-    await page.goto(`http://127.0.0.1:${port}/test/browser/proof.html`, {waitUntil: 'networkidle0'});
-    await page.waitForFunction('window.__lagrangeProof !== undefined', {timeout: 15000});
+  await withProofPage(async ({page}) => {
 
     const r = await page.evaluate(async () => {
       const S = await window.__lagrangeProof.openTwoIsolatedGlbSessions(320, 200);
@@ -216,8 +146,5 @@ test('CI: per-instance asset isolation — A and B render their own bytes; A una
       Math.abs(meshA2 - meshA1) < (meshB - meshA1) * 0.75,
       `A AFTER B (mesh ${meshA2}) must stay near A BEFORE B (mesh ${meshA1}), NOT jump toward B's footprint (mesh ${meshB}) — proves A's provider was not clobbered by B`,
     );
-  } finally {
-    await browser.close();
-    server.close();
-  }
+  });
 });
