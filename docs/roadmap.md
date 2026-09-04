@@ -6,6 +6,18 @@ This repository owns the graphical environment plus the human-facing Project/his
 
 `lagrange-images` ADR 0085 makes progressive native import of an existing application the primary language-convergence path. This environment owns the human interaction over that path — import commands/progress/diagnostics, source/provenance presentation and ordinary navigation/editing of the resulting native objects — but it does not own import semantics, runtime fallback or a shadow language-object store.
 
+## Current product vertical
+
+Take an existing Cuis application progressively from source/provenance through Images-native classes, methods and application state, and make those native objects usable through the ordinary Object Environment. Environment work follows the public Images native-import milestones; it never implements the importer or mirrors the Cuis heap.
+
+The forcing distinction is:
+
+```text
+language origin != runtime representation != object identity
+```
+
+After native import, Cuis provenance may influence presentations and available Commands, but the class, method or object remains the same ordinary Images-native identity reached through the ordinary authority and mutation paths.
+
 ## Phase 0 — boundary and vocabulary
 
 - [x] establish Image = workspace/world
@@ -99,7 +111,8 @@ Success: built-in development feels like inhabiting the image rather than using 
 The underlying Project model/history and native-import semantics remain in Lagrange Images. This phase makes them pleasant to inhabit.
 
 - [x] read-only Project navigation and member relationship presentation (canonical Images descriptor, no shadow Project model; Bead mky)
-- [ ] creation/editing commands over image-level Project APIs — first slice is **rename**; blocked on an Images-owned authorized seam, proposed in `docs/proposals/authorized-project-rename-lane.md` (Bead okv)
+- [x] first authorized Project edit command: rename through the Images-owned ADR 0080 seam and the ordinary Environment Command path (Bead okv)
+- [ ] further Project creation, member and namespace editing as future public Images semantics provide evidence and contracts
 - [ ] language/application import command + progress/diagnostic presentation over public Images-owned import APIs
 - [ ] mixed Project browser showing source/provenance, native-imported members and any deliberately retained explicit foreign-service boundaries without conflating them
 - [ ] working-view and object/Project-diff presentations
@@ -111,18 +124,19 @@ Success: Project work manipulates one durable image-level model rather than an I
 
 ## Phase 5 — language personality integration
 
-Start with Symmetric Smalltalk because it is image-native and exposes the architectural pressure most directly. The first imported personality pressure should come from the Cuis native-import path in Images, not from a separate Cuis IDE architecture here.
+**Cuis is the first end-user language personality target.** Symmetric Smalltalk remains the native semantic/compiler baseline and an important reference implementation, but the product sequence does not build a complete Symmetric-Smalltalk IDE before proving an imported language.
 
-- [ ] source and method presentations
-- [ ] class/protocol browser
-- [ ] senders/implementors
-- [ ] evaluation and debugging commands
-- [ ] language-contributed presentation/command registration
-- [ ] syntax-aware editing kept above language semantic/compiler APIs
-- [ ] present Cuis provenance/import diagnostics without changing native object identity or mutation routes
-- [ ] prove a second language personality uses the same environment substrate after Images has established the reusable native-import boundary
+The first pressure comes from real Cuis classes, methods and objects that Images has successfully native-imported. Those are ordinary Images-native identities. Cuis provenance may contribute presentation choices, Commands and presentation-specific semantic policy; it must never select another navigator, dispatcher, authority path, renderer route, mutation mechanism or object store.
 
-Success: adding another language extends the environment rather than adding another IDE architecture. Language origin may change presentation/editing affordances, but it never selects a second object store or authority path.
+- [ ] present one Cuis-origin, Images-native class through ordinary discovery: name, superclass, protocol/category where exposed, methods, and provenance as secondary information
+- [ ] browse that native class to native methods and present selector, source and protocol while preserving native method identity
+- [ ] introduce the smallest useful `PersonalityExtensionRegistry` contract only when the first real Cuis-native consumer requires personality-contributed Presentation providers or Commands
+- [ ] route the first useful edit/evaluation operation through SemanticUi intent -> ordinary Command -> public Images semantic operation -> fresh authoritative reread
+- [ ] add senders/implementors, syntax-aware editing, history or debugging only when the real Cuis workflow supplies concrete pressure
+- [ ] prove one independently authored Cuis application can be browsed, understood and edited here while its authoritative native state survives restart without a live Cuis heap
+- [ ] prove a later language personality uses the same environment substrate after the Cuis path has established the reusable native-import boundary
+
+Success: an existing Cuis application becomes ordinary native classes, methods and durable objects operated through the generic environment, with OpenSmalltalkVM retained only as explicit importer, provenance, oracle or deliberately bounded foreign-service machinery. Adding another language extends the environment rather than adding another IDE architecture.
 
 ## Phase 6 — identity and collaboration UX
 

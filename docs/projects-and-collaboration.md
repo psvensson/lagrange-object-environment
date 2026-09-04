@@ -46,7 +46,7 @@ The Object Environment owns human interaction over Projects:
 
 Those must not create a shadow Project/history/import model.
 
-## Current read-only browser
+## Current Project browser and first edit
 
 The first vertical slice is implemented by `ProjectBrowser` and the existing generic environment owners:
 
@@ -61,7 +61,9 @@ Project subject {imageId, projectId}
   -> ObjectNavigator reads that target under separate explicit authority
 ```
 
-The Presentation retains the canonical descriptor by identity; it does not copy or normalize membership. The durable member key remains member identity when a target is changed, while the renderer sees only a transient integer action key. Observation events are metadata-only invalidations: the browser performs a fresh authorized Project read before presenting an update. This slice is deliberately read-only—there are no Project mutation Commands yet.
+The Presentation retains the canonical descriptor by identity; it does not copy or normalize membership. The durable member key remains member identity when a target is changed, while the renderer sees only a transient integer action key. Observation events are metadata-only invalidations: the browser performs a fresh authorized Project read before presenting an update.
+
+The first authorized edit is also implemented: SemanticUi exposes the Project name as editable, an ordinary composition-registered `rename-project` Command invokes the Images-owned ADR 0080 rename seam with the browser's transient version token, and `ProjectBrowser` performs a fresh authorized reread rather than patching the displayed descriptor. Conflict and denial remain lower-layer outcomes. Project creation and member/namespace editing await further public Images contracts.
 
 ## Files and Git are projections
 
