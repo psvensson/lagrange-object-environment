@@ -103,12 +103,20 @@ function exactProjectPresentation({subject, presentations, failures}) {
   return candidates[0];
 }
 
-function toPresentationDescriptor(presentation) {
-  return {
-    kind: presentation.kind,
-    subject: presentation.subject,
-    parameters: presentation.context ?? {},
-  };
+/**
+ * Resolve a transient SemanticUi editable-field key against the CURRENT Project
+ * presentation descriptor to the SEMANTIC Project field it edits (`{field}`),
+ * or null. PURE over the descriptor: the field names come from the threaded
+ * `parameters.writable` (the adapter's Images-contract fact), the projector
+ * keys the editable fields by their index in that same array, and this resolver
+ * indexes the same array — no second decider. Never a slot id, never storage.
+ */
+function resolveProjectField(presentationDescriptor, key) {
+  if (presentationDescriptor?.kind !== PROJECT_PRESENTATION_KIND) return null;
+  const writable = presentationDescriptor?.parameters?.writable;
+  if (!Array.isArray(writable) || !Number.isSafeInteger(key) || key < 0 || key >= writable.length) return null;
+  const field = writable[key];
+  return typeof field === 'string' && field.length > 0 ? Object.freeze({field}) : null;
 }
 
 /**
@@ -134,6 +142,22 @@ function resolveProjectMemberTarget(presentationDescriptor, key) {
 function createProjectBrowser({adapter, presentationRegistry, compositor} = {}) {
   if (!adapter || typeof adapter.readProject !== 'function' || typeof adapter.observe !== 'function') {
     throw new TypeError('createProjectBrowser requires an adapter with readProject and observe');
+  }
+  if (!Array.isArray(adapter.projectWritableFields)) {
+    // Loud: a mis-wired adapter must not silently present every field read-only.
+    throw new TypeError('createProjectBrowser requires adapter.projectWritableFields (the Images-contract list of writable Project fields; [] for none)');
+  }
+  const projectWritableFields = Object.freeze([...adapter.projectWritableFields]);
+  // The project presentationDescriptor: the Images descriptor by identity plus
+  // the threaded edit affordance (the same `writable` shape the inspector uses;
+  // here it names Project FIELDS, not slots). Closure-scoped: the affordance is
+  // this adapter's fact.
+  function toPresentationDescriptor(presentation) {
+    return {
+      kind: presentation.kind,
+      subject: presentation.subject,
+      parameters: {...(presentation.context ?? {}), writable: projectWritableFields},
+    };
   }
   if (!presentationRegistry || typeof presentationRegistry.discover !== 'function') {
     throw new TypeError('createProjectBrowser requires a PresentationRegistry');
@@ -434,6 +458,7 @@ function createProjectBrowser({adapter, presentationRegistry, compositor} = {}) 
     refresh,
     follow,
     resolveItem: resolveProjectMemberTarget,
+    resolveField: resolveProjectField,
     tokenFor,
     activeSubject: () => activeSubject,
     viewId: PROJECT_VIEW_ID,
@@ -448,6 +473,7 @@ export {
   createProjectBrowser,
   createProjectPresentationProvider,
   createProjectSubject,
+  resolveProjectField,
   resolveProjectMemberTarget,
 };
 
@@ -455,5 +481,6 @@ export default {
   createProjectBrowser,
   createProjectPresentationProvider,
   createProjectSubject,
+  resolveProjectField,
   resolveProjectMemberTarget,
 };

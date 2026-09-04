@@ -383,6 +383,7 @@ fn composition_uses_only_the_public_images_entry() {
             "object-presentation-providers".to_string(),
             "selection-model".to_string(),
             "image-client-adapter".to_string(),
+            "project-browser".to_string(),
             "image-observation".to_string(),
             "portable-runtime".to_string(),
             "host/crypto-bootstrap".to_string(),

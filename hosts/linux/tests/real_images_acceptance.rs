@@ -11,7 +11,7 @@ mod in_process_acceptance;
 mod public_entry_composition_loader;
 
 use in_process_acceptance::{
-    gtk_init, run_in_process_acceptance, stub_glb_runner, AcceptanceFlavor,
+    gtk_init, run_in_process_acceptance, run_project_leg, stub_glb_runner, AcceptanceFlavor,
 };
 use lagrange_host_linux::images_composition::portable_artifact::PORTABLE_RUNTIME_ALIAS;
 use lagrange_host_linux::js_env::actor::JsEnvActor;
@@ -73,6 +73,10 @@ fn environment_loader() -> EmbeddedLoader {
         .with_module(
             "image-client-adapter",
             include_str!("../../../src/image-client-adapter.js"),
+        )
+        .with_module(
+            "project-browser",
+            include_str!("../../../src/project-browser.js"),
         )
         .with_module("test/real-images-acceptance", COMPOSITION)
 }
@@ -210,6 +214,9 @@ fn real_images_full_environment_gtk_acceptance() {
             denied_write_same_object_as_primary: true,
             expected_creation_tokens: 3,
             minimum_c1_tokens: 4,
+            // okv Slice C: the Project rename leg (real composition only; the fake
+            // composition has no Project lane and must never fake one).
+            before_teardown: Some(run_project_leg),
         },
     );
 

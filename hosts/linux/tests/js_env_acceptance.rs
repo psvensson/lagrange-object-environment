@@ -165,6 +165,7 @@ fn slice4_acceptance() {
             denied_write_same_object_as_primary: false,
             expected_creation_tokens: 0,
             minimum_c1_tokens: 1,
+            before_teardown: None,
         },
     );
 

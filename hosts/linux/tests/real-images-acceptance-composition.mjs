@@ -19,6 +19,7 @@ import {
 } from 'object-presentation-providers';
 import {createSelectionModel} from 'selection-model';
 import {createImageClientAdapter, classIdFor} from 'image-client-adapter';
+import {createProjectBrowser, createProjectPresentationProvider, createProjectSubject} from 'project-browser';
 import {observeChanges} from 'image-observation';
 import {
   createPortableRuntime,
@@ -41,6 +42,9 @@ import {
   normalizeTypeDeclarations,
   authorizedReadProject,
   authorizedRenameProject,
+  createProject,
+  addProjectMember,
+  projectObjectId,
 } from 'portable-runtime';
 import {installNativeCryptoProvider} from 'host/crypto-bootstrap';
 
@@ -130,8 +134,23 @@ async function setup({imageId, ids}) {
   presentationRegistry.register(createObjectInspectorProvider());
   presentationRegistry.register(createUnavailableRefProvider());
   presentationRegistry.register(createUnauthorizedRefProvider());
+  presentationRegistry.register(createProjectPresentationProvider());
 
   const commandRegistry = createCommandRegistry();
+  // The ORDINARY Project rename Command (okv Slice C): composition-registered,
+  // applicable to the Project subject, consuming only semantic context and
+  // calling the adapter's Images-owned rename. It edits `name` and nothing else.
+  commandRegistry.register(new Command({
+    id: 'rename-project',
+    title: 'Rename Project',
+    appliesTo: (subject) => subject?.kind === 'project',
+    invoke: async (subject, {authority, adapter: imageAdapter, text, versionToken, field}) => {
+      if (field?.field !== 'name') throw new TypeError('rename-project edits the Project name only');
+      return imageAdapter.renameProject({
+        imageId: subject.imageId, projectId: subject.projectId, name: text, versionToken, authority,
+      });
+    },
+  }));
   commandRegistry.register(new Command({
     id: 'set-title',
     title: 'Set title',
@@ -170,13 +189,24 @@ async function setup({imageId, ids}) {
   });
 
   let deniedWriteMode = false;
+  let projectDeniedMode = false;
+  // The Project browser: owner of the project view, the edit affordance/resolver
+  // and the transient Project token. Bound BEFORE any Project is opened (bindings
+  // name the logical view; the Compositor resolves the GTK handle at intent time).
+  const browser = createProjectBrowser({adapter, presentationRegistry, compositor});
+  const projectAuthority = (projectId, {write}) => issue(write ? 'alice' : 'mallory', [
+    grant('object/read', projectObjectId(projectId)),
+    ...(write ? [grant('object/write', projectObjectId(projectId))] : []),
+  ]);
   const commandRouter = createCommandRouter({
     compositor,
     commandRegistry,
     dispatch: (command, subject, opts) => adapter.dispatch(command, subject, opts),
-    authorityProvider: async ({subject}) => deniedWriteMode
-      ? authorities.readOnly(subject.objectId)
-      : authorities.readWrite(subject.objectId),
+    authorityProvider: async ({subject}) => subject?.kind === 'project'
+      ? projectAuthority(subject.projectId, {write: !projectDeniedMode})
+      : (deniedWriteMode
+        ? authorities.readOnly(subject.objectId)
+        : authorities.readWrite(subject.objectId)),
   });
 
   const intentAdapter = {
@@ -204,6 +234,47 @@ async function setup({imageId, ids}) {
     onDeferredCount: 0,
     followHandle: null,
     unsubscribeIntents: null,
+  };
+  // ---- Project rename leg (okv Slice C; driven only by real_images_acceptance) ----
+  session.projectId = null;
+  session.lastProjectEdit = null;
+  session.openProject = async () => {
+    const projectId = 'acceptance-project';
+    await createProject({images: runtime.images, imageId, projectId, name: 'Old'});
+    await addProjectMember({
+      images: runtime.images, imageId, projectId,
+      key: 'm', role: 'source', target: objectRef(imageId, primary.objectId),
+    });
+    session.projectId = projectId;
+    projectDeniedMode = false;
+    const opened = await browser.open(createProjectSubject({imageId, projectId}), {
+      authority: projectAuthority(projectId, {write: false}),
+      viewDescriptor: {kind: 'surface', width: 200, height: 200},
+    });
+    return {
+      projectSurfaceHandle: compositor.surfaceHandleForView(browser.viewId),
+      projectId,
+      name: opened.presentationDescriptor.parameters.project.name,
+    };
+  };
+  // The report never carries a token string (opaque tokens stay guest-side).
+  session.projectState = async () => {
+    const live = compositor.liveView(browser.viewId);
+    const descriptor = live?.presentationDescriptor ?? null;
+    const held = descriptor ? browser.tokenFor(descriptor) : null;
+    const fresh = session.projectId === null ? null : (await adapter.readProject({
+      imageId, projectId: session.projectId, authority: projectAuthority(session.projectId, {write: false}),
+    })).versionToken;
+    return {
+      name: descriptor?.parameters?.project?.name ?? null,
+      hasToken: held !== null,
+      tokenIsFresh: held !== null && held === fresh,
+      lastEdit: session.lastProjectEdit,
+    };
+  };
+  session.prepareProjectDeniedWrite = async () => {
+    projectDeniedMode = true;
+    return {denied: true};
   };
   globalThis.__session = session;
   globalThis.__obsPollCount = 0;
@@ -268,6 +339,33 @@ async function setup({imageId, ids}) {
       onEditError: (error) => {
         globalThis.__lastEditError = String(error?.name ?? error);
       },
+      // The project view's edit binding (okv Slice C): the ordinary GTK edit-field
+      // intent on the live project view routes to rename-project with the
+      // browser's own field resolver and paired token; the reread after a commit
+      // uses a per-call Project READ authority (the rename authority is write-only).
+      editBindings: [{
+        viewId: browser.viewId,
+        commandId: 'rename-project',
+        resolveField: browser.resolveField,
+        tokenFor: browser.tokenFor,
+        onEdited: async (result) => {
+          session.lastProjectEdit = {edited: result !== null, error: null, rereadError: null};
+          try {
+            if (result === null) throw new Error('the edit was not routed to any Command');
+            await browser.refresh({authority: projectAuthority(session.projectId, {write: false})});
+          } catch (error) {
+            session.lastProjectEdit.rereadError = String(error?.name ?? error);
+          }
+        },
+        onEditError: async (error) => {
+          session.lastProjectEdit = {edited: false, error: String(error?.name ?? error), rereadError: null};
+          try {
+            await browser.refresh({authority: projectAuthority(session.projectId, {write: false})});
+          } catch (rereadError) {
+            session.lastProjectEdit.rereadError = String(rereadError?.name ?? rereadError);
+          }
+        },
+      }],
     });
     session.navigatorSurfaceHandle = navigatorSurfaceHandle;
     session.inspectorSurfaceHandle = inspectorSurfaceHandle;

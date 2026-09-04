@@ -90,7 +90,7 @@ test('Project provider preserves the canonical descriptor and identity includes 
     Object.freeze({key: 'member/a', role: 'source', target: ref('b', 'target')}),
   ]);
   const adapter = {
-    readProject: async () => read(canonical),
+    projectWritableFields: ['name'], readProject: async () => read(canonical),
     observe: () => idleObservation(new AbortController().signal),
   };
   const browser = createProjectBrowser({
@@ -112,7 +112,7 @@ test('Project provider preserves the canonical descriptor and identity includes 
 test('ProjectBrowser alone enforces exact-one Project presentation selection and surfaces provider failures', async () => {
   const subject = createProjectSubject({imageId: 'img', projectId: 'p'});
   const canonical = project('p', 'P');
-  const adapter = {readProject: async () => read(canonical), observe: () => idleObservation(new AbortController().signal)};
+  const adapter = {projectWritableFields: ['name'], readProject: async () => read(canonical), observe: () => idleObservation(new AbortController().signal)};
 
   const none = createPresentationRegistry();
   none.register({id: 'broken-project', present() { throw new Error('provider broke'); }});
@@ -169,7 +169,7 @@ test('follow rereads and explicit refresh share one lane, so the later explicit 
     project('p', 'explicit-new'),
   ];
   const adapter = {
-    async readProject() {
+    projectWritableFields: ['name'], async readProject() {
       const index = reads++;
       if (index === 1) {
         followReadStarted.resolve();
@@ -215,7 +215,7 @@ test('stopping follow releases its unresolved read and suppresses every late eff
   let reads = 0;
   let updates = 0;
   const adapter = {
-    async readProject() {
+    projectWritableFields: ['name'], async readProject() {
       reads += 1;
       if (reads === 1) return read(project('p', 'Open'));
       if (reads === 2) {
@@ -269,7 +269,7 @@ test('replacement open bypasses an unresolved old follow read and fails with no 
   let reads = 0;
   let observationIterations = 0;
   const adapter = {
-    async readProject({projectId}) {
+    projectWritableFields: ['name'], async readProject({projectId}) {
       reads += 1;
       if (reads === 1) return read(project('old', 'Old'));
       if (reads === 2) {
@@ -322,7 +322,7 @@ test('successful replacement bypasses an unresolved old follow read and admits o
   const replacementReadStarted = deferred();
   let reads = 0;
   const adapter = {
-    async readProject() {
+    projectWritableFields: ['name'], async readProject() {
       reads += 1;
       if (reads === 1) return read(project('old', 'Old'));
       if (reads === 2) {
@@ -370,7 +370,7 @@ test('B3: after open() the token is paired with the exact displayed descriptor a
   const {semanticUiForPresentation} = await import('../src/semantic-ui.js');
   const {encodePresentations} = await import('../src/perspective-projection.js');
   const canonical = project('p', 'P', [Object.freeze({key: 'k', role: 'r', target: ref('img', 't')})]);
-  const adapter = {readProject: async () => read(canonical, 'tok-SECRET-1'), observe: () => idleObservation(new AbortController().signal)};
+  const adapter = {projectWritableFields: ['name'], readProject: async () => read(canonical, 'tok-SECRET-1'), observe: () => idleObservation(new AbortController().signal)};
   const compositor = fakeCompositor();
   const browser = createProjectBrowser({adapter, presentationRegistry: registryWithProjectProvider(), compositor});
   const subject = createProjectSubject({imageId: 'img', projectId: 'p'});
@@ -401,7 +401,7 @@ test('B3: after open() the token is paired with the exact displayed descriptor a
 
 test('F4/B7: only the exact paired object yields a token — a structurally equal copy, a foreign re-open of project-view, and a closed view all yield null', async () => {
   const canonical = project('p', 'P');
-  const adapter = {readProject: async () => read(canonical, 'tok-1'), observe: () => idleObservation(new AbortController().signal)};
+  const adapter = {projectWritableFields: ['name'], readProject: async () => read(canonical, 'tok-1'), observe: () => idleObservation(new AbortController().signal)};
   const compositor = fakeCompositor();
   const browser = createProjectBrowser({adapter, presentationRegistry: registryWithProjectProvider(), compositor});
   const subject = createProjectSubject({imageId: 'img', projectId: 'p'});
@@ -423,7 +423,7 @@ test('F4/B7: only the exact paired object yields a token — a structurally equa
 test('B4: refresh replaces descriptor AND token together; the old descriptor loses its token', async () => {
   let reads = 0;
   const adapter = {
-    readProject: async () => { reads += 1; return read(project('p', `P${reads}`), `tok-${reads}`); },
+    projectWritableFields: ['name'], readProject: async () => { reads += 1; return read(project('p', `P${reads}`), `tok-${reads}`); },
     observe: () => idleObservation(new AbortController().signal),
   };
   const compositor = fakeCompositor();
@@ -441,7 +441,7 @@ test('B5/B6/F3: replacing the active Project clears the old token BEFORE the rep
   const gate = deferred();
   let reads = 0;
   const adapter = {
-    async readProject({projectId}) {
+    projectWritableFields: ['name'], async readProject({projectId}) {
       reads += 1;
       if (reads === 1) return read(project('old', 'Old'), 'tok-old');
       if (reads === 2) return gate.promise; // the replacement read, gated
@@ -468,7 +468,7 @@ test('B5/B6/F3: replacing the active Project clears the old token BEFORE the rep
   const rejecting = fakeCompositor();
   const failingCompositor = {...rejecting, openView: async () => { throw new Error('attach failed'); }};
   const browser2 = createProjectBrowser({
-    adapter: {readProject: async () => read(project('p', 'P'), 'tok-x'), observe: () => idleObservation(new AbortController().signal)},
+    adapter: {projectWritableFields: ['name'], readProject: async () => read(project('p', 'P'), 'tok-x'), observe: () => idleObservation(new AbortController().signal)},
     presentationRegistry: registryWithProjectProvider(), compositor: failingCompositor,
   });
   await assert.rejects(browser2.open(createProjectSubject({imageId: 'img', projectId: 'p'})), /attach failed/);
@@ -483,7 +483,7 @@ test('ATTACH LOSS with the REAL Compositor: a project view that becomes lost (it
   const rendererAdapter = createFakeRendererAdapter();
   const compositor = createCompositor({rendererAdapter});
   const canonical = project('p', 'P');
-  const adapter = {readProject: async () => read(canonical, 'tok-live'), observe: () => idleObservation(new AbortController().signal)};
+  const adapter = {projectWritableFields: ['name'], readProject: async () => read(canonical, 'tok-live'), observe: () => idleObservation(new AbortController().signal)};
   const browser = createProjectBrowser({adapter, presentationRegistry: registryWithProjectProvider(), compositor});
   const {presentationDescriptor} = await browser.open(createProjectSubject({imageId: 'img', projectId: 'p'}));
   assert.equal(browser.tokenFor(presentationDescriptor), 'tok-live');
@@ -500,7 +500,7 @@ test('F3 (mid-present invalidation) + B6 (failed reread): a refresh whose presen
   let reads = 0;
   let denyNext = false;
   const adapter = {
-    async readProject() {
+    projectWritableFields: ['name'], async readProject() {
       reads += 1;
       if (denyNext) throw Object.assign(new Error('denied'), {name: 'AuthorityError'});
       return read(project('p', `P${reads}`), `tok-${reads}`);
@@ -535,8 +535,63 @@ test('F3 (mid-present invalidation) + B6 (failed reread): a refresh whose presen
 
 test('browse() rejects an adapter that still returns a bare descriptor, or a result without a token (loud shape check)', async () => {
   for (const bad of [project('p', 'P'), {descriptor: project('p', 'P')}, {descriptor: project('p', 'P'), versionToken: ''}]) {
-    const adapter = {readProject: async () => bad, observe: () => idleObservation(new AbortController().signal)};
+    const adapter = {projectWritableFields: ['name'], readProject: async () => bad, observe: () => idleObservation(new AbortController().signal)};
     const browser = createProjectBrowser({adapter, presentationRegistry: registryWithProjectProvider(), compositor: fakeCompositor()});
     await assert.rejects(browser.browse(createProjectSubject({imageId: 'img', projectId: 'p'})), /must return \{descriptor, versionToken\}/);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// okv Slice C: the Project Name edit affordance — pure resolver, projector key
+// agreement, and the structural guard that src/ names no Project storage.
+// ---------------------------------------------------------------------------
+
+test('resolveField is PURE over the descriptor: it indexes the threaded writable set (the same array the projector keys), never a slot; non-project, absent or out-of-range keys resolve null', async () => {
+  const {resolveProjectField} = await import('../src/project-browser.js');
+  const {semanticUiForPresentation} = await import('../src/semantic-ui.js');
+  const canonical = project('p', 'Old');
+  const adapter = {projectWritableFields: ['name'], readProject: async () => read(canonical, 'tok'), observe: () => idleObservation(new AbortController().signal)};
+  const compositor = fakeCompositor();
+  const browser = createProjectBrowser({adapter, presentationRegistry: registryWithProjectProvider(), compositor});
+  const {presentationDescriptor} = await browser.open(createProjectSubject({imageId: 'img', projectId: 'p'}));
+  assert.deepEqual(presentationDescriptor.parameters.writable, ['name'], 'the affordance is threaded from the adapter');
+  assert.equal(presentationDescriptor.parameters.project, canonical, 'the Images descriptor stays by identity');
+  // KEY AGREEMENT: project the LIVE descriptor, read the editable field's ACTUAL
+  // key out of the document, feed THAT key to the resolver — never a literal.
+  const doc = semanticUiForPresentation(presentationDescriptor);
+  const editable = doc.root.children.filter((c) => c.kind === 'field' && c.editable === 'text');
+  assert.equal(editable.length, 1, 'exactly one editable field');
+  assert.equal(editable[0].label, 'Name');
+  assert.deepEqual(browser.resolveField(presentationDescriptor, editable[0].key), {field: 'name'});
+  assert.equal(browser.resolveField, resolveProjectField, 'the browser exposes the module-level pure resolver');
+  // Only the editable key resolves; ids/namespace/members can never produce a rename.
+  for (const key of [editable[0].key + 1, 99, -1, 1.5, 'name']) assert.equal(browser.resolveField(presentationDescriptor, key), null);
+  assert.equal(resolveProjectField({...presentationDescriptor, kind: 'inspector'}, 0), null, 'not a project descriptor');
+  assert.equal(resolveProjectField({...presentationDescriptor, parameters: {project: canonical}}, 0), null, 'no threaded affordance -> nothing editable');
+  assert.equal(resolveProjectField({...presentationDescriptor, parameters: {project: canonical, writable: ['namespace']}}, 0)?.field, 'namespace', 'the resolver reports whatever the adapter declared (it decides nothing itself)');
+  // A read-only adapter: no affordance, Name is a plain field, resolver null.
+  const readOnly = createProjectBrowser({adapter: {...adapter, projectWritableFields: []}, presentationRegistry: registryWithProjectProvider(), compositor: fakeCompositor()});
+  const ro = (await readOnly.open(createProjectSubject({imageId: 'img', projectId: 'p'}))).presentationDescriptor;
+  assert.deepEqual(ro.parameters.writable, []);
+  assert.ok(!semanticUiForPresentation(ro).root.children.some((c) => c.editable), 'no editable field without the affordance');
+  assert.equal(readOnly.resolveField(ro, 0), null);
+  assert.throws(() => createProjectBrowser({adapter: {readProject: adapter.readProject, observe: adapter.observe}, presentationRegistry: registryWithProjectProvider(), compositor: fakeCompositor()}), /projectWritableFields/, 'a mis-wired adapter fails loudly');
+});
+
+test('STRUCTURAL GUARD: the repository-root src/ names no Images Project storage (slot ids, object-id template) and imports no Project storage helper', async () => {
+  const {readdirSync, readFileSync, statSync} = await import('node:fs');
+  const {resolve, dirname} = await import('node:path');
+  const {fileURLToPath} = await import('node:url');
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), '../src');
+  const files = [];
+  (function walk(dir) { for (const entry of readdirSync(dir)) { const p = resolve(dir, entry); if (statSync(p).isDirectory()) walk(p); else if (p.endsWith('.js')) files.push(p); } })(root);
+  assert.ok(files.length > 10, 'the enumerated root src/ file set must not be empty');
+  assert.ok(files.every((f) => f.startsWith(root + '/')), 'scoped to the repository-root src/ only (the vendored Images bundle under hosts/linux legitimately carries these literals)');
+  // Bare substrings (quote-agnostic): none of these occur legitimately in root
+  // src/ (the presentation id uses 'project:'; member data has no path form).
+  const forbidden = ['project-name', 'project-id', 'project-namespace', 'project-member', 'project/', '/member/', 'lagrange-project/', 'projectObjectId', 'projectMemberObjectId', 'PROJECT_SHAPE_ID', 'PROJECT_MEMBER_SHAPE_ID'];
+  for (const file of files) {
+    const text = readFileSync(file, 'utf8');
+    for (const needle of forbidden) assert.ok(!text.includes(needle), `${file.slice(root.length)} must not contain ${needle}: Images owns Project storage; the Environment names only semantic fields`);
   }
 });

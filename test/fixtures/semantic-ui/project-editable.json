@@ -13,7 +13,9 @@
       {
         "kind": "field",
         "label": "Name",
-        "text": "Alpha"
+        "text": "Alpha",
+        "key": 0,
+        "editable": "text"
       },
       {
         "kind": "field",
