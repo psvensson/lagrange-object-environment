@@ -20,6 +20,13 @@ function setup() {
   return {adapter, compositor};
 }
 
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return {promise, resolve, reject};
+}
+
 // --- the lifecycle: create, resize, attach, teardown -------------------------
 
 test('open/resize/presentOn/close drive the adapter lifecycle with opaque handles', async () => {
@@ -123,6 +130,148 @@ test('a lost resource marks the view lost, keeps the Session alive, and other vi
   const intent = compositor.durableIntent();
   const lostEntry = intent.find((v) => v.viewId === doomed);
   assert.equal(lostEntry.presentationDescriptor.subject.objectId, 'doomed');
+});
+
+test('openView destroys a newly-created surface exactly once before publishing an attach failure', async () => {
+  const base = createFakeRendererAdapter();
+  const cleanupStarted = deferred();
+  const allowCleanup = deferred();
+  const attempts = [];
+  let mintedHandle;
+  const adapter = Object.freeze({
+    ...base,
+    async createSurface(descriptor) {
+      mintedHandle = await base.createSurface(descriptor);
+      attempts.push({method: 'createSurface', surfaceHandle: mintedHandle});
+      return mintedHandle;
+    },
+    async attachPresentation(surfaceHandle, descriptor) {
+      attempts.push({method: 'attachPresentation', surfaceHandle});
+      base.failNext('attachPresentation');
+      return base.attachPresentation(surfaceHandle, descriptor);
+    },
+    async destroySurface(surfaceHandle) {
+      attempts.push({method: 'destroySurface', surfaceHandle});
+      cleanupStarted.resolve();
+      await allowCleanup.promise;
+      return base.destroySurface(surfaceHandle);
+    },
+  });
+  const compositor = createCompositor({rendererAdapter: adapter});
+
+  const opened = compositor.openView({
+    viewId: 'failed-open',
+    viewDescriptor: viewDescriptor(),
+    presentationDescriptor: presentationDescriptor('doomed-at-attach'),
+  });
+  await cleanupStarted.promise;
+
+  assert.deepEqual(
+    attempts,
+    [
+      {method: 'createSurface', surfaceHandle: mintedHandle},
+      {method: 'attachPresentation', surfaceHandle: mintedHandle},
+      {method: 'destroySurface', surfaceHandle: mintedHandle},
+    ],
+    'the same minted handle is compensated once, after the attach attempt',
+  );
+  assert.equal(compositor.viewStatus('failed-open'), null, 'the lost entry is not published before cleanup settles');
+  assert.deepEqual(compositor.durableIntent(), [], 'durable intent cannot observe the half-cleaned failed open');
+  assert.equal(base.liveResourceCount(), 1, 'the deferred cleanup still owns the minted resource');
+
+  allowCleanup.resolve();
+  await assert.rejects(opened, RendererResourceLostError);
+  assert.equal(base.liveResourceCount(), 0, 'the failed open leaves no renderer resource behind');
+  assert.equal(compositor.viewStatus('failed-open'), 'lost');
+  const [lost] = compositor.durableIntent();
+  assert.equal(lost.viewId, 'failed-open');
+  assert.ok(!('surfaceHandle' in lost), 'the durable lost entry remains handle-free');
+
+  await compositor.closeView('failed-open');
+  await compositor.destroy();
+  assert.equal(attempts.filter(({method}) => method === 'destroySurface').length, 1, 'later lifecycle cleanup does not destroy the failed-open surface again');
+});
+
+test('attach failure remains primary when its one cleanup attempt also fails', async () => {
+  const base = createFakeRendererAdapter();
+  const attachFailure = new Error('primary attach failure');
+  const cleanupFailure = new Error('secondary cleanup failure');
+  let cleanupAttempts = 0;
+  const adapter = Object.freeze({
+    ...base,
+    async attachPresentation() {
+      throw attachFailure;
+    },
+    async destroySurface() {
+      cleanupAttempts += 1;
+      throw cleanupFailure;
+    },
+  });
+  const compositor = createCompositor({rendererAdapter: adapter});
+
+  await assert.rejects(
+    compositor.openView({
+      viewId: 'double-failure',
+      viewDescriptor: viewDescriptor(),
+      presentationDescriptor: presentationDescriptor('double-failure'),
+    }),
+    (error) => error instanceof RendererResourceLostError && error.cause === attachFailure,
+  );
+  assert.equal(cleanupAttempts, 1);
+  assert.equal(compositor.viewStatus('double-failure'), 'lost');
+  assert.ok(!('surfaceHandle' in compositor.durableIntent()[0]));
+  assert.equal(base.liveResourceCount(), 1, 'a rejected cleanup leaves realization accounting to broad teardown');
+
+  await compositor.closeView('double-failure');
+  assert.equal(cleanupAttempts, 1, 'closeView does not retry a failed-open surface cleanup');
+  await compositor.destroy();
+  assert.equal(cleanupAttempts, 1, 'Session teardown uses destroyAll, not a second destroySurface call');
+  assert.equal(base.liveResourceCount(), 0);
+});
+
+test('openView never destroys without a validated surface handle', async (t) => {
+  await t.test('createSurface failure', async () => {
+    const base = createFakeRendererAdapter();
+    base.failNext('createSurface');
+    let cleanupAttempts = 0;
+    const adapter = Object.freeze({
+      ...base,
+      async destroySurface(surfaceHandle) {
+        cleanupAttempts += 1;
+        return base.destroySurface(surfaceHandle);
+      },
+    });
+    const compositor = createCompositor({rendererAdapter: adapter});
+    await assert.rejects(
+      compositor.openView({viewId: 'create-failed', viewDescriptor: viewDescriptor(), presentationDescriptor: presentationDescriptor('create-failed')}),
+      RendererResourceLostError,
+    );
+    assert.equal(cleanupAttempts, 0);
+    assert.equal(base.liveResourceCount(), 0);
+    await compositor.destroy();
+  });
+
+  await t.test('invalid handle returned by createSurface', async () => {
+    const invalidHandle = {not: 'opaque string'};
+    const base = createFakeRendererAdapter({mintHandle: () => invalidHandle});
+    let cleanupAttempts = 0;
+    const adapter = Object.freeze({
+      ...base,
+      async destroySurface(surfaceHandle) {
+        cleanupAttempts += 1;
+        return base.destroySurface(surfaceHandle);
+      },
+    });
+    const compositor = createCompositor({rendererAdapter: adapter});
+    await assert.rejects(
+      compositor.openView({viewId: 'invalid-handle', viewDescriptor: viewDescriptor(), presentationDescriptor: presentationDescriptor('invalid-handle')}),
+      /opaque string surface handle/,
+    );
+    assert.equal(cleanupAttempts, 0, 'an invalid value is not sent back across the renderer boundary as a handle');
+    assert.equal(base.liveResourceCount(), 1, 'the fake retained its contract-violating value until broad teardown');
+    await compositor.destroy();
+    assert.equal(base.liveResourceCount(), 0);
+  });
 });
 
 // --- invariant 4: the boundary carries only data-representable values --------
