@@ -33,15 +33,13 @@
 //!   CI run. Do not "restore" the upstream URL and do not pin a branch/tag name;
 //!   see the `[patch.crates-io]` comment in `hosts/linux/Cargo.toml`.
 //!
-//!   ORACLE CAVEAT (Bead 25v): `full_closure_links_and_exports_api` is the
-//!   project's only dedicated crash-isolated guard that the engine carries the
-//!   linker fix. It links the exact pinned Images artifact, so the proof is
-//!   hermetic until a reviewed artifact bump. If a future bump removes that
-//!   cycle, this test goes GREEN UNDER A BUGGY ENGINE.
-//!   The minimized 3-module synthetic repro is not checked in anywhere; Bead 25v
-//!   adds it, and blocks s3b (where the engine actually changes). For a mere
-//!   fetch-URL change the engine cannot change at all — the rev is pinned by
-//!   SHA — so for Bead 2rk this test is a smoke test, not the primary proof.
+//!   PROOF CLASSIFICATION (Bead 25v): `full_closure_links_and_exports_api` is an
+//!   integration/portability proof for the exact pinned Images artifact. It is
+//!   intentionally NOT the authoritative engine-fix oracle: an artifact bump
+//!   could remove the historical trigger and make this test green under a buggy
+//!   engine. `quickjs_linker_oracle.rs` owns that regression contract with the
+//!   exact recovered three-module fixture, a structural non-vacuity proof, and
+//!   production `EmbeddedLoader` + `JsEnvActor` under child-process isolation.
 //!
 //! Proven GREEN below:
 //!   - guest conditions are non-Node (process/Buffer/require undefined);
@@ -167,11 +165,11 @@ async fn b0_reachable_surface_is_green() {
     actor.shutdown().await;
 }
 
-/// The resolved blocker: the FULL portable-runtime closure now LINKS, EVALUATES,
-/// exports the portable API, and preserves the crypto-provider contract under the
-/// pinned engine (0fg). Kept behind a child process as a crash guard: if a future
-/// engine change reintroduces the SIGSEGV, the child dies of signal 11 and the
-/// parent fails with a clear message instead of crashing this test binary.
+/// Integration/portability proof: the FULL portable-runtime closure now LINKS,
+/// EVALUATES, exports the portable API, and preserves the crypto-provider contract
+/// under the pinned engine (0fg). Kept behind a child process because this real
+/// graph historically reached the engine crash; `quickjs_linker_oracle.rs` is the
+/// authoritative minimal engine-fix oracle.
 ///
 /// ALL assertions live in the CHILD leg, so the parent's only job is to read the
 /// child's EXIT STATUS: clean exit 0 = green; non-zero = a probe assertion
