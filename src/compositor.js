@@ -205,11 +205,21 @@ function createCompositor({rendererAdapter} = {}) {
       viewId = mintViewId();
     }
     let surfaceHandle = null;
+    let hasValidatedSurfaceHandle = false;
     try {
       surfaceHandle = await rendererAdapter.createSurface(viewDescriptor);
       requireHandle(surfaceHandle, 'createSurface must return an opaque string surface handle');
+      hasValidatedSurfaceHandle = true;
       await rendererAdapter.attachPresentation(surfaceHandle, presentationDescriptor);
     } catch (error) {
+      if (hasValidatedSurfaceHandle) {
+        try {
+          await rendererAdapter.destroySurface(surfaceHandle);
+        } catch {
+          // Preserve the primary attach failure. A failed compensation is not
+          // retried per-surface; broad Session teardown remains available.
+        }
+      }
       views.set(viewId, {viewDescriptor, presentationDescriptor, surfaceHandle: null, status: 'lost'});
       throw mapAdapterFailure(viewId, error);
     }
