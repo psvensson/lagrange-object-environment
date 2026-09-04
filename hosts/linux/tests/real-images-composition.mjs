@@ -32,7 +32,8 @@ import {
   packCompositeValue,
   unpackCompositeValue,
   normalizeTypeDeclarations,
-  authorizedReadProjectDescriptor,
+  authorizedReadProject,
+  authorizedRenameProject,
   createProject,
   addProjectMember,
   projectObjectId,
@@ -70,7 +71,8 @@ async function setup({imageId, ids}) {
     packCompositeValue,
     unpackCompositeValue,
     normalizeTypeDeclarations,
-    authorizedReadProjectDescriptor,
+    authorizedReadProject,
+    authorizedRenameProject,
     // Part 2's ObjectNavigator consumes this same public binding. Passing it
     // here keeps the composition surface identical without claiming Navigator
     // behavior in this headless adapter-only slice.
@@ -94,7 +96,10 @@ async function setup({imageId, ids}) {
       key: 'a-first', role: 'source', target: objectRef(imageId, 'target-a'),
     });
     const projectAuthority = issue('alice', [grant('object/read', projectObjectId(projectId))]);
-    const descriptor = await adapter.readProject({imageId, projectId, authority: projectAuthority});
+    // The version-aware read returns {descriptor, versionToken}; only the
+    // descriptor crosses to the host report (opaque tokens stay guest-side -
+    // real_images_semantics.rs asserts the report carries no object-version token).
+    const {descriptor} = await adapter.readProject({imageId, projectId, authority: projectAuthority});
     const denied = issue('mallory', []);
     const deniedKinds = [];
     for (const candidate of [projectId, 'missing-project']) {

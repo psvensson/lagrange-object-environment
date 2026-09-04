@@ -39,7 +39,8 @@ import {
   packCompositeValue,
   unpackCompositeValue,
   normalizeTypeDeclarations,
-  authorizedReadProjectDescriptor,
+  authorizedReadProject,
+  authorizedRenameProject,
 } from 'portable-runtime';
 import {installNativeCryptoProvider} from 'host/crypto-bootstrap';
 
@@ -74,7 +75,8 @@ async function setup({imageId, ids}) {
     packCompositeValue,
     unpackCompositeValue,
     normalizeTypeDeclarations,
-    authorizedReadProjectDescriptor,
+    authorizedReadProject,
+    authorizedRenameProject,
   });
   await adapter.ensureSchema(imageId, ids);
 

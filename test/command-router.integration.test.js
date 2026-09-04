@@ -79,7 +79,8 @@ test('PR D: semantic interaction on a view routes Command -> authorized image mu
     packCompositeValue: imagesApi.packCompositeValue,
     unpackCompositeValue: imagesApi.unpackCompositeValue,
     normalizeTypeDeclarations: imagesApi.normalizeTypeDeclarations,
-    authorizedReadProjectDescriptor: imagesApi.authorizedReadProjectDescriptor,
+    authorizedReadProject: imagesApi.authorizedReadProject,
+    authorizedRenameProject: imagesApi.authorizedRenameProject,
   });
   await adapter.ensureSchema(IMAGE, IDS);
 

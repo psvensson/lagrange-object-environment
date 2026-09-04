@@ -70,7 +70,8 @@ test('EnvironmentShell end-to-end: select ref -> inspector; external mutation ->
     packCompositeValue: imagesApi.packCompositeValue,
     unpackCompositeValue: imagesApi.unpackCompositeValue,
     normalizeTypeDeclarations: imagesApi.normalizeTypeDeclarations,
-    authorizedReadProjectDescriptor: imagesApi.authorizedReadProjectDescriptor,
+    authorizedReadProject: imagesApi.authorizedReadProject,
+    authorizedRenameProject: imagesApi.authorizedRenameProject,
   });
   await adapter.ensureSchema(IMAGE, IDS);
 
@@ -188,7 +189,8 @@ test('S4a: edit-field routes through CommandRouter to a REAL mutation; a stale t
     packCompositeValue: imagesApi.packCompositeValue,
     unpackCompositeValue: imagesApi.unpackCompositeValue,
     normalizeTypeDeclarations: imagesApi.normalizeTypeDeclarations,
-    authorizedReadProjectDescriptor: imagesApi.authorizedReadProjectDescriptor,
+    authorizedReadProject: imagesApi.authorizedReadProject,
+    authorizedRenameProject: imagesApi.authorizedRenameProject,
   });
   await adapter.ensureSchema(IMAGE, IDS);
 
@@ -389,7 +391,8 @@ test('olm: edit-during-active-follow defers the self-observation reread; a secon
     objectVersionToken: imagesApi.objectVersionToken, textValue: imagesApi.textValue,
     packCompositeValue: imagesApi.packCompositeValue, unpackCompositeValue: imagesApi.unpackCompositeValue,
     normalizeTypeDeclarations: imagesApi.normalizeTypeDeclarations,
-    authorizedReadProjectDescriptor: imagesApi.authorizedReadProjectDescriptor,
+    authorizedReadProject: imagesApi.authorizedReadProject,
+    authorizedRenameProject: imagesApi.authorizedRenameProject,
   });
   await adapter.ensureSchema(IMAGE, IDS);
 
