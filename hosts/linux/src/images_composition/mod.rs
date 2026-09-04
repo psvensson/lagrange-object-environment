@@ -43,10 +43,20 @@ pub const PORTABLE_RUNTIME_ARTIFACT_FORMAT: &str = "lagrange-images-portable-run
 /// The real portable composition root inside the artifact.
 pub const PORTABLE_RUNTIME_ARTIFACT_ENTRY: &str = "src/portable-runtime.js";
 
-/// External provenance only; it is not part of the canonical artifact material.
+/// The Images revision the artifact was produced from. It is NOT part of the
+/// canonical artifact material (which carries no provenance), but it IS the
+/// AUTHORITATIVE statement of which Images revision this repository consumes:
+/// the bytes + identity above are regenerated FROM it by the documented
+/// procedure (a convention a bump follows; not an executable derivation — see
+/// Bead on making the artifact<->revision link executable), and the CI sibling
+/// checkout for the JS
+/// real-runtime integration tests (`.github/workflows/ci.yml`) must name the
+/// same commit — the two lanes consume different Images entries (this artifact's
+/// `src/portable-runtime.js`; the sibling's `src/runtime.js`) at ONE revision.
+/// `tests/portable_images_artifact.rs` asserts the agreement.
 pub const PORTABLE_RUNTIME_SOURCE_REVISION: &str =
-    "ac12a01e7597e2d1c634658cc127a460d46f6150";
+    "c0f2346e559529fc810d9d94e7e0bec84bf12f54";
 
 /// Images-published identity over the exact canonical material bytes above.
 pub const PORTABLE_RUNTIME_CONTENT_IDENTITY: &str =
-    "sha256:1d28e9ded67915cb9a4b8fd92218c6989d0142f0383b7ef39427e43328f11a8c";
+    "sha256:5f2d80b421e7d63074d77419ca269818aa409142f6469e351c3b7f898e5409b3";

@@ -18,9 +18,9 @@ use sha2::{Digest, Sha256};
 fn embedded_portable_runtime_artifact_is_the_pinned_canonical_material() {
     assert_eq!(
         PORTABLE_RUNTIME_SOURCE_REVISION,
-        "ac12a01e7597e2d1c634658cc127a460d46f6150"
+        "c0f2346e559529fc810d9d94e7e0bec84bf12f54"
     );
-    assert_eq!(PORTABLE_RUNTIME_ARTIFACT_BYTES.len(), 1_101_070);
+    assert_eq!(PORTABLE_RUNTIME_ARTIFACT_BYTES.len(), 1_112_768);
     assert_eq!(PORTABLE_RUNTIME_ARTIFACT_BYTES.last(), Some(&b'}'));
 
     let digest = Sha256::digest(PORTABLE_RUNTIME_ARTIFACT_BYTES);
@@ -37,6 +37,45 @@ fn embedded_portable_runtime_artifact_is_the_pinned_canonical_material() {
     assert!(
         artifact.get("provenance").is_none(),
         "canonical material must not contain the external source provenance"
+    );
+}
+
+/// ONE Images revision, two consumers: the vendored artifact (native lane) and
+/// the CI sibling checkout (JS real-runtime integration lane) must agree, and
+/// `PORTABLE_RUNTIME_SOURCE_REVISION` is the authoritative value. A bump that
+/// moves one without the other is a hard failure here, never a silent drift.
+#[test]
+fn ci_sibling_checkout_pins_the_same_images_revision_as_the_artifact() {
+    let workflow = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.github/workflows/ci.yml");
+    let text = std::fs::read_to_string(&workflow)
+        .unwrap_or_else(|e| panic!("the CI workflow must be readable at {}: {e}", workflow.display()));
+    // Exactly ONE Images checkout block may exist; a second (with its own ref)
+    // would otherwise be invisible to the anchor below.
+    assert_eq!(
+        text.matches("repository: psvensson/lagrange-images").count(),
+        1,
+        "ci.yml must check out psvensson/lagrange-images exactly once"
+    );
+    // Anchor on the sibling-checkout block, then take its `ref:` line. NOTE: the
+    // key order `repository:` -> `ref:` -> `path:` is load-bearing for this
+    // parse (YAML itself does not require it); a reordering fails CLOSED here.
+    let block_start = text
+        .find("repository: psvensson/lagrange-images")
+        .expect("ci.yml must check out the pinned psvensson/lagrange-images sibling");
+    let refs: Vec<&str> = text[block_start..]
+        .lines()
+        .take_while(|line| !line.trim_start().starts_with("path:"))
+        .filter_map(|line| line.trim().strip_prefix("ref:"))
+        .map(str::trim)
+        .collect();
+    assert_eq!(
+        refs.len(),
+        1,
+        "exactly one `ref:` must follow the lagrange-images checkout block, found {refs:?}"
+    );
+    assert_eq!(
+        refs[0], PORTABLE_RUNTIME_SOURCE_REVISION,
+        "the JS lane's sibling checkout (src/runtime.js) and the native lane's vendored artifact (src/portable-runtime.js) must consume ONE Images revision: PORTABLE_RUNTIME_SOURCE_REVISION is authoritative"
     );
 }
 
@@ -133,12 +172,22 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
                 'addProjectMember',
                 'projectObjectId',
               ];
+              // ADMISSION FACT (okv Slice A): the pinned revision carries the
+              // Project mutation-service seams (Images ADR 0080). NOT part of
+              // requiredEnvironmentExports: nothing in the Environment consumes
+              // them yet (Slice B). This presence check distinguishes the pin from
+              // any revision that does NOT yet carry the ADR 0080 seams (it is
+              // RED against the previous pin ac12a01e); a later superset passes.
+              const admittedProjectSeams = ['authorizedReadProject', 'authorizedRenameProject'];
               return {
                 sameModule: exact.setDefaultCryptoProvider === alias.setDefaultCryptoProvider,
                 marker: host.marker,
                 exportedCreate: typeof exact.createPortableRuntime,
                 requiredEnvironmentExportCount: requiredEnvironmentExports.length,
                 missingEnvironmentExports: requiredEnvironmentExports.filter(
+                  (name) => typeof alias[name] !== 'function',
+                ),
+                missingAdmittedProjectSeams: admittedProjectSeams.filter(
                   (name) => typeof alias[name] !== 'function',
                 ),
               };
@@ -155,6 +204,11 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
         report["missingEnvironmentExports"],
         serde_json::json!([]),
         "every B3 composition helper must be callable through the sole public portable-runtime alias"
+    );
+    assert_eq!(
+        report["missingAdmittedProjectSeams"],
+        serde_json::json!([]),
+        "the pinned Images revision must carry the admitted Project seams (authorizedReadProject, authorizedRenameProject; Images ADR 0080)"
     );
 
     actor.shutdown().await;
