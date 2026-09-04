@@ -11,6 +11,10 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Backstop (Bead vbe): measured 6m00-8m10 over the three main runs of
+    # 2026-09-04 (npm install alone 5-7 min, network-bound). Never GitHub's
+    # 360-minute default. test/ci-policy.test.js keeps this executable.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
         with:
@@ -36,6 +40,14 @@ jobs:
         run: CI= npm install
       - working-directory: lagrange-object-environment
         run: npm test
+      # Package installation is its own bounded step so the proof step's
+      # deadline is attributable to the proof (apt-get varied 20 s -> 3m25 on
+      # 2026-09-04).
+      - name: Install Xvfb
+        timeout-minutes: 10
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
       - name: Browser WebGPU proof (software SwiftShader, no hardware GPU, no display compositor)
         working-directory: lagrange-object-environment
         # Runs the GATING proof under Xvfb: the real triangle Component renders
@@ -43,10 +55,16 @@ jobs:
         # with deterministic pixel read-back (copyTextureToBuffer) that does
         # not depend on the on-screen compositor. The on-screen canvas PIXEL
         # proof is a manual real-display test (test:browser:canvas), not CI.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb
-          xvfb-run -a -s "-screen 0 1280x1024x24" npm run test:browser
+        #
+        # Bead vbe: the lane runs its four proof files SERIALLY
+        # (--test-concurrency=1 in package.json) and every proof releases its
+        # browser + server through test/browser/support/proof-lane.js. This
+        # deadline is the OUTER bound for a leak/hang the lane itself did not
+        # catch: the serialized proof measured 37 s on the runner (PR #66,
+        # run 33857814972), so 5 minutes is about eight times normal.
+        # --test-force-exit is never used: a leak must fail, not go green.
+        timeout-minutes: 5
+        run: xvfb-run -a -s "-screen 0 1280x1024x24" npm run test:browser
         env:
           CHROME_PATH: /usr/bin/google-chrome
       - name: Verify provider-independent Beads bootstrap
@@ -70,6 +88,9 @@ jobs:
   # CI lane); the on-screen native-window proof is a separate follow-up.
   linux-host:
     runs-on: ubuntu-latest
+    # Backstop (Bead vbe): measured 4m44-7m54 over the three main runs of
+    # 2026-09-04 (no cargo cache; apt-get alone reached 3m25).
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
         with:

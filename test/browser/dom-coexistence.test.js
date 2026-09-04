@@ -1,76 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createServer} from 'node:http';
-import {readFile} from 'node:fs/promises';
-import {join, extname, dirname} from 'node:path';
-import {fileURLToPath} from 'node:url';
-import {execFile} from 'node:child_process';
-import {promisify} from 'node:util';
+import {available, withProofPage} from './support/proof-lane.js';
 
 // The DOM + Component COEXISTENCE proof (Bead 9vl): DOM tool realizations
 // (navigator/inspector) + a real GLB Component view behind ONE
 // BrowserRendererAdapter, via the INJECTED realization-dispatch seam (not a
 // hard-coded kind switch). Runs under Xvfb/headless SwiftShader.
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = join(HERE, '..', '..');
-const CHROME = process.env.CHROME_PATH ?? '/usr/bin/google-chrome';
-
-const MIME = {
-  '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm',
-  '.glb': 'model/gltf-binary',
-};
-
-async function chromeAvailable() {
-  try {
-    await promisify(execFile)(CHROME, ['--version']);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function serveRepo() {
-  const server = createServer(async (req, res) => {
-    try {
-      const path = req.url === '/' ? '/test/browser/proof.html' : new URL(req.url, 'http://x').pathname;
-      const file = join(REPO_ROOT, path);
-      if (!file.startsWith(REPO_ROOT)) { res.writeHead(403); res.end(); return; }
-      const body = await readFile(file);
-      res.writeHead(200, {'content-type': MIME[extname(file)] ?? 'application/octet-stream'});
-      res.end(body);
-    } catch { res.writeHead(404); res.end(); }
-  });
-  return new Promise((resolve) => {
-    server.listen(0, '127.0.0.1', () => resolve({server, port: server.address().port}));
-  });
-}
-
-const available = await chromeAvailable();
-const puppeteer = available ? (await import('puppeteer-core')).default : null;
-
-const CHROME_FLAGS = [
-  '--no-sandbox', '--enable-blink-features=WebGPU', '--enable-unsafe-webgpu',
-  '--enable-unsafe-swiftshader', '--window-size=1000,900',
-];
-
-async function launch() {
-  const {server, port} = await serveRepo();
-  const browser = await puppeteer.launch({
-    executablePath: CHROME, headless: false, args: CHROME_FLAGS,
-    env: {...process.env, DISPLAY: process.env.DISPLAY ?? ':0'},
-  });
-  const page = await browser.newPage();
-  await page.setViewport({width: 1000, height: 900});
-  page.on('pageerror', (e) => console.error('[pageerror]', e.message));
-  await page.goto(`http://127.0.0.1:${port}/test/browser/proof.html`, {waitUntil: 'networkidle0'});
-  await page.waitForFunction('window.__lagrangeProof !== undefined', {timeout: 15000});
-  return {server, browser, page};
-}
-
 test('CI: DOM tool realizations + a GLB Component coexist behind one adapter (injected dispatch seam)', {skip: !available && 'no Chrome available'}, async () => {
-  const {server, browser, page} = await launch();
-  try {
+  await withProofPage(async ({page}) => {
     const result = await page.evaluate(async () => {
       const S = await window.__lagrangeProof.openCoexistenceSession();
       // GLB Component renders pixels (TextureRenderTarget read-back).
@@ -109,18 +47,14 @@ test('CI: DOM tool realizations + a GLB Component coexist behind one adapter (in
     assert.equal(result.intents.length, 1, 'one intent from the click');
     assert.deepEqual(result.intents[0], {kind: 'activate-item', key: 0}, 'DOM emits a descriptor-local item key, not a ref');
     assert.ok(!('ref' in result.intents[0]) && !('subject' in result.intents[0]), 'no ref/subject leaks into the intent');
-  } finally {
-    await browser.close();
-    server.close();
-  }
+  });
 });
 
 // F3: the PRODUCTION DOM edit path — the real adapter's DOM realizer builds the
 // inspector <input>, and Enter commits through the adapter's REAL emitIntent
 // seam (not a test-harness copy of the intent literal).
 test('CI: the production DOM edit path emits a raw-string edit-field intent through the real adapter seam', {skip: !available && 'no Chrome available'}, async () => {
-  const {server, browser, page} = await launch();
-  try {
+  await withProofPage(async ({page}) => {
     const result = await page.evaluate(async () => {
       const S = await window.__lagrangeProof.openCoexistenceSession();
       const intents = [];
@@ -140,15 +74,11 @@ test('CI: the production DOM edit path emits a raw-string edit-field intent thro
     // Enter committed a RAW-STRING edit-field intent through the production seam.
     assert.deepEqual(result.intents, [{kind: 'edit-field', key: 0, text: 'Root-edited'}],
       'the production DOM realizer emits a raw-string edit-field intent via the adapter emitIntent seam');
-  } finally {
-    await browser.close();
-    server.close();
-  }
+  });
 });
 
 test('CI: the real navigator -> selection -> inspector loop drives through real DOM', {skip: !available && 'no Chrome available'}, async () => {
-  const {server, browser, page} = await launch();
-  try {
+  await withProofPage(async ({page}) => {
     const result = await page.evaluate(async () => {
       const S = await window.__lagrangeProof.openDomLoopSession();
       const before = {subject: S.inspectorSubject(), selected: S.selected(), focused: S.focused()};
@@ -180,15 +110,11 @@ test('CI: the real navigator -> selection -> inspector loop drives through real 
     assert.ok(result.after.inspectorText.includes('17'), 'the inspector DOM shows B\'s read-only count as text');
     // presentOn detach DISPOSES the old inspector node (no lingering duplicate).
     assert.equal(result.after.inspectorNodeCount, 1, 'exactly one inspector DOM node after the presentOn swap (detach disposed the old one)');
-  } finally {
-    await browser.close();
-    server.close();
-  }
+  });
 });
 
 test('CI: the dispatch seam is INJECTED, not a hard-coded kind switch (sentinel realizer)', {skip: !available && 'no Chrome available'}, async () => {
-  const {server, browser, page} = await launch();
-  try {
+  await withProofPage(async ({page}) => {
     const result = await page.evaluate(async () => {
       const S = await window.__lagrangeProof.openCoexistenceSession({sentinelNavigator: true});
       const glbFrame = await S.readGlb();
@@ -212,10 +138,7 @@ test('CI: the dispatch seam is INJECTED, not a hard-coded kind switch (sentinel 
     assert.ok(result.glbOk, 'GLB still renders while the navigator uses the sentinel realizer');
     // destroyAll tears down BOTH the canvas and the DOM/sentinel nodes.
     assert.ok(result.mountEmptyAfterDestroy, 'destroyAll disposes the Component canvas AND the DOM realizations');
-  } finally {
-    await browser.close();
-    server.close();
-  }
+  });
 });
 
 // L2 cross-host identity: the browser SemanticUi->DOM rendering path consumes
@@ -223,8 +146,7 @@ test('CI: the dispatch seam is INJECTED, not a hard-coded kind switch (sentinel 
 // This also covers the unavailable/unauthorized kinds, which had NO DOM-level
 // coverage before L2.
 test('CI: the browser realizer renders the checked-in SemanticUi fixtures (all five kinds)', {skip: !available && 'no Chrome available'}, async () => {
-  const {server, browser, page} = await launch();
-  try {
+  await withProofPage(async ({page}) => {
     const result = await page.evaluate(async () => {
       const out = {};
       // navigator: heading + fields + reference buttons + activate-item intent.
@@ -315,8 +237,5 @@ test('CI: the browser realizer renders the checked-in SemanticUi fixtures (all f
     assert.equal(result.unauthorized.heading, 'unauthorized-reference');
     assert.equal(result.unauthorized.reason, 'Not authorized: obj-secret (denied)');
     assert.deepEqual(result.unauthorized.buttons, []);
-  } finally {
-    await browser.close();
-    server.close();
-  }
+  });
 });

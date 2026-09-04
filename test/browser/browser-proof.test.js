@@ -1,11 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createServer} from 'node:http';
-import {readFile} from 'node:fs/promises';
-import {join, extname, dirname} from 'node:path';
-import {fileURLToPath} from 'node:url';
-import {execFile} from 'node:child_process';
-import {promisify} from 'node:util';
+import {available, withProofPage} from './support/proof-lane.js';
 
 // The PR B CI browser proof — runs under Xvfb/headless SwiftShader (NO hardware
 // GPU, NO display compositor required) and is the GATING automated proof.
@@ -23,47 +18,6 @@ import {promisify} from 'node:util';
 // not an implementation bug). The full canvas PIXEL proof is retained as a
 // manual real-display integration test (browser-proof.canvas.manual.test.js).
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = join(HERE, '..', '..');
-const CHROME = process.env.CHROME_PATH ?? '/usr/bin/google-chrome';
-
-const MIME = {
-  '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm',
-};
-
-async function chromeAvailable() {
-  try {
-    await promisify(execFile)(CHROME, ['--version']);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function serveRepo() {
-  const server = createServer(async (req, res) => {
-    try {
-      const path = req.url === '/' ? '/test/browser/proof.html' : new URL(req.url, 'http://x').pathname;
-      const file = join(REPO_ROOT, path);
-      if (!file.startsWith(REPO_ROOT)) { res.writeHead(403); res.end(); return; }
-      const body = await readFile(file);
-      res.writeHead(200, {'content-type': MIME[extname(file)] ?? 'application/octet-stream'});
-      res.end(body);
-    } catch { res.writeHead(404); res.end(); }
-  });
-  return new Promise((resolve) => {
-    server.listen(0, '127.0.0.1', () => resolve({server, port: server.address().port}));
-  });
-}
-
-const available = await chromeAvailable();
-const puppeteer = available ? (await import('puppeteer-core')).default : null;
-
-const CHROME_FLAGS = [
-  '--no-sandbox', '--enable-blink-features=WebGPU', '--enable-unsafe-webgpu',
-  '--enable-unsafe-swiftshader', '--window-size=1000,900',
-];
-
 // The triangle covers roughly the central half of the frame; require a
 // comfortably positive fraction of strongly-red pixels (SwiftShader-tolerant,
 // never exact). This is a discriminating assertion: it goes red if the
@@ -76,23 +30,8 @@ function assertTriangle(frame, label) {
   );
 }
 
-async function launchPage() {
-  const {server, port} = await serveRepo();
-  const browser = await puppeteer.launch({
-    executablePath: CHROME, headless: false, args: CHROME_FLAGS,
-    env: {...process.env, DISPLAY: process.env.DISPLAY ?? ':0'},
-  });
-  const page = await browser.newPage();
-  await page.setViewport({width: 1000, height: 900});
-  page.on('pageerror', (e) => console.error('[pageerror]', e.message));
-  await page.goto(`http://127.0.0.1:${port}/test/browser/proof.html`, {waitUntil: 'networkidle0'});
-  await page.waitForFunction('window.__lagrangeProof !== undefined', {timeout: 15000});
-  return {server, browser, page};
-}
-
 test('CI: real Component renders triangle pixels into a TextureRenderTarget', {skip: !available && 'no Chrome available'}, async (t) => {
-  const {server, browser, page} = await launchPage();
-  try {
+  await withProofPage(async ({page}) => {
     const gpuInfo = await page.evaluate(async () => {
       const a = await navigator.gpu?.requestAdapter();
       return a?.info ? {vendor: a.info.vendor, architecture: a.info.architecture} : null;
@@ -119,15 +58,11 @@ test('CI: real Component renders triangle pixels into a TextureRenderTarget', {s
     assertTriangle(result.frameAResized, 'texture view A after resize');
     assert.equal(result.frameBAfter.width, 640, 'B width unchanged by resizing A');
     assertTriangle(result.frameBAfter, 'texture view B after resizing A');
-  } finally {
-    await browser.close();
-    server.close();
-  }
+  });
 });
 
 test('CI: CanvasRenderTarget lifecycle — two surfaces, resize independence, teardown/recreate', {skip: !available && 'no Chrome available'}, async () => {
-  const {server, browser, page} = await launchPage();
-  try {
+  await withProofPage(async ({page}) => {
     const result = await page.evaluate(async () => {
       const S = await window.__lagrangeProof.openCanvasSession();
       const {a, b} = await S.openTwo();
@@ -158,8 +93,5 @@ test('CI: CanvasRenderTarget lifecycle — two surfaces, resize independence, te
     assert.equal(result.afterDestroyA, 1, 'destroying A removes only A');
     assert.equal(result.afterDestroyAll, 0, 'Session teardown must remove all canvases');
     assert.equal(result.afterRecreate, 1, 'a fresh Session recreates the render view');
-  } finally {
-    await browser.close();
-    server.close();
-  }
+  });
 });
