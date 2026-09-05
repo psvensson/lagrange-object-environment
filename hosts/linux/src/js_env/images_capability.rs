@@ -37,7 +37,7 @@
 //! thread can service). This fake has no GTK/real-time affinity, so a plain
 //! blocking loop on its own thread is the correct owner.
 //!
-//! # Scripted-outcome dispatch over opaque token identity (reconciles ownership row 70)
+//! # Scripted-outcome dispatch over opaque token identity (reconciles ownership row 73)
 //!
 //! The version token is an OPAQUE string the host mints (`v<version>`). The guest
 //! NEVER parses/forges/compares it — it captures a token from a read/mutation and

@@ -42,6 +42,7 @@ import {
   normalizeTypeDeclarations,
   authorizedReadProject,
   authorizedRenameProject,
+  authorizedDescribeSmalltalkClass,
   createProject,
   addProjectMember,
   projectObjectId,
@@ -81,6 +82,7 @@ async function setup({imageId, ids}) {
     normalizeTypeDeclarations,
     authorizedReadProject,
     authorizedRenameProject,
+    authorizedDescribeSmalltalkClass,
   });
   await adapter.ensureSchema(imageId, ids);
 

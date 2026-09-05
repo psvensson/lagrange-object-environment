@@ -1,0 +1,68 @@
+{
+  "kind": "semantic-ui",
+  "version": 1,
+  "root": {
+    "kind": "group",
+    "title": "Class: BrowseChild",
+    "children": [
+      {
+        "kind": "text",
+        "role": "heading",
+        "text": "Class: BrowseChild"
+      },
+      {
+        "kind": "field",
+        "label": "Name",
+        "text": "BrowseChild"
+      },
+      {
+        "kind": "field",
+        "label": "Side",
+        "text": "instance"
+      },
+      {
+        "kind": "field",
+        "label": "Class",
+        "text": "-> smalltalk/class/BrowseChild"
+      },
+      {
+        "kind": "field",
+        "label": "Instance variables",
+        "text": "baseValue, childFirst"
+      },
+      {
+        "kind": "field",
+        "label": "Indexed",
+        "text": "none"
+      },
+      {
+        "kind": "collection",
+        "label": "Selectors",
+        "items": [
+          {
+            "kind": "text",
+            "text": "childFirst"
+          },
+          {
+            "kind": "text",
+            "text": "childSecond"
+          }
+        ]
+      },
+      {
+        "kind": "collection",
+        "label": "Locators",
+        "items": [
+          {
+            "kind": "text",
+            "text": "superclass -> img/smalltalk/class/BrowseBase"
+          },
+          {
+            "kind": "text",
+            "text": "class-side -> img/smalltalk/metaclass/BrowseChild"
+          }
+        ]
+      }
+    ]
+  }
+}

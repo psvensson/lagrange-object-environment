@@ -27,6 +27,13 @@ const CASES = {
   // The same Project with the threaded edit affordance: Name becomes the ONLY
   // editable field (key = its index in `writable`); id/namespace stay read-only.
   'project-editable': {kind: 'project', subject: {kind: 'project', imageId: 'image-a', projectId: 'project-alpha'}, parameters: {project: {format: 'lagrange-project/v1', projectId: 'project-alpha', name: 'Alpha', namespace: {kind: 'ref', imageId: 'image-a', objectId: 'workspace'}, members: [{key: 'member/a', role: 'source', target: {kind: 'ref', imageId: 'image-a', objectId: 'obj-a'}}, {key: 'member/b', role: 'dependency', target: {kind: 'ref', imageId: 'image-b', objectId: 'obj-b'}}]}, writable: ['name']}},
+  // The authorized native Smalltalk class description (Images ADR 0087),
+  // preserved by identity in the descriptor. `layout` present with a NON-empty
+  // instanceVariables plus a class-side locator; the null-layout and
+  // empty-instanceVariables cases are distinguished in
+  // test/native-smalltalk-browser.test.js, because that distinction is the one
+  // most easily collapsed by accident.
+  'native-class': {kind: 'native-class', subject: {kind: 'native-class', imageId: 'img', classRef: ref('smalltalk/class/BrowseChild')}, parameters: {smalltalkClass: {format: 'smalltalk-class-description/v1', class: ref('smalltalk/class/BrowseChild'), name: 'BrowseChild', side: 'instance', superclass: ref('smalltalk/class/BrowseBase'), classSide: ref('smalltalk/metaclass/BrowseChild'), layout: {instanceVariables: ['baseValue', 'childFirst'], indexed: 'none'}, selectors: ['childFirst', 'childSecond'], provenance: null}, locators: [{relation: 'superclass', ref: ref('smalltalk/class/BrowseBase')}, {relation: 'class-side', ref: ref('smalltalk/metaclass/BrowseChild')}]}},
   unavailable: {kind: 'unavailable-reference', subject: ref('obj-gone'), parameters: {reason: 'not found'}},
   unauthorized: {kind: 'unauthorized-reference', subject: ref('obj-secret'), parameters: {reason: 'denied'}},
 };
@@ -51,6 +58,21 @@ test('the validator accepts every checked-in green fixture', async () => {
     const doc = await readJson(join(FIXTURES, `${name}.json`));
     assert.equal(validateSemanticUi(doc), doc, `${name}.json must validate`);
   }
+});
+
+// The corpus is the CROSS-HOST contract, so a fixture that only one side checks
+// is a silent divergence waiting to happen. This binds the JS projector's case
+// map to the directory: a new green fixture without a CASES entry (or a CASES
+// entry without its fixture) goes red here, and the Rust projector has the
+// mirror-image guard in hosts/linux/tests/l3_projector.rs.
+test('every green fixture has a projector case, and every case has a fixture', async () => {
+  const {readdir} = await import('node:fs/promises');
+  const onDisk = (await readdir(FIXTURES, {withFileTypes: true}))
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
+    .map((entry) => entry.name.replace(/\.json$/, ''))
+    // Not a SemanticUi document: the canonical cross-host INTENT bytes.
+    .filter((name) => name !== 'edit-field-intent');
+  assert.deepEqual(onDisk.sort(), Object.keys(CASES).sort());
 });
 
 test('the validator LOUDLY rejects every red conformance fixture', async () => {

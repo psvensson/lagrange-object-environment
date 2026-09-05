@@ -427,7 +427,7 @@ test('an unreadable inspector (unavailable/unauthorized) carries NO transient to
 });
 
 // ---------------------------------------------------------------------------
-// Bead 6lm: generic EDIT BINDINGS (the shell's row 64 generalized). Everything
+// Bead 6lm: generic EDIT BINDINGS (the shell's row 65 generalized). Everything
 // below is proved at the shell's intent contract with synthesized intents: no
 // SemanticUi producer emits edit-field for a non-inspector surface yet (Bead ndk).
 // ---------------------------------------------------------------------------

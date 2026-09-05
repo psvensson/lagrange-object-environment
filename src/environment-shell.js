@@ -20,7 +20,7 @@
  *  (3) "resolve a renderer activate-item key against the CURRENT LIVE descriptor
  *      of its bound source view, then select the resulting ref". The descriptor-
  *      local resolver is injected by that view's semantic owner; the shell owns
- *      only renderer action -> selection orchestration. Bindings (rows 63/64)
+ *      only renderer action -> selection orchestration. Bindings (rows 64/65)
  *      name LOGICAL VIEWS; the Compositor alone maps a renderer's transient
  *      surface handle to the live view at interaction time (Bead 4o8).
  * The shell does NOT:
@@ -269,7 +269,7 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
   }
 
   // ---------------------------------------------------------------------------
-  // RENDERER INTENT ROUTING (rows 63/64; Beads 6lm, 4o8+8ik).
+  // RENDERER INTENT ROUTING (rows 64/65; Beads 6lm, 4o8+8ik).
   //
   // INVARIANT: renderer intents arrive carrying a TRANSIENT surface handle;
   // bindings name STABLE logical views; the Compositor is the SOLE authority
@@ -308,7 +308,7 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
   }
 
   // The public 'activate-item' handler for a caller that names a logical view
-  // (row 63; ProjectBrowser's integration calls it directly). The descriptor is
+  // (row 64; ProjectBrowser's integration calls it directly). The descriptor is
   // the view's CURRENT LIVE presentation from the Compositor's own lookup; an
   // absent or lost view is an explicit no-op and the resolver is NOT consulted.
   // Navigator reference indexing remains the default resolver; a view's semantic
@@ -328,7 +328,7 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
     return activateOnView({view, resolveItem, key, authority, readBlockId});
   }
 
-  // ----- edit bindings (row 64) -----
+  // ----- edit bindings (row 65) -----
 
   function inspectorResolveField(descriptor, key) {
     const fields = descriptor?.parameters?.fields ?? {};
