@@ -31,8 +31,18 @@
 
 import {semanticUiForPresentation} from '../semantic-ui.js';
 
+// The presentation kinds this realizer claims as SEMANTIC TOOL UI (as opposed to
+// a Component/graphics surface). The native Smalltalk kinds join here in E2,
+// when a real Compositor attach actually presents them; E1 deliberately kept
+// them out while nothing produced a live view.
+//
+// This list is mirrored by hosts/linux/src/linux_adapter.rs and the two are
+// pinned equal by a parity test: a kind admitted here but not there would be
+// realized as a tool in the browser and sent down the Component route natively —
+// the same bytes producing two different realizations.
 const TOOL_KINDS = Object.freeze([
-  'navigator', 'inspector', 'project', 'unavailable-reference', 'unauthorized-reference',
+  'navigator', 'inspector', 'project', 'native-class', 'native-method',
+  'unavailable-reference', 'unauthorized-reference',
 ]);
 
 function isToolKind(kind) {

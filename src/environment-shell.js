@@ -299,12 +299,39 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
   // ---------------------------------------------------------------------------
 
   // The 'activate-item' interaction on an already-resolved LIVE view: ask the
-  // view's injected pure resolver for a ref, then own ref -> selection.
-  async function activateOnView({view, resolveItem, key, authority = null, readBlockId}) {
-    const ref = resolveItem(view.presentationDescriptor, key);
-    if (!ref || typeof ref.objectId !== 'string') return null;
-    await selectObject(ref, {authority, readBlockId, sourceViewId: view.viewId});
-    return ref;
+  // view's injected pure resolver, over THAT SAME live snapshot, then own the
+  // outcome.
+  //
+  // TWO outcomes, and the shell owns WHICH, never WHAT:
+  //   an ObjectRef        -> the existing selection gesture: selection, focus,
+  //                          inspector reread. Unchanged.
+  //   a semantic target   -> delegated VERBATIM to this binding's activateTarget.
+  //                          The shell does not inspect it, does not know what it
+  //                          means, and performs NO selection, NO focus and NO
+  //                          navigation of its own — a delegated activation is not
+  //                          a selection gesture.
+  //
+  // `context` is EXACTLY {viewId}: no authority, no readBlockId, no surfaceHandle.
+  // Activation carries no shell-internal state (row 64), and a consumer supplies
+  // its own authority when it acts (ADR 0005, as amended). bindIntents' top-level
+  // authority/readBlockId belong to the ref path's reread and are deliberately not
+  // threaded here.
+  async function activateOnView({view, binding, key, authority = null, readBlockId}) {
+    const classified = classifyActivationResult(
+      binding.resolveItem(view.presentationDescriptor, key), view.viewId,
+    );
+    if (classified.outcome === 'none') return null;
+    if (classified.outcome === 'ref') {
+      await selectObject(classified.ref, {authority, readBlockId, sourceViewId: view.viewId});
+      return classified.ref;
+    }
+    if (!binding.activateTarget) {
+      throw new TypeError(
+        `activation binding for ${view.viewId} returned a semantic target but supplies no activateTarget consumer`,
+      );
+    }
+    await binding.activateTarget(classified.target, Object.freeze({viewId: view.viewId}));
+    return classified.target;
   }
 
   // The public 'activate-item' handler for a caller that names a logical view
@@ -317,15 +344,22 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
     key,
     viewId = NAVIGATOR_VIEW_ID,
     resolveItem = resolveNavigatorItem,
+    activateTarget = null,
     authority = null,
     readBlockId,
   } = {}) {
     if (typeof resolveItem !== 'function') {
       throw new TypeError('handleActivateItem requires a descriptor-local resolveItem function');
     }
+    if (activateTarget !== null && typeof activateTarget !== 'function') {
+      throw new TypeError('handleActivateItem activateTarget must be a function when present');
+    }
     const view = compositor.liveView(viewId);
     if (!view) return null;
-    return activateOnView({view, resolveItem, key, authority, readBlockId});
+    // A DIRECT caller stays LOUD: every classification and consumer failure
+    // rejects here. Only the renderer-event path is fire-and-forget, and it has
+    // its own observable channel (bindIntents' onActivateError).
+    return activateOnView({view, binding: {resolveItem, activateTarget}, key, authority, readBlockId});
   }
 
   // ----- edit bindings (row 65) -----
@@ -370,6 +404,13 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
     }
   }
 
+  // The activation binding's own key set. Unknown keys are REJECTED rather than
+  // silently dropped: this table used to freeze {viewId, resolveItem} and
+  // discard the rest, so a typo'd `activateTargets` would quietly degrade a
+  // delegated binding to the ref path and turn a semantic target into a silent
+  // no-op — the failure mode the delegated contract exists to make loud.
+  const ACTIVATION_BINDING_KEYS = Object.freeze(['viewId', 'resolveItem', 'activateTarget']);
+
   function normalizeActivationBinding(binding) {
     rejectHandleKey(binding, 'activation');
     if (!binding || typeof binding !== 'object'
@@ -377,7 +418,67 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
         || typeof binding.resolveItem !== 'function') {
       throw new TypeError('each activation binding requires viewId and resolveItem');
     }
-    return Object.freeze({viewId: binding.viewId, resolveItem: binding.resolveItem});
+    const unknown = Object.keys(binding).filter((key) => !ACTIVATION_BINDING_KEYS.includes(key));
+    if (unknown.length > 0) {
+      throw new TypeError(
+        `activation binding for ${binding.viewId} has unknown keys ${unknown.join(', ')} `
+        + `(expected ${ACTIVATION_BINDING_KEYS.join(', ')}); a silently dropped key would swallow interactions`,
+      );
+    }
+    if (binding.activateTarget !== undefined && typeof binding.activateTarget !== 'function') {
+      throw new TypeError(`activation binding for ${binding.viewId} activateTarget must be a function when present`);
+    }
+    return Object.freeze({
+      viewId: binding.viewId,
+      resolveItem: binding.resolveItem,
+      activateTarget: binding.activateTarget ?? null,
+    });
+  }
+
+  /**
+   * Classify what a binding's pure resolver returned. TOTAL by construction, and
+   * deliberately semantics-free: the shell knows `ref` (its own vocabulary) and
+   * "plain data", and nothing else. It never learns what a semantic target MEANS.
+   *
+   *   null                       an intentional stale/out-of-range no-op — the ONLY no-op.
+   *   undefined                  a resolver contract violation (a resolver that forgot to
+   *                              return), LOUD. Previously an accidental silent no-op.
+   *   a well-formed ObjectRef    the existing selection gesture, unchanged, ALWAYS — a ref is
+   *                              a ref even under a delegated binding.
+   *   ref-shaped but malformed   LOUD, and loud BEFORE any delegation: otherwise a delegated
+   *                              binding would receive it as a "target" and loudness would
+   *                              depend on whether that consumer happened to reject it.
+   *   plain data, non-ref        a SEMANTIC TARGET, legal only with activateTarget.
+   *   anything else              LOUD. Arrays, primitives, class instances and
+   *                              function-bearing objects must not become navigation targets
+   *                              merely because some of them survive serialization, so
+   *                              plainness is checked BEFORE data-representability.
+   */
+  function classifyActivationResult(result, viewId) {
+    if (result === null) return {outcome: 'none'};
+    if (result === undefined) {
+      throw new TypeError(
+        `activation binding for ${viewId} resolveItem returned undefined; return null for a stale or out-of-range key`,
+      );
+    }
+    const isRefShaped = typeof result === 'object' && result !== null
+      && (result.kind === 'ref' || result.kind === 'pinned-ref');
+    if (isRefShaped) {
+      if (typeof result.objectId !== 'string' || result.objectId.length === 0) {
+        throw new TypeError(
+          `activation binding for ${viewId} resolveItem returned a ${result.kind} without a non-empty objectId`,
+        );
+      }
+      return {outcome: 'ref', ref: result};
+    }
+    const proto = typeof result === 'object' ? Object.getPrototypeOf(result) : undefined;
+    if (typeof result !== 'object' || Array.isArray(result)
+        || (proto !== Object.prototype && proto !== null)) {
+      throw new TypeError(
+        `activation binding for ${viewId} resolveItem must return null, an object ref, or a plain semantic target`,
+      );
+    }
+    return {outcome: 'target', target: assertDataRepresentable(result, 'activation semantic target')};
   }
 
   function normalizeEditBinding(binding) {
@@ -590,6 +691,7 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
     readBlockId,
     onEdited = null,
     onEditError = null,
+    onActivateError = null,
     ...rest
   } = {}) {
     if (!adapter || typeof adapter.onIntent !== 'function') {
@@ -600,6 +702,9 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
         throw new TypeError(`bindIntents: \`${retired}\` was retired; bindings name logical views — use \`${retired === 'navigatorSurfaceHandle' ? 'navigator' : 'inspector'}: true\``);
       }
     }
+    if (onActivateError !== null && typeof onActivateError !== 'function') {
+      throw new TypeError('bindIntents onActivateError must be a function when present');
+    }
     if (!Array.isArray(activationBindings)) throw new TypeError('activationBindings must be an array');
     if (!Array.isArray(editBindings)) throw new TypeError('editBindings must be an array');
     const activations = new Map();
@@ -609,7 +714,7 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
       }
       activations.set(binding.viewId, binding);
     };
-    if (bindNavigator) addActivation(Object.freeze({viewId: NAVIGATOR_VIEW_ID, resolveItem: resolveNavigatorItem}));
+    if (bindNavigator) addActivation(Object.freeze({viewId: NAVIGATOR_VIEW_ID, resolveItem: resolveNavigatorItem, activateTarget: null}));
     for (const binding of activationBindings) addActivation(normalizeActivationBinding(binding));
     const edits = new Map();
     if (bindInspector || editBindings.length > 0) {
@@ -636,8 +741,19 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
       if (kind === 'activate-item') {
         const binding = activations.get(view.viewId);
         if (!binding) return;
-        // Fire-and-forget; errors route nowhere (the handler is best-effort UI).
-        activateOnView({view, resolveItem: binding.resolveItem, key: intent.key, authority, readBlockId}).catch(() => {});
+        // A renderer event is fire-and-forget — it has no caller to reject to —
+        // but a failure now has ONE observable route when the caller asked for
+        // it. Reported EXACTLY ONCE, and a throwing reporter is swallowed rather
+        // than starting a second reporting loop. Without the hook the historical
+        // best-effort swallow is preserved, so existing callers are unchanged.
+        activateOnView({view, binding, key: intent.key, authority, readBlockId}).catch((error) => {
+          if (!onActivateError) return;
+          try {
+            onActivateError(error, Object.freeze({viewId: view.viewId}));
+          } catch {
+            // A reporter that itself fails must not re-enter this path.
+          }
+        });
         return;
       }
       const binding = edits.get(view.viewId);

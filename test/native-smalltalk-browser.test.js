@@ -13,7 +13,7 @@ import {
   createNativeMethodPresentationProvider,
   createNativeMethodSubject,
   createNativeSmalltalkBrowser,
-  resolveNativeClassLocator,
+  resolveNativeTarget,
 } from '../src/native-smalltalk-browser.js';
 import {createPresentationRegistry} from '../src/presentation-registry.js';
 import {
@@ -22,7 +22,8 @@ import {
 } from '../src/object-presentation-providers.js';
 import {UNAVAILABLE_REF_KIND, UNAUTHORIZED_REF_KIND} from '../src/object-navigator.js';
 import {semanticUiForPresentation} from '../src/semantic-ui.js';
-import {assertDataRepresentable} from '../src/compositor.js';
+import {assertDataRepresentable, createCompositor} from '../src/compositor.js';
+import {createFakeRendererAdapter} from '../src/fake-renderer-adapter.js';
 import {Presentation} from '../src/model.js';
 
 // Unit proofs for the NativeSmalltalkBrowser (no image runtime). The real
@@ -52,6 +53,13 @@ function description(overrides = {}) {
     provenance: null,
     ...overrides,
   });
+}
+
+// A REAL Compositor over the headless fake renderer: the browser now admits and
+// re-presents its own logical view, so its unit lane exercises the real
+// admission path rather than a stub.
+function compositorFor() {
+  return createCompositor({rendererAdapter: createFakeRendererAdapter()});
 }
 
 function registryWithNativeClass(extraProviders = []) {
@@ -137,7 +145,7 @@ test('the native-class subject carries the EXACT Images ref and rejects a ref it
 
 test('browse makes ONE authorized adapter call with exactly the subject and threaded authority', async () => {
   const adapter = fakeAdapter();
-  const browser = createNativeSmalltalkBrowser({adapter, presentationRegistry: registryWithNativeClass()});
+  const browser = createNativeSmalltalkBrowser({adapter, presentationRegistry: registryWithNativeClass(), compositor: compositorFor()});
   const authority = Object.freeze({opaque: true});
 
   const presentation = await browser.browse(
@@ -152,35 +160,56 @@ test('browse makes ONE authorized adapter call with exactly the subject and thre
   assert.equal(presentation.kind, NATIVE_CLASS_PRESENTATION_KIND);
 });
 
-test('the Images description is preserved BY IDENTITY; locators hold its own refs', async () => {
+test('the Images description is preserved BY IDENTITY; targets hold its own refs and selectors', async () => {
   const canonical = description();
   const adapter = fakeAdapter({describe: () => canonical});
-  const browser = createNativeSmalltalkBrowser({adapter, presentationRegistry: registryWithNativeClass()});
+  const browser = createNativeSmalltalkBrowser({adapter, presentationRegistry: registryWithNativeClass(), compositor: compositorFor()});
 
   const presentation = await browser.browse(createNativeClassSubject({imageId: IMAGE, classRef: CLASS_REF}));
 
   assert.equal(presentation.context.smalltalkClass, canonical,
     'the canonical description is the SAME object — never copied, normalized or re-shaped');
-  assert.deepEqual(presentation.context.locators, [
-    {relation: LOCATOR_RELATION.SUPERCLASS, ref: SUPER_REF},
-    {relation: LOCATOR_RELATION.CLASS_SIDE, ref: META_REF},
+  // ONE ordered array: the class's own selectors, then its relations.
+  assert.deepEqual(presentation.context.targets.map((entry) => [entry.group, entry.label]), [
+    ['selector', 'childFirst'],
+    ['selector', 'childSecond'],
+    ['relation', `superclass -> ${IMAGE}/${SUPER_REF.objectId}`],
+    ['relation', `class-side -> ${IMAGE}/${META_REF.objectId}`],
   ]);
-  assert.equal(presentation.context.locators[0].ref, SUPER_REF, 'locator refs are the description\'s own objects');
-  assert.equal(presentation.context.locators[1].ref, META_REF);
+  // The targets carry the DESCRIPTION's own objects, by identity — not
+  // re-spelled refs and not copied selector strings.
+  assert.equal(presentation.context.targets[0].target.classRef, canonical.class);
+  assert.equal(presentation.context.targets[0].target.selector, canonical.selectors[0]);
+  assert.equal(presentation.context.targets[2].target.classRef, canonical.superclass);
+  assert.equal(presentation.context.targets[3].target.classRef, canonical.classSide);
+  assert.equal(presentation.context.targets[2].target.kind, 'native-class');
+  assert.equal(presentation.context.targets[0].target.kind, 'native-method');
 });
 
-test('a root class contributes no superclass locator and a Metaclass no class-side locator', async () => {
+test('a root class contributes no superclass target and a Metaclass no class-side target', async () => {
+  const relations = (presentation) => presentation.context.targets
+    .filter((entry) => entry.group === 'relation')
+    .map((entry) => entry.label.split(' ->')[0]);
+
   const rootAdapter = fakeAdapter({describe: () => description({superclass: null})});
-  const rootBrowser = createNativeSmalltalkBrowser({adapter: rootAdapter, presentationRegistry: registryWithNativeClass()});
+  const rootBrowser = createNativeSmalltalkBrowser({adapter: rootAdapter, presentationRegistry: registryWithNativeClass(), compositor: compositorFor()});
   const root = await rootBrowser.browse(createNativeClassSubject({imageId: IMAGE, classRef: CLASS_REF}));
   // The kernel's nil TERMINATES the chain; a root class does not have a
   // superclass named "nil", so there is nothing to navigate to.
-  assert.deepEqual(root.context.locators.map((l) => l.relation), [LOCATOR_RELATION.CLASS_SIDE]);
+  assert.deepEqual(relations(root), [LOCATOR_RELATION.CLASS_SIDE]);
 
   const metaAdapter = fakeAdapter({describe: () => description({classSide: null})});
-  const metaBrowser = createNativeSmalltalkBrowser({adapter: metaAdapter, presentationRegistry: registryWithNativeClass()});
+  const metaBrowser = createNativeSmalltalkBrowser({adapter: metaAdapter, presentationRegistry: registryWithNativeClass(), compositor: compositorFor()});
   const meta = await metaBrowser.browse(createNativeClassSubject({imageId: IMAGE, classRef: CLASS_REF}));
-  assert.deepEqual(meta.context.locators.map((l) => l.relation), [LOCATOR_RELATION.SUPERCLASS]);
+  assert.deepEqual(relations(meta), [LOCATOR_RELATION.SUPERCLASS]);
+
+  // A class with NO selectors contributes no selector targets, so the relation
+  // keys start at 0 — which is exactly why the key-agreement proof needs a
+  // fixture carrying BOTH groups.
+  const bare = fakeAdapter({describe: () => description({selectors: []})});
+  const bareBrowser = createNativeSmalltalkBrowser({adapter: bare, presentationRegistry: registryWithNativeClass(), compositor: compositorFor()});
+  const bareClass = await bareBrowser.browse(createNativeClassSubject({imageId: IMAGE, classRef: CLASS_REF}));
+  assert.deepEqual(bareClass.context.targets.map((entry) => entry.group), ['relation', 'relation']);
 });
 
 test('browse requires EXACTLY ONE discovered presentation (a second provider is loud, never first-match)', async () => {
@@ -192,12 +221,12 @@ test('browse requires EXACTLY ONE discovered presentation (a second provider is 
     present(subject) {
       if (!subject || subject.kind !== NATIVE_CLASS_SUBJECT_KIND) return null;
       return new Presentation({
-        id: 'shadow', subject, kind: NATIVE_CLASS_PRESENTATION_KIND, context: {}, state: {},
+        id: 'shadow', subject, kind: NATIVE_CLASS_PRESENTATION_KIND, context: {targets: []}, state: {},
       });
     },
   });
   const browser = createNativeSmalltalkBrowser({
-    adapter: fakeAdapter(), presentationRegistry: registryWithNativeClass([shadow]),
+    adapter: fakeAdapter(), presentationRegistry: registryWithNativeClass([shadow]), compositor: compositorFor(),
   });
   await assert.rejects(
     browser.browse(createNativeClassSubject({imageId: IMAGE, classRef: CLASS_REF})),
@@ -205,7 +234,7 @@ test('browse requires EXACTLY ONE discovered presentation (a second provider is 
   );
 
   const empty = createPresentationRegistry();
-  const noneBrowser = createNativeSmalltalkBrowser({adapter: fakeAdapter(), presentationRegistry: empty});
+  const noneBrowser = createNativeSmalltalkBrowser({adapter: fakeAdapter(), presentationRegistry: empty, compositor: compositorFor()});
   await assert.rejects(
     noneBrowser.browse(createNativeClassSubject({imageId: IMAGE, classRef: CLASS_REF})),
     /no native class presentation was discovered/,
@@ -222,7 +251,7 @@ test('browse requires EXACTLY ONE discovered presentation (a second provider is 
       return new Presentation({id: 'other', subject, kind: 'cuis-class', context: {}, state: {}});
     },
   }));
-  const wrongKindBrowser = createNativeSmalltalkBrowser({adapter: fakeAdapter(), presentationRegistry: wrongKind});
+  const wrongKindBrowser = createNativeSmalltalkBrowser({adapter: fakeAdapter(), presentationRegistry: wrongKind, compositor: compositorFor()});
   await assert.rejects(
     wrongKindBrowser.browse(createNativeClassSubject({imageId: IMAGE, classRef: CLASS_REF})),
     /is cuis-class, not native-class/,
@@ -237,14 +266,14 @@ test('the FAILURE path applies the same exactly-one rule (it does not take a fir
   const doubled = createPresentationRegistry();
   doubled.register(createUnauthorizedRefProvider());
   doubled.register(createUnauthorizedRefProvider());
-  const doubledBrowser = createNativeSmalltalkBrowser({adapter, presentationRegistry: doubled});
+  const doubledBrowser = createNativeSmalltalkBrowser({adapter, presentationRegistry: doubled, compositor: compositorFor()});
   await assert.rejects(
     doubledBrowser.browse(createNativeClassSubject({imageId: IMAGE, classRef: CLASS_REF})),
     /ambiguous presentations for a unauthorized-ref native class read/,
   );
 
   // None at all is loud too, rather than returning undefined.
-  const bare = createNativeSmalltalkBrowser({adapter, presentationRegistry: createPresentationRegistry()});
+  const bare = createNativeSmalltalkBrowser({adapter, presentationRegistry: createPresentationRegistry(), compositor: compositorFor()});
   await assert.rejects(
     bare.browse(createNativeClassSubject({imageId: IMAGE, classRef: CLASS_REF})),
     /no presentation was discovered for a unauthorized-ref native class read/,
@@ -257,22 +286,22 @@ test('the provider refuses a description that is not its own subject\'s', () => 
   assert.equal(provider.present({kind: 'ref', imageId: IMAGE, objectId: 'x'}), null, 'disjoint by subject kind');
   assert.throws(() => provider.present(subject, {}), /canonical smalltalk-class-description\/v1/);
   assert.throws(
-    () => provider.present(subject, {smalltalkClass: description({class: ref('smalltalk/class/Other')}), locators: []}),
+    () => provider.present(subject, {smalltalkClass: description({class: ref('smalltalk/class/Other')}), targets: []}),
     /description of ITS OWN subject/,
   );
-  // The ordered locator list is the BROWSER's. The provider must not derive one
-  // when it is missing: that would be a second locus for a list the ownership
-  // registry gives to a single owner, and a silent one.
+  // The ordered target array is the BROWSER's. The provider must not derive one
+  // when it is missing: that would be a second locus for the array that owns the
+  // key space, and a silent one.
   assert.throws(
     () => provider.present(subject, {smalltalkClass: description()}),
-    /browser-owned ordered locators array/,
+    /browser-owned ordered targets array/,
   );
 });
 
 test('a denied read presents through the ORDINARY unauthorized route, with no Images message', async () => {
   const authorityError = Object.assign(new Error('not authorized: object/read on YXBw.c21hbGx0YWxr'), {name: 'AuthorityError'});
   const adapter = fakeAdapter({describe: () => { throw authorityError; }});
-  const browser = createNativeSmalltalkBrowser({adapter, presentationRegistry: registryWithNativeClass()});
+  const browser = createNativeSmalltalkBrowser({adapter, presentationRegistry: registryWithNativeClass(), compositor: compositorFor()});
 
   const presentation = await browser.browse(createNativeClassSubject({imageId: IMAGE, classRef: CLASS_REF}));
 
@@ -290,7 +319,7 @@ test('any other failure presents as unavailable and NEVER leaks an Images storag
   // this module promises to decode no storage.
   const notABehavior = new TypeError('not a smalltalk/behavior-shape/v1 behavior: smalltalk/class/BrowseChild');
   const adapter = fakeAdapter({describe: () => { throw notABehavior; }});
-  const browser = createNativeSmalltalkBrowser({adapter, presentationRegistry: registryWithNativeClass()});
+  const browser = createNativeSmalltalkBrowser({adapter, presentationRegistry: registryWithNativeClass(), compositor: compositorFor()});
 
   const presentation = await browser.browse(createNativeClassSubject({imageId: IMAGE, classRef: CLASS_REF}));
 
@@ -307,14 +336,16 @@ test('any other failure presents as unavailable and NEVER leaks an Images storag
 
 test('the browser refuses an adapter without the interaction owner\'s error mapping', () => {
   const registry = createPresentationRegistry();
+  const compositor = compositorFor();
   assert.throws(
-    () => createNativeSmalltalkBrowser({adapter: {describeSmalltalkClass: () => {}}, presentationRegistry: registry}),
+    () => createNativeSmalltalkBrowser({adapter: {describeSmalltalkClass: () => {}}, presentationRegistry: registry, compositor}),
     /describeSmalltalkMethod/,
   );
   assert.throws(
     () => createNativeSmalltalkBrowser({
       adapter: {describeSmalltalkClass: () => {}, describeSmalltalkMethod: () => {}},
       presentationRegistry: registry,
+      compositor,
     }),
     /classifySmalltalkMethodReadError/,
   );
@@ -322,15 +353,22 @@ test('the browser refuses an adapter without the interaction owner\'s error mapp
     () => createNativeSmalltalkBrowser({
       adapter: {describeSmalltalkClass: () => {}, describeSmalltalkMethod: () => {}, classifySmalltalkMethodReadError: () => {}},
       presentationRegistry: registry,
+      compositor,
     }),
     /classifySmalltalkClassReadError/,
   );
-  assert.throws(() => createNativeSmalltalkBrowser({adapter: {}, presentationRegistry: createPresentationRegistry()}), /describeSmalltalkClass/);
-  assert.throws(() => createNativeSmalltalkBrowser({adapter: fakeAdapter()}), /PresentationRegistry/);
+  assert.throws(() => createNativeSmalltalkBrowser({adapter: {}, presentationRegistry: registry, compositor}), /describeSmalltalkClass/);
+  assert.throws(() => createNativeSmalltalkBrowser({adapter: fakeAdapter(), compositor}), /PresentationRegistry/);
+  // The Compositor is REQUIRED (the ProjectBrowser precedent): a browser that
+  // could not present would make its activation binding a promise it cannot keep.
+  assert.throws(
+    () => createNativeSmalltalkBrowser({adapter: fakeAdapter(), presentationRegistry: registry}),
+    /requires a Compositor/,
+  );
 });
 
 test('the presentationDescriptor survives the JSON round trip the native host performs', async () => {
-  const browser = createNativeSmalltalkBrowser({adapter: fakeAdapter(), presentationRegistry: registryWithNativeClass()});
+  const browser = createNativeSmalltalkBrowser({adapter: fakeAdapter(), presentationRegistry: registryWithNativeClass(), compositor: compositorFor()});
   const presentation = await browser.browse(createNativeClassSubject({imageId: IMAGE, classRef: CLASS_REF}));
   const descriptor = browser.toPresentationDescriptor(presentation);
 
@@ -342,54 +380,67 @@ test('the presentationDescriptor survives the JSON round trip the native host pe
   assert.equal(descriptor.subject.classRef.objectId, CLASS_REF.objectId);
 });
 
-test('resolveNativeClassLocator indexes the SAME ordered array the projector renders', async () => {
-  const browser = createNativeSmalltalkBrowser({adapter: fakeAdapter(), presentationRegistry: registryWithNativeClass()});
+test('resolveNativeTarget indexes the SAME ordered array the projector keys', async () => {
+  const browser = createNativeSmalltalkBrowser({adapter: fakeAdapter(), presentationRegistry: registryWithNativeClass(), compositor: compositorFor()});
   const presentation = await browser.browse(createNativeClassSubject({imageId: IMAGE, classRef: CLASS_REF}));
   const descriptor = browser.toPresentationDescriptor(presentation);
+  const targets = descriptor.parameters.targets;
 
-  assert.equal(resolveNativeClassLocator(descriptor, 0), SUPER_REF, 'the exact Images ref, by identity');
-  assert.equal(resolveNativeClassLocator(descriptor, 1), META_REF);
-  // Out of range, negative, non-integer and a foreign descriptor kind resolve to
-  // nothing rather than to a neighbouring ref.
-  assert.equal(resolveNativeClassLocator(descriptor, 2), null);
-  assert.equal(resolveNativeClassLocator(descriptor, -1), null);
-  assert.equal(resolveNativeClassLocator(descriptor, 1.5), null);
-  assert.equal(resolveNativeClassLocator({...descriptor, kind: 'inspector'}, 0), null);
-
-  // The projector renders the locators in the SAME order this resolver indexes,
-  // so the displayed row and the resolved ref cannot drift apart (Bead 2je).
-  const doc = semanticUiForPresentation(descriptor);
-  const locatorRows = doc.root.children.find((child) => child.kind === 'collection' && child.label === 'Locators');
-  assert.deepEqual(locatorRows.items.map((item) => item.text), [
-    'superclass -> img/smalltalk/class/BrowseBase',
-    'class-side -> img/smalltalk/metaclass/BrowseChild',
-  ]);
-  locatorRows.items.forEach((item, index) => {
-    assert.equal(item.kind, 'text', 'E1 ships no activation route, so a locator row is TEXT (Bead gzz)');
-    assert.equal(item.text.endsWith(`/${resolveNativeClassLocator(descriptor, index).objectId}`), true,
-      `row ${index} displays exactly the ref the resolver returns for ${index}`);
+  // Every entry resolves to ITS OWN target, by identity.
+  targets.forEach((entry, key) => {
+    assert.equal(resolveNativeTarget(descriptor, key), entry.target, `key ${key} resolves to targets[${key}].target`);
   });
+  // Out of range, negative, non-integer and a foreign descriptor kind resolve to
+  // nothing rather than to a neighbouring target.
+  assert.equal(resolveNativeTarget(descriptor, targets.length), null);
+  assert.equal(resolveNativeTarget(descriptor, -1), null);
+  assert.equal(resolveNativeTarget(descriptor, 1.5), null);
+  assert.equal(resolveNativeTarget({...descriptor, kind: 'inspector'}, 0), null);
+
+  // ONE KEY SPACE ACROSS BOTH COLLECTIONS. The projected document's action keys
+  // are a BIJECTION onto 0..n-1 — selectors and relations can never share an
+  // integer — and every key resolves to the target at that position.
+  const doc = semanticUiForPresentation(descriptor);
+  const actions = [];
+  const walk = (node) => {
+    if (node.kind === 'action') actions.push(node);
+    for (const child of node.children ?? []) walk(child);
+    for (const item of node.items ?? []) walk(item);
+  };
+  walk(doc.root);
+  assert.equal(actions.length, targets.length);
+  assert.deepEqual([...actions.map((a) => a.key)].sort((a, b) => a - b), targets.map((_, i) => i));
+  const collections = doc.root.children.filter((child) => child.kind === 'collection');
+  assert.deepEqual(collections.map((c) => c.label), ['Selectors', 'Relations'],
+    'two visual groups, one key space');
+  for (const action of actions) {
+    assert.equal(action.label, targets[action.key].label, 'the label belongs to the entry the key names');
+    assert.equal(resolveNativeTarget(descriptor, action.key), targets[action.key].target);
+    // An action carries the key and nothing else: the validator would reject a
+    // nested ref but would ACCEPT a stray `selector` string.
+    assert.deepEqual(Object.keys(action).sort(), ['key', 'kind', 'label']);
+  }
 });
 
-test('the projection INDEXES the browser-owned locator list, never re-deriving it from the description', () => {
-  // A description carrying both relations, with an EMPTY locator list. If the
-  // projector re-derived the rows from smalltalkClass.superclass/classSide it
-  // would become a second decider of which relations are navigable and in what
-  // order — and this document would sprout rows the browser never offered.
+test('the projection INDEXES the browser-owned target array, never re-deriving it from the description', () => {
+  // A description carrying two selectors AND both relations, with an EMPTY
+  // target array. If either port re-derived rows from smalltalkClass.selectors /
+  // superclass / classSide it would become a second decider of what is
+  // navigable, and this document would sprout rows the browser never offered.
   const doc = semanticUiForPresentation({
     kind: NATIVE_CLASS_PRESENTATION_KIND,
     subject: {kind: NATIVE_CLASS_SUBJECT_KIND, imageId: IMAGE, classRef: CLASS_REF},
-    parameters: {smalltalkClass: description(), locators: []},
+    parameters: {smalltalkClass: description(), targets: []},
   });
-  assert.equal(doc.root.children.some((child) => child.label === 'Locators'), false,
-    'no locator rows exist when the browser offered none, however many refs the description carries');
+  assert.deepEqual(doc.root.children.filter((child) => child.kind === 'collection'), [],
+    'no rows exist when the browser offered none, however many selectors and refs the description carries');
 });
 
 test('the projection keeps a null layout and an EMPTY declared layout different', () => {
   const project = (layout) => semanticUiForPresentation({
     kind: NATIVE_CLASS_PRESENTATION_KIND,
     subject: {kind: NATIVE_CLASS_SUBJECT_KIND, imageId: IMAGE, classRef: CLASS_REF},
-    parameters: {smalltalkClass: description({layout}), locators: []},
+    parameters: {smalltalkClass: description({layout}), targets: []},
   });
   const labels = (doc) => doc.root.children.filter((c) => c.kind === 'field').map((c) => `${c.label}=${c.text}`);
 
@@ -404,37 +455,39 @@ test('the projection keeps a null layout and an EMPTY declared layout different'
   const absent = semanticUiForPresentation({
     kind: NATIVE_CLASS_PRESENTATION_KIND,
     subject: {kind: NATIVE_CLASS_SUBJECT_KIND, imageId: IMAGE, classRef: CLASS_REF},
-    parameters: {smalltalkClass: {...description(), layout: undefined}, locators: []},
+    parameters: {smalltalkClass: {...description(), layout: undefined}, targets: []},
   });
   assert.deepEqual(labels(absent).slice(3), ['Layout=(no declared instance layout)']);
   assert.notDeepEqual(labels(project(null)), labels(project({instanceVariables: [], indexed: 'none'})));
 });
 
-test('the projection shows selector NAMES as text and never a Provenance row', () => {
-  const doc = semanticUiForPresentation({
+test('the projection renders selectors and relations as actions, and never a Provenance row', () => {
+  const targets = [
+    {target: {kind: 'native-method', imageId: IMAGE, classRef: CLASS_REF, selector: 'childFirst'}, group: 'selector', label: 'childFirst'},
+    {target: {kind: 'native-class', imageId: IMAGE, classRef: SUPER_REF}, group: 'relation', label: 'superclass -> img/x'},
+  ];
+  const project = (entries) => semanticUiForPresentation({
     kind: NATIVE_CLASS_PRESENTATION_KIND,
     subject: {kind: NATIVE_CLASS_SUBJECT_KIND, imageId: IMAGE, classRef: CLASS_REF},
-    parameters: {smalltalkClass: description(), locators: []},
+    parameters: {smalltalkClass: description(), targets: entries},
   });
-  const selectors = doc.root.children.find((child) => child.kind === 'collection' && child.label === 'Selectors');
-  assert.deepEqual(selectors.items, [
-    {kind: 'text', text: 'childFirst'},
-    {kind: 'text', text: 'childSecond'},
-  ], 'selector rows are TEXT: class-read authority must not imply a method ref exists');
-  // provenance is null today (Images owns no durable association); an empty
-  // Provenance row would imply a field that does not exist.
-  assert.equal(doc.root.children.some((child) => child.label === 'Provenance'), false);
-  // An empty selector list omits the collection entirely rather than showing an
-  // empty one.
-  const none = semanticUiForPresentation({
-    kind: NATIVE_CLASS_PRESENTATION_KIND,
-    subject: {kind: NATIVE_CLASS_SUBJECT_KIND, imageId: IMAGE, classRef: CLASS_REF},
-    parameters: {smalltalkClass: description({selectors: []}), locators: []},
-  });
-  assert.equal(none.root.children.some((child) => child.label === 'Selectors'), false);
-});
 
-// --- the METHOD twin of the class unit proofs above (E2 Slice A) ---
+  const doc = project(targets);
+  const collections = doc.root.children.filter((c) => c.kind === 'collection');
+  assert.deepEqual(collections.map((c) => c.label), ['Selectors', 'Relations']);
+  assert.deepEqual(collections[0].items, [{kind: 'action', key: 0, label: 'childFirst'}]);
+  assert.deepEqual(collections[1].items, [{kind: 'action', key: 1, label: 'superclass -> img/x'}]);
+  // provenance is null today; an empty row would imply a durable field exists.
+  assert.equal(doc.root.children.some((child) => child.label === 'Provenance'), false);
+
+  // An EMPTY bucket is omitted entirely; an UNKNOWN group lands in one trailing
+  // bucket rather than being dropped — the rule both ports carry verbatim.
+  const selectorsOnly = project([targets[0]]);
+  assert.deepEqual(selectorsOnly.root.children.filter((c) => c.kind === 'collection').map((c) => c.label), ['Selectors']);
+  const unknown = project([targets[0], {target: targets[1].target, group: 'future', label: 'f'}]);
+  assert.deepEqual(unknown.root.children.filter((c) => c.kind === 'collection').map((c) => c.label), ['Selectors', 'Other']);
+  assert.equal(project([]).root.children.some((c) => c.kind === 'collection'), false);
+});
 
 test('the native-method subject carries class + selector and rejects what it cannot browse', () => {
   const subject = createNativeMethodSubject({imageId: IMAGE, classRef: CLASS_REF, selector: SELECTOR});
@@ -459,7 +512,7 @@ test('the native-method subject carries class + selector and rejects what it can
 
 test('browseMethod makes ONE authorized call carrying exactly the subject and authority', async () => {
   const adapter = methodFakeAdapter();
-  const browser = createNativeSmalltalkBrowser({adapter, presentationRegistry: registryWithNativeClass()});
+  const browser = createNativeSmalltalkBrowser({adapter, presentationRegistry: registryWithNativeClass(), compositor: compositorFor()});
   const authority = Object.freeze({opaque: true});
 
   const presentation = await browser.browseMethod(
@@ -499,7 +552,7 @@ test('the method provider refuses a description that is not its own subject\'s',
 test('browseMethod requires EXACTLY ONE presentation, on both the success and failure paths', async () => {
   const subject = createNativeMethodSubject({imageId: IMAGE, classRef: CLASS_REF, selector: SELECTOR});
 
-  const none = createNativeSmalltalkBrowser({adapter: methodFakeAdapter(), presentationRegistry: createPresentationRegistry()});
+  const none = createNativeSmalltalkBrowser({adapter: methodFakeAdapter(), presentationRegistry: createPresentationRegistry(), compositor: compositorFor()});
   await assert.rejects(none.browseMethod(subject), /no native method presentation was discovered/);
 
   const wrongKind = createPresentationRegistry();
@@ -510,7 +563,7 @@ test('browseMethod requires EXACTLY ONE presentation, on both the success and fa
       return new Presentation({id: 'other', subject: s, kind: 'cuis-method', context: {}, state: {}});
     },
   }));
-  const wrongKindBrowser = createNativeSmalltalkBrowser({adapter: methodFakeAdapter(), presentationRegistry: wrongKind});
+  const wrongKindBrowser = createNativeSmalltalkBrowser({adapter: methodFakeAdapter(), presentationRegistry: wrongKind, compositor: compositorFor()});
   await assert.rejects(wrongKindBrowser.browseMethod(subject), /is cuis-method, not native-method/);
 
   // The FAILURE path takes no first match either.
@@ -520,11 +573,11 @@ test('browseMethod requires EXACTLY ONE presentation, on both the success and fa
   doubled.register(createUnauthorizedRefProvider());
   doubled.register(createUnauthorizedRefProvider());
   await assert.rejects(
-    createNativeSmalltalkBrowser({adapter: failing, presentationRegistry: doubled}).browseMethod(subject),
+    createNativeSmalltalkBrowser({adapter: failing, presentationRegistry: doubled, compositor: compositorFor()}).browseMethod(subject),
     /ambiguous presentations for a unauthorized-ref native method read/,
   );
   await assert.rejects(
-    createNativeSmalltalkBrowser({adapter: failing, presentationRegistry: createPresentationRegistry()}).browseMethod(subject),
+    createNativeSmalltalkBrowser({adapter: failing, presentationRegistry: createPresentationRegistry(), compositor: compositorFor()}).browseMethod(subject),
     /no presentation was discovered for a unauthorized-ref native method read/,
   );
 });
@@ -535,6 +588,7 @@ test('a failed method read presents through the ordinary route and names the CLA
   const unauthorized = await createNativeSmalltalkBrowser({
     adapter: methodFakeAdapter({describeMethod: () => { throw denied; }}),
     presentationRegistry: registryWithNativeClass(),
+    compositor: compositorFor(),
   }).browseMethod(subject);
   assert.equal(unauthorized.kind, 'unauthorized-reference');
   assert.equal(unauthorized.context.reason, 'not authorized to read this native method');
@@ -545,6 +599,7 @@ test('a failed method read presents through the ordinary route and names the CLA
   const missing = await createNativeSmalltalkBrowser({
     adapter: methodFakeAdapter({describeMethod: () => { throw new TypeError('native class X does not implement Y'); }}),
     presentationRegistry: registryWithNativeClass(),
+    compositor: compositorFor(),
   }).browseMethod(subject);
   assert.equal(missing.kind, 'unavailable-reference');
   assert.equal(missing.context.reason, 'this native method could not be read');
@@ -566,7 +621,20 @@ test('the native-method projection shows only what Images owns, and omits absent
     assert.equal(doc.root.children.some((c) => c.label === absent), false, `${absent} must not be rendered`);
   }
   assert.equal(doc.root.children.some((c) => c.kind === 'action'), false,
-    'Slice A ships no activation on a native method pane');
+    'a native method pane offers no actions');
+});
+
+test('a native-method presentation carries NO targets: E2 adds no speculative method navigation', async () => {
+  const browser = createNativeSmalltalkBrowser({
+    adapter: methodFakeAdapter(), presentationRegistry: registryWithNativeClass(), compositor: compositorFor(),
+  });
+  const presentation = await browser.browseMethod(
+    createNativeMethodSubject({imageId: IMAGE, classRef: CLASS_REF, selector: SELECTOR}),
+  );
+  const descriptor = browser.toPresentationDescriptor(presentation);
+  assert.equal('targets' in descriptor.parameters, false,
+    'E2 transitions are class -> method and class -> class; a method view navigates nowhere yet');
+  assert.equal(resolveNativeTarget(descriptor, 0), null, 'and nothing resolves against it');
 });
 
 test('the Environment composes NO Images object id anywhere in src/', async () => {
@@ -618,4 +686,72 @@ test('the Environment composes NO Images object id anywhere in src/', async () =
     false,
     'the native browsing owner composes no Images id at all',
   );
+});
+
+test('gzz key agreement: a NEW descriptor moves the labels AND the resolver together', async () => {
+  // The falsifier goes through the normal descriptor transition owner: admit A,
+  // record what it projects and resolves, then present a DIFFERENT descriptor B
+  // and prove both follow B. Descriptor A is never mutated behind the
+  // Compositor — a presentationDescriptor is a snapshot, other Environment code
+  // relies on its identity, and mutating admitted data would prove only that two
+  // sides can observe an illicit change.
+  //
+  // This kills the co-wrong implementation a per-key round trip cannot: a
+  // projector AND resolver that both re-derive from
+  // smalltalkClass.selectors/superclass agree with each other while ignoring the
+  // browser, so they do not move when only `targets` changes.
+  const rendererAdapter = createFakeRendererAdapter({projector: semanticUiForPresentation});
+  const compositor = createCompositor({rendererAdapter});
+  const browser = createNativeSmalltalkBrowser({
+    adapter: fakeAdapter(), presentationRegistry: registryWithNativeClass(), compositor,
+  });
+
+  const descriptorA = await browser.open(createNativeClassSubject({imageId: IMAGE, classRef: CLASS_REF}), {
+    viewDescriptor: {kind: 'surface', width: 10, height: 10},
+  });
+  const handle = compositor.surfaceHandleForView(browser.viewId);
+  const labelsOf = () => rendererAdapter.realizedActions(handle).map((a) => a.label);
+  const resolvedOf = (descriptor) => rendererAdapter.realizedActions(handle)
+    .map((a) => resolveNativeTarget(descriptor, a.key));
+
+  const labelsA = labelsOf();
+  const resolvedA = resolvedOf(descriptorA);
+  assert.deepEqual(labelsA, ['childFirst', 'childSecond',
+    `superclass -> ${IMAGE}/${SUPER_REF.objectId}`, `class-side -> ${IMAGE}/${META_REF.objectId}`]);
+  assert.deepEqual(resolvedA.map((t) => t.kind),
+    ['native-method', 'native-method', 'native-class', 'native-class']);
+
+  // DESCRIPTOR B: the same class, the SAME smalltalkClass record, but a
+  // deliberately reordered and substituted target array.
+  const reordered = [
+    descriptorA.parameters.targets[3],
+    descriptorA.parameters.targets[0],
+  ];
+  const descriptorB = {
+    kind: descriptorA.kind,
+    subject: descriptorA.subject,
+    parameters: {smalltalkClass: descriptorA.parameters.smalltalkClass, targets: reordered},
+  };
+  await compositor.presentOn(browser.viewId, descriptorB);
+
+  // BOTH follow B. Note the shape this produces: the relation entry is FIRST in
+  // the array (key 0) but renders SECOND, because buckets are ordered by group
+  // and the array orders keys. Document order therefore differs from key order —
+  // the case that separates "reads the realized key" from "returns the position".
+  const actionsB = rendererAdapter.realizedActions(handle);
+  assert.deepEqual(actionsB.map((a) => a.label), [
+    'childFirst',
+    `class-side -> ${IMAGE}/${META_REF.objectId}`,
+  ]);
+  assert.deepEqual(actionsB.map((a) => a.key), [1, 0], 'keys follow the ARRAY, buckets follow the group');
+  // ...and so did the resolver, to the SAME entries, by identity.
+  const resolvedB = resolvedOf(descriptorB);
+  assert.equal(resolvedB[0], reordered[1].target, 'the first rendered row resolves to targets[1]');
+  assert.equal(resolvedB[1], reordered[0].target, 'the second rendered row resolves to targets[0]');
+  assert.notDeepEqual(labelsOf(), labelsA, 'the observable mapping really changed');
+  // The key space is still a bijection over the NEW array.
+  assert.deepEqual(rendererAdapter.realizedActions(handle).map((a) => a.key).sort(), [0, 1]);
+  // Descriptor A was never touched.
+  assert.equal(descriptorA.parameters.targets.length, 4);
+  await compositor.destroy();
 });

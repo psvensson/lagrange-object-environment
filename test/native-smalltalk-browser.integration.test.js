@@ -5,6 +5,13 @@ import {dirname, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
 import {createImageClientAdapter} from '../src/image-client-adapter.js';
+import {createCompositor} from '../src/compositor.js';
+import {createEnvironmentShell} from '../src/environment-shell.js';
+import {createObjectNavigator} from '../src/object-navigator.js';
+import {createCommandRegistry} from '../src/command-registry.js';
+import {createSelectionModel} from '../src/selection-model.js';
+import {semanticUiForPresentation as projectSemanticUi} from '../src/semantic-ui.js';
+import {createFakeRendererAdapter} from '../src/fake-renderer-adapter.js';
 import {createPresentationRegistry} from '../src/presentation-registry.js';
 import {
   createUnauthorizedRefProvider,
@@ -19,7 +26,7 @@ import {
   createNativeMethodPresentationProvider,
   createNativeMethodSubject,
   createNativeSmalltalkBrowser,
-  resolveNativeClassLocator,
+  resolveNativeTarget,
 } from '../src/native-smalltalk-browser.js';
 import {semanticUiForPresentation} from '../src/semantic-ui.js';
 import {assertDataRepresentable} from '../src/compositor.js';
@@ -188,7 +195,8 @@ async function setup() {
 
   const realAdapter = createImageClientAdapter(adapterClients(runtime));
   const adapter = recordingAdapter(realAdapter);
-  const browser = createNativeSmalltalkBrowser({adapter, presentationRegistry: registryFor()});
+  const compositor = createCompositor({rendererAdapter: createFakeRendererAdapter()});
+  const browser = createNativeSmalltalkBrowser({adapter, presentationRegistry: registryFor(), compositor});
   const registry = registryFor();
 
   const grant = (objectId) => ({
@@ -232,7 +240,7 @@ test('a hand-authored native class and a Cuis-origin imported class take the SAM
       assert.equal(presentation.kind, NATIVE_CLASS_PRESENTATION_KIND, label);
       const discovered = t.registry.discover(
         createNativeClassSubject({imageId: IMAGE, classRef}),
-        {smalltalkClass: presentation.context.smalltalkClass, locators: presentation.context.locators},
+        {smalltalkClass: presentation.context.smalltalkClass, targets: presentation.context.targets},
       );
       assert.equal(discovered.presentations.length, 1, `${label}: exactly one presentation is discoverable`);
       assert.deepEqual(discovered.failures, [], `${label}: no provider failed`);
@@ -283,11 +291,18 @@ test('a hand-authored native class and a Cuis-origin imported class take the SAM
       'the class\'s OWN canonical selector names');
     assert.equal(imported.context.smalltalkClass.provenance, null,
       'Images owns no durable provenance today; E1 reports that truthfully rather than inventing one');
-    // The locators are the description's own refs, in the browser's order.
-    assert.deepEqual(imported.context.locators.map((l) => l.relation),
-      [LOCATOR_RELATION.SUPERCLASS, LOCATOR_RELATION.CLASS_SIDE]);
-    assert.deepEqual(imported.context.locators[0].ref, imported.context.smalltalkClass.superclass);
-    assert.deepEqual(imported.context.locators[1].ref, imported.context.smalltalkClass.classSide);
+    // ONE ordered target array: the class's own selectors, then its relations,
+    // each carrying the description's OWN objects by identity.
+    assert.deepEqual(imported.context.targets.map((entry) => entry.group),
+      ['selector', 'relation', 'relation']);
+    assert.equal(imported.context.targets[0].target.selector, imported.context.smalltalkClass.selectors[0]);
+    assert.equal(imported.context.targets[0].target.classRef, imported.context.smalltalkClass.class);
+    assert.equal(imported.context.targets[1].target.classRef, imported.context.smalltalkClass.superclass);
+    assert.equal(imported.context.targets[2].target.classRef, imported.context.smalltalkClass.classSide);
+    assert.deepEqual(
+      imported.context.targets.map((entry) => entry.label.split(' ->')[0]),
+      ['baseValue', LOCATOR_RELATION.SUPERCLASS, LOCATOR_RELATION.CLASS_SIDE],
+    );
 
     // --- NO ORIGIN ANYWHERE. Not in the presentation, not in the rendered
     // document. Cuis origin is not native identity.
@@ -321,8 +336,17 @@ test('the class side is a LOCATOR: browsing it needs its own grant, and answers 
     const descriptor = t.browser.toPresentationDescriptor(instanceSide);
 
     // The resolver hands back exactly the refs the description named.
-    assert.deepEqual(resolveNativeClassLocator(descriptor, 0), superclass);
-    assert.deepEqual(resolveNativeClassLocator(descriptor, 1), classSide);
+    // The imported class has ONE selector, so its relation targets sit at keys 1
+    // and 2 — precisely the offset a per-group key space would get wrong.
+    const targets = descriptor.parameters.targets;
+    const relationKeys = targets
+      .map((entry, key) => ({entry, key}))
+      .filter(({entry}) => entry.group === 'relation')
+      .map(({key}) => key);
+    assert.deepEqual(relationKeys, [1, 2]);
+    assert.equal(resolveNativeTarget(descriptor, relationKeys[0]).classRef, superclass);
+    assert.equal(resolveNativeTarget(descriptor, relationKeys[1]).classRef, classSide);
+    assert.equal(resolveNativeTarget(descriptor, 0).kind, 'native-method');
 
     // A LOCATOR IS NOT A GRANT. Holding the class's own read authority does not
     // reach its superclass or its class side.
@@ -606,6 +630,255 @@ test('the method seam is no existence oracle, and its licensed distinction is ho
     assert.equal(missing.context.reason, 'this native method could not be read');
     assert.equal(unreadableBlock.context.reason, 'not authorized to read this native method');
     assert.equal(deniedImplemented.context.reason, 'not authorized to read this native method');
+  } finally {
+    await t.runtime.close();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// E2 SLICE B CENTRAL ACCEPTANCE (Bead gzz): a real live native-class view, a
+// real host realization, the ONE activation owner, and a fresh independently
+// authorized method read — against the REAL Images runtime.
+//
+// The host here is the headless fake renderer with the REAL projector injected:
+// it projects on attach and emits the key IT REALIZED. That is the only lane
+// where a real Images authority rule, a real Compositor and a real intent path
+// meet — the native lane cannot install a selector at all (Bead aov).
+// ---------------------------------------------------------------------------
+
+// A bounded poll on the OBSERVABLE rather than a fixed sleep. For a positive
+// assertion a short sleep merely fails loudly; for a NEGATIVE ("nothing moved")
+// a too-short sleep passes for the wrong reason.
+async function settleUntil(predicate, what, deadlineMs = 2000) {
+  const started = Date.now();
+  while (Date.now() - started < deadlineMs) {
+    if (predicate()) return;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  if (!predicate()) throw new Error(`timed out waiting for ${what}`);
+}
+
+// For a negative, let the activation lane drain and then assert nothing moved.
+const drain = () => new Promise((r) => setTimeout(r, 50));
+
+async function openNativeVertical(t) {
+  const rendererAdapter = createFakeRendererAdapter({projector: projectSemanticUi});
+  const compositor = createCompositor({rendererAdapter});
+  const presentationRegistry = registryFor();
+  const browser = createNativeSmalltalkBrowser({adapter: t.adapter, presentationRegistry, compositor});
+
+  // A real shell over a real ObjectNavigator, so the generic-selection negative
+  // is asserted against the thing that would actually move.
+  const navigator = createObjectNavigator({
+    adapter: {readObject: async () => { throw new Error('the native lane must not read generic objects'); }},
+    presentationRegistry,
+    commandRegistry: createCommandRegistry(),
+    referencesOfValue: imagesApi.referencesOfValue,
+  });
+  const selectionModel = createSelectionModel();
+  const shell = createEnvironmentShell({navigator, selectionModel, compositor});
+
+  const grants = [];
+  const authorityFor = (target) => {
+    // Fresh per navigation action, from the composition's own provider — never
+    // inherited from the subject, the descriptor or the shell.
+    const ids = [target.classRef.objectId];
+    if (target.kind === 'native-method') {
+      const bound = t.boundBlockFor?.(target);
+      if (bound) ids.push(bound);
+    }
+    const authority = t.authorityFor(...ids);
+    grants.push({target, ids, authority});
+    return authority;
+  };
+
+  const activationErrors = [];
+  shell.bindIntents({
+    adapter: rendererAdapter,
+    activationBindings: [browser.activationBinding({authorityFor})],
+    onActivateError: (error) => activationErrors.push(error),
+  });
+  return {rendererAdapter, compositor, browser, shell, selectionModel, grants, activationErrors};
+}
+
+test('E2 acceptance: a live native-class view activates a selector into a freshly authorized method read', {skip}, async () => {
+  const t = await setup();
+  try {
+    const classRef = t.importedClassRef;
+
+    // (0) REDEFINITION FIRST, so the current Block is a `/revision/` id that
+    // {classRef, selector} cannot produce. A locally composed id must not be
+    // able to reach it — that is what makes the whole renderer -> method path
+    // discriminating rather than just Slice A's API test.
+    const [before] = await imagesApi.methodBindings({images: t.runtime.images, imageId: IMAGE, classRef});
+    await imagesApi.reconcileMethodsFromSource({
+      images: t.runtime.images, compilation: t.runtime.compilation, imageId: IMAGE, classRef,
+      methods: [{selector: 'baseValue', source: '[ ^7 ]'}],
+    });
+    const [current] = await imagesApi.methodBindings({images: t.runtime.images, imageId: IMAGE, classRef});
+    assert.ok(current.method.objectId.includes('/revision/'));
+    assert.notDeepEqual(current.method, before.method);
+    t.boundBlockFor = (target) => (target.selector === 'baseValue' ? current.method.objectId : null);
+
+    const v = await openNativeVertical(t);
+
+    // (1) open a real native-class view through the Compositor.
+    await v.browser.open(createNativeClassSubject({imageId: IMAGE, classRef}), {
+      authority: t.authorityFor(classRef.objectId),
+      viewDescriptor: {kind: 'surface', width: 200, height: 200},
+    });
+    const handle = v.compositor.surfaceHandleForView(v.browser.viewId);
+
+    // (2) the host REALIZED selector and class-locator actions.
+    const actions = v.rendererAdapter.realizedActions(handle);
+    assert.deepEqual(actions.map((a) => a.label),
+      ['baseValue', `superclass -> ${IMAGE}/smalltalk/class/Object`, `class-side -> ${IMAGE}/smalltalk/metaclass/BrowseImported`]);
+    // (3) every action carries ONLY a descriptor-local integer key.
+    for (const action of actions) assert.deepEqual(Object.keys(action).sort(), ['key', 'kind', 'label']);
+    assert.deepEqual(actions.map((a) => a.key), [0, 1, 2], 'ONE key space across both groups');
+
+    const selectionBefore = v.selectionModel.selectedSubject();
+
+    // (4)(5)(6)(7)(8) press the realized SELECTOR row: the host emits only the
+    // key it realized, the shell resolves the handle to the live view and picks
+    // its one binding, the browser-owned array resolves the key to the existing
+    // native-method subject, and the browser performs a fresh method browse.
+    const intent = v.rendererAdapter.activateAction(handle, 0);
+    assert.deepEqual(intent, {kind: 'activate-item', key: 0});
+    await settleUntil(
+      () => v.compositor.liveView(v.browser.viewId).presentationDescriptor.kind === 'native-method',
+      'the selector activation to present a native method',
+    );
+    assert.deepEqual(v.activationErrors, []);
+
+    // (10)(11) the SAME logical view now presents the native method, and it is
+    // the CURRENT revision — reached through Images, not composed here.
+    const live = v.compositor.liveView(v.browser.viewId);
+    assert.equal(live.presentationDescriptor.kind, 'native-method');
+    assert.deepEqual(live.presentationDescriptor.parameters.smalltalkMethod.method, current.method);
+    assert.equal(live.presentationDescriptor.parameters.smalltalkMethod.selector, 'baseValue');
+    // The authority used was FRESH and named the current Block, not the class alone.
+    const methodGrant = v.grants.find((g) => g.target.kind === 'native-method');
+    assert.deepEqual(methodGrant.ids, [classRef.objectId, current.method.objectId]);
+    assert.equal(methodGrant.ids.includes(before.method.objectId), false,
+      'the stale pre-redefinition Block is never what authority was sought for');
+
+    // (14) NOTHING generic moved: this was navigation, not selection.
+    assert.equal(v.selectionModel.selectedSubject(), selectionBefore);
+    // (An assertion that no inspector view exists would be tautological here —
+    // this composition never opens one. The real generic-state negative, with an
+    // inspector actually live, is the never-skipped shell lane's.)
+
+    await v.compositor.destroy();
+  } finally {
+    await t.runtime.close();
+  }
+});
+
+test('E2 acceptance: class authority alone cannot open the method through the live view', {skip}, async () => {
+  const t = await setup();
+  try {
+    const classRef = t.importedClassRef;
+    // The composition supplies the CLASS grant only for a method target: the
+    // second authorization is the one that must fail.
+    t.boundBlockFor = () => null;
+    const v = await openNativeVertical(t);
+    await v.browser.open(createNativeClassSubject({imageId: IMAGE, classRef}), {
+      authority: t.authorityFor(classRef.objectId),
+      viewDescriptor: {kind: 'surface', width: 200, height: 200},
+    });
+    const handle = v.compositor.surfaceHandleForView(v.browser.viewId);
+    v.rendererAdapter.activateAction(handle, 0);
+    await settleUntil(
+      () => v.compositor.liveView(v.browser.viewId).presentationDescriptor.kind !== 'native-class',
+      'the denied method activation to re-present',
+    );
+
+    const live = v.compositor.liveView(v.browser.viewId);
+    assert.equal(live.presentationDescriptor.kind, 'unauthorized-reference',
+      'class-read authority displays the selector but never opens the Block behind it');
+    const rendered = JSON.stringify(projectSemanticUi(live.presentationDescriptor));
+    assert.equal(rendered.includes('/method/'), false, 'no Block locator is disclosed by the denial');
+    await v.compositor.destroy();
+  } finally {
+    await t.runtime.close();
+  }
+});
+
+test('E2 acceptance: a class locator activates into a freshly authorized class read on the same view', {skip}, async () => {
+  const t = await setup();
+  try {
+    const classRef = t.importedClassRef;
+    const v = await openNativeVertical(t);
+    await v.browser.open(createNativeClassSubject({imageId: IMAGE, classRef}), {
+      authority: t.authorityFor(classRef.objectId),
+      viewDescriptor: {kind: 'surface', width: 200, height: 200},
+    });
+    const handle = v.compositor.surfaceHandleForView(v.browser.viewId);
+    const before = v.compositor.liveView(v.browser.viewId).presentationDescriptor;
+
+    // (11)(12)(13) press the SUPERCLASS row (key 1 — after the selector, which
+    // is exactly the offset a per-group key space would get wrong).
+    const superclassAction = v.rendererAdapter.realizedActions(handle)[1];
+    assert.match(superclassAction.label, /^superclass -> /);
+    v.rendererAdapter.activateAction(handle, 1);
+    await settleUntil(
+      () => v.compositor.liveView(v.browser.viewId).presentationDescriptor !== before,
+      'the class locator activation to re-present',
+    );
+    assert.deepEqual(v.activationErrors, []);
+
+    const live = v.compositor.liveView(v.browser.viewId);
+    assert.equal(live.presentationDescriptor.kind, 'native-class');
+    assert.equal(live.presentationDescriptor.parameters.smalltalkClass.name, 'Object',
+      'the SAME logical view now presents the target class');
+    assert.notEqual(live.presentationDescriptor, before, 'a new snapshot was presented, not a mutation');
+    // The target was a native-class SUBJECT, and fresh authority was sought for it.
+    const classGrant = v.grants.find((g) => g.target.kind === 'native-class');
+    assert.deepEqual(classGrant.ids, [before.parameters.smalltalkClass.superclass.objectId]);
+    assert.equal(v.selectionModel.selectedSubject(), null, 'a locator is not a selection gesture');
+    await v.compositor.destroy();
+  } finally {
+    await t.runtime.close();
+  }
+});
+
+test('E2 acceptance: a re-opened view keeps its binding under a NEW handle; the old one routes nowhere', {skip}, async () => {
+  const t = await setup();
+  try {
+    const classRef = t.importedClassRef;
+    t.boundBlockFor = () => null;
+    const v = await openNativeVertical(t);
+    const subject = createNativeClassSubject({imageId: IMAGE, classRef});
+    const viewDescriptor = {kind: 'surface', width: 200, height: 200};
+    await v.browser.open(subject, {authority: t.authorityFor(classRef.objectId), viewDescriptor});
+    const firstHandle = v.compositor.surfaceHandleForView(v.browser.viewId);
+
+    // (15) close and re-open the SAME logical view -> a NEW renderer handle.
+    await v.compositor.closeView(v.browser.viewId);
+    await v.browser.open(subject, {authority: t.authorityFor(classRef.objectId), viewDescriptor});
+    const secondHandle = v.compositor.surfaceHandleForView(v.browser.viewId);
+    assert.notEqual(secondHandle, firstHandle);
+
+    // (16) the view-keyed binding still routes, with NO rebind...
+    v.rendererAdapter.activateAction(secondHandle, 1);
+    await settleUntil(
+      () => v.compositor.liveView(v.browser.viewId).presentationDescriptor.parameters.smalltalkClass?.name === 'Object',
+      'the re-opened view to route its activation',
+    );
+    assert.deepEqual(v.activationErrors, []);
+
+    // (17) ...and the STALE handle carries nothing to activate: closing the view
+    // destroyed its surface, so the host has no realization for it any more.
+    // NOTE what this does and does not prove: the intent is never emitted, so the
+    // Compositor's handle -> live view guard is not what is exercised here. That
+    // guard has its own never-skipped proof in test/environment-shell.test.js
+    // ('a DELEGATED binding survives close + re-open', and the older ref twin).
+    const settled = v.compositor.liveView(v.browser.viewId).presentationDescriptor;
+    assert.throws(() => v.rendererAdapter.activateAction(firstHandle, 1), /no realized action/);
+    await drain();
+    assert.equal(v.compositor.liveView(v.browser.viewId).presentationDescriptor, settled, 'nothing moved');
+    await v.compositor.destroy();
   } finally {
     await t.runtime.close();
   }

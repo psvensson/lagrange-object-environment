@@ -204,8 +204,8 @@ test('CI: the browser realizer renders the checked-in SemanticUi fixtures (every
       editableProject.dispose();
       // native-class (Images ADR 0087): the authorized native Smalltalk class
       // description renders from the SAME fixture bytes the GTK realizer
-      // consumes. Selectors and locators are TEXT, so there are NO buttons:
-      // class-read authority must not imply a method ref or a navigation route.
+      // consumes. Selectors and relations are ACTIONS carrying only a
+      // descriptor-local key, drawn from ONE array across both visual groups.
       const nativeClass = await window.__lagrangeProof.renderSemanticUiFixture('../fixtures/semantic-ui/native-class.json', 'native-class');
       out.nativeClass = {
         heading: nativeClass.heading,
@@ -216,8 +216,10 @@ test('CI: the browser realizer renders the checked-in SemanticUi fixtures (every
         collectionRows: nativeClass.collectionRows,
         controls: nativeClass.controls,
       };
-      // Nothing was clicked or typed: the pane offers nothing to operate. Any
-      // intent here would mean E1 shipped an affordance it cannot route.
+      // Click a SELECTOR row and a CLASS-LOCATOR row: both emit through the same
+      // ordinary path, and the keys come from the one browser-owned array.
+      nativeClass.clickButton(0);
+      nativeClass.clickButton(2);
       out.nativeClassIntents = nativeClass.takeIntents();
       nativeClass.dispose();
       // native-method (Images ADR 0087): the authorized METHOD description renders
@@ -293,14 +295,23 @@ test('CI: the browser realizer renders the checked-in SemanticUi fixtures (every
       'superclass -> img/smalltalk/class/BrowseBase',
       'class-side -> img/smalltalk/metaclass/BrowseChild',
     ], 'own selector names and both locators are rendered as visible rows');
-    // ...and NOTHING in the pane is operable. This is the E1 negative: a
-    // rendered locator must not become a control that emits an intent no owner
-    // routes (the dead affordance Bead pnf records). Activation arrives with
-    // E2's routing amendment to ownership row 64 (Bead gzz), not before.
-    assert.deepEqual(result.nativeClass.buttons, [], 'no activatable rows');
-    assert.deepEqual(result.nativeClass.controls, [], 'no operable control of ANY kind in a native-class pane');
-    assert.deepEqual(result.nativeClass.fieldInputs, [], 'E1 is presentation/navigation only: nothing is editable');
-    assert.deepEqual(result.nativeClassIntents, [], 'rendering a native class emits no intent');
+    // E2 (Bead gzz) makes them ACTIVATABLE: each row is a real button, and
+    // clicking one emits the ordinary intent carrying ONLY its descriptor-local
+    // key — the same bytes GTK emits for the same fixture. The E1 negative that
+    // stood here (no operable control) inverts, but its point survives as the
+    // payload assertion: a rendered row still discloses no semantic target.
+    assert.deepEqual(result.nativeClass.buttons, [
+      'childFirst', 'childSecond',
+      'superclass -> img/smalltalk/class/BrowseBase',
+      'class-side -> img/smalltalk/metaclass/BrowseChild',
+    ], 'selectors and relations are activatable rows');
+    assert.deepEqual(result.nativeClass.controls, ['button', 'button', 'button', 'button'],
+      'exactly four operable controls, and nothing editable');
+    assert.deepEqual(result.nativeClass.fieldInputs, [], 'E2 is navigation, not editing');
+    // Clicking the FIRST row (a selector) and the THIRD (a class locator) emits
+    // keys 0 and 2 — one key space across two visual groups.
+    assert.deepEqual(result.nativeClassIntents, [{kind: 'activate-item', key: 0}, {kind: 'activate-item', key: 2}],
+      'the DOM emits only descriptor-local integers, from ONE key space');
 
     // native-method: only what Images owns, and the absent rows really absent.
     assert.equal(result.nativeMethod.heading, 'Method: childFirst');

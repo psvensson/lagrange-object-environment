@@ -43,7 +43,11 @@ pub struct AcceptanceFlavor<'a> {
     /// BEFORE teardown (the session's Compositor is destroyed by teardown).
     /// The real-Images flavor runs the Project rename leg here; the fake
     /// composition has no Project lane and passes `None`.
-    pub before_teardown: Option<fn(&tokio::runtime::Runtime, &JsEnvActor, &mut RendererPortHost)>,
+    /// Flavor-owned legs run in order, before teardown. A SLICE rather than one
+    /// slot: the shared protocol owns the sequencing, and a second leg must not
+    /// have to nest inside another flavor's leg to exist — that would put one
+    /// leg's owner in charge of another's.
+    pub before_teardown: &'static [fn(&tokio::runtime::Runtime, &JsEnvActor, &mut RendererPortHost)],
 }
 
 /// Drive a JS async block that triggers renderer ops, pumping the GTK host on
@@ -748,7 +752,7 @@ pub fn run_in_process_acceptance(
         "C1: tokens must be absent from durable intent, parameters, renderer payloads, and GTK text"
     );
 
-    if let Some(leg) = flavor.before_teardown {
+    for leg in flavor.before_teardown {
         leg(runtime, actor, host);
     }
 
@@ -859,4 +863,109 @@ pub fn run_project_leg(
     );
     assert_eq!(denied["name"], json!("New"), "a denied write changes nothing: {denied}");
     assert_eq!(denied["lastEdit"]["edited"], json!(false));
+}
+
+/// THE NATIVE SMALLTALK LEG (Bead gzz, E2 Slice B).
+///
+/// GTK opens a REAL native-class view through the real Compositor, realizes its
+/// class-locator actions, activates one, and the SAME logical view presents the
+/// target class — the whole renderer -> shell -> browser -> Images path, natively.
+///
+/// The class here is the ordinary probe class `ensureSchema` already defines
+/// through Images' own `defineClass`, so this lane builds nothing of its own. It
+/// has NO selectors, because the portable runtime exports no method installer
+/// (Bead aov) — which is exactly why the selector -> method leg is proven in the
+/// JS lane and the class-locator leg is proven here.
+pub fn run_native_smalltalk_leg(
+    runtime: &tokio::runtime::Runtime,
+    actor: &JsEnvActor,
+    host: &mut RendererPortHost,
+) {
+    let opened = run_json_while_pumping(
+        runtime,
+        actor,
+        host,
+        "globalThis.__session.openNativeClass().catch((e) => ({diagnostic: String(e && (e.stack || e.message) || e)}))",
+        "openNativeClass",
+    );
+    if let Some(diagnostic) = opened.get("diagnostic") {
+        panic!("openNativeClass failed: {diagnostic}");
+    }
+    assert_exact_keys(&opened, &["nativeSurfaceHandle", "name"], "openNativeClass");
+    assert_eq!(opened["name"], json!("Probe"), "the native class view opens on the probe class");
+    let native_handle = opened["nativeSurfaceHandle"].as_str().unwrap().to_string();
+
+    // TOOL_KINDS is genuinely exercised: a `native-class` descriptor reached the
+    // GTK SEMANTIC realizer (not the Component route), so it rendered controls.
+    let pane = host.adapter().gtk_visible_text(&native_handle).expect("GTK native class text");
+    assert!(
+        pane.iter().any(|t| t == "Class: Probe"),
+        "the native class realized as semantic tool UI: {pane:?}"
+    );
+
+    // Its class relations are ACTIVATABLE rows, keyed from the one browser-owned
+    // array. The probe class has no selectors, so the relations start at key 0.
+    let labels = host.adapter().gtk_action_labels(&native_handle).expect("GTK native actions");
+    assert!(
+        labels.iter().any(|l| l.starts_with("superclass -> ")),
+        "class-locator actions are realized: {labels:?}"
+    );
+
+    // ACTIVATE one. The host emits only {kind:'activate-item', key}; the shell
+    // resolves the emitted handle to the live view, picks its one binding, the
+    // browser-owned array yields a native-class SUBJECT, and a FRESH authorized
+    // class read re-presents the SAME logical view.
+    let before = run_json_while_pumping(
+        runtime, actor, host,
+        "globalThis.__session.nativeState()", "nativeState",
+    );
+    assert_eq!(before["kind"], json!("native-class"));
+    assert_eq!(before["name"], json!("Probe"));
+    // The probe class has NO selectors (no method installer is exported to the
+    // portable runtime, Bead aov), so its relation rows start at key 0 — and key
+    // 0 is provably the SUPERCLASS row, which is what the activation below
+    // navigates to. Without this the leg could not tell key 0 from key 1.
+    let targets = before["targets"].as_array().expect("nativeState targets");
+    assert!(
+        targets.iter().all(|t| t["group"] == json!("relation")),
+        "the probe class contributes only relation targets: {targets:?}"
+    );
+    assert!(
+        targets[0]["label"].as_str().unwrap().starts_with("superclass -> "),
+        "key 0 is the superclass row: {targets:?}"
+    );
+
+    let intent = host
+        .adapter()
+        .activate_gtk_action(&native_handle, 0)
+        .expect("activate")
+        .expect("an activate-item intent");
+    assert_eq!(
+        serde_json::to_value(&intent).expect("serialize"),
+        json!({"kind": "activate-item", "key": 0}),
+        "GTK emits ONLY the descriptor-local key — byte-identical to the DOM's intent"
+    );
+    let payload = json!({"intent": intent, "surfaceHandle": native_handle}).to_string();
+    runtime.block_on(actor.push(&payload)).expect("push native activation intent");
+    let after = poll_until(
+        runtime,
+        actor,
+        host,
+        "globalThis.__session.nativeState()",
+        |v| v["name"] != json!("Probe"),
+        "the activated class locator re-presented the target class",
+    );
+    assert_eq!(after["kind"], json!("native-class"), "the same logical view still shows a native class");
+    // Pin WHICH class was reached. `assert_ne!` alone would be a tautology of the
+    // poll predicate above, and would pass for the class-side row just as well.
+    assert_eq!(
+        after["name"],
+        json!("Object"),
+        "activating key 0 navigated to the probe's SUPERCLASS, not merely to something else"
+    );
+    let errors = run_json_while_pumping(
+        runtime, actor, host,
+        "({error: globalThis.__lastActivateError ?? null})", "activateErrors",
+    );
+    assert_eq!(errors["error"], json!(null), "no activation error was reported");
 }

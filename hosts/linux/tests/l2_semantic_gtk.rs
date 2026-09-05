@@ -200,21 +200,34 @@ fn fixtures_drive_real_gtk_controls_and_identical_intents() {
 
     // --- native-class: the authorized native Smalltalk class description
     // (Images ADR 0087) builds real GTK controls from the SAME fixture bytes the
-    // DOM consumes. Selectors and locators are TEXT rows, so the pane offers NO
-    // actions at all: class-read authority must not imply a method ref or a
-    // navigation route exists (Beads eij.2 and gzz).
+    // DOM consumes. Selectors and relations are ACTION rows keyed by position in
+    // the ONE browser-owned target array (Bead gzz), and activating one emits the
+    // identical intent the DOM emits from the identical bytes.
     let native = realize(&parse_semantic_ui(&read_fixture("native-class.json")).expect("native class validates"));
     let native_text = native.visible_text();
     assert!(native_text.iter().any(|t| t == "Class: BrowseChild"), "{native_text:?}");
     assert!(native_text.iter().any(|t| t == "instance"), "the kernel-decided side is shown: {native_text:?}");
     assert!(native_text.iter().any(|t| t == "baseValue, childFirst"), "declared layout names shown: {native_text:?}");
     assert!(native_text.iter().any(|t| t == "childFirst"), "own selector names shown: {native_text:?}");
-    assert!(
-        native_text.iter().any(|t| t == "superclass -> img/smalltalk/class/BrowseBase"),
-        "the superclass locator is shown as text: {native_text:?}"
+    // E2 (Bead gzz): selectors and relations are ACTIONS here, exactly as in the
+    // DOM, and activating one emits the identical intent from the identical
+    // fixture bytes. Neither host chooses what a key means.
+    assert_eq!(
+        native.action_labels(),
+        vec![
+            "childFirst".to_string(),
+            "childSecond".to_string(),
+            "superclass -> img/smalltalk/class/BrowseBase".to_string(),
+            "class-side -> img/smalltalk/metaclass/BrowseChild".to_string(),
+        ],
+        "selectors and relations are activatable rows"
     );
-    assert!(native.action_labels().is_empty(), "a native class pane offers no actions in E1");
-    assert!(native.editable_texts().is_empty(), "E1 is presentation/navigation only: nothing is editable");
+    // ONE key space across the two visual groups: pressing the first selector
+    // and the first relation yields 0 and 2, byte-identical to the DOM's intents.
+    assert_eq!(native.activate(0), Some(Intent::activate_item(0)));
+    assert_eq!(native.activate(2), Some(Intent::activate_item(2)));
+    assert!(native.activate(99).is_none(), "a stale key emits nothing");
+    assert!(native.editable_texts().is_empty(), "E2 is navigation, not editing");
 
     // --- native-method: the authorized method description realizes in GTK from
     // the SAME fixture bytes the DOM consumes. source/provenance rows are absent
