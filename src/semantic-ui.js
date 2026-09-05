@@ -205,6 +205,7 @@ function semanticUiForPresentation(presentationDescriptor) {
   const objectId = subject.objectId ?? '';
   const project = params.project ?? {};
   const smalltalkClass = params.smalltalkClass ?? {};
+  const smalltalkMethod = params.smalltalkMethod ?? {};
 
   const children = [];
 
@@ -217,6 +218,8 @@ function semanticUiForPresentation(presentationDescriptor) {
         ? `Project: ${typeof project.name === 'string' ? project.name : ''}`
       : kind === 'native-class'
         ? `Class: ${typeof smalltalkClass.name === 'string' ? smalltalkClass.name : ''}`
+      : kind === 'native-method'
+        ? `Method: ${typeof smalltalkMethod.selector === 'string' ? smalltalkMethod.selector : ''}`
       : kind; // unavailable-reference | unauthorized-reference
   children.push({kind: 'text', role: 'heading', text: heading});
 
@@ -307,6 +310,21 @@ function semanticUiForPresentation(presentationDescriptor) {
     // `provenance` is deliberately NOT rendered. Images owns no durable
     // native-class provenance today and truthfully answers null; an empty
     // Provenance row would imply a field that does not exist (Images jtz.1).
+  } else if (kind === 'native-method') {
+    // The authorized native Smalltalk METHOD description (Images ADR 0087).
+    // Only what Images truthfully owns: the selector, the side, the DECLARING
+    // class, and the method identity — the Block ref, which is disclosed only
+    // after the Block's own authorization and is never derived here.
+    children.push({kind: 'field', label: 'Selector', text: valueText(smalltalkMethod.selector)});
+    children.push({kind: 'field', label: 'Side', text: valueText(smalltalkMethod.side)});
+    // The class that DECLARES this method, not a receiver a send started from.
+    children.push({kind: 'field', label: 'Declaring class', text: valueText(smalltalkMethod.class)});
+    children.push({kind: 'field', label: 'Method', text: valueText(smalltalkMethod.method)});
+    // `source` and `provenance` are truthful ABSENCES, not empty strings: Images
+    // keeps no text a method was compiled from and owns no durable Cuis
+    // association. An empty row would suggest a durable field exists, so the
+    // rows are OMITTED entirely until Images owns something to put in them
+    // (Images jtz.1). Rendering them when non-null is E3's business, not E2's.
   } else if (kind === 'unavailable-reference' || kind === 'unauthorized-reference') {
     // An explicit reason, nothing else.
     const reason = `${kind === 'unauthorized-reference' ? 'Not authorized' : 'Unavailable'}: ${objectId}${params.reason ? ` (${params.reason})` : ''}`;

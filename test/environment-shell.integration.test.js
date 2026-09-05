@@ -73,6 +73,7 @@ test('EnvironmentShell end-to-end: select ref -> inspector; external mutation ->
     authorizedReadProject: imagesApi.authorizedReadProject,
     authorizedRenameProject: imagesApi.authorizedRenameProject,
     authorizedDescribeSmalltalkClass: imagesApi.authorizedDescribeSmalltalkClass,
+    authorizedDescribeSmalltalkMethod: imagesApi.authorizedDescribeSmalltalkMethod,
   });
   await adapter.ensureSchema(IMAGE, IDS);
 
@@ -193,6 +194,7 @@ test('S4a: edit-field routes through CommandRouter to a REAL mutation; a stale t
     authorizedReadProject: imagesApi.authorizedReadProject,
     authorizedRenameProject: imagesApi.authorizedRenameProject,
     authorizedDescribeSmalltalkClass: imagesApi.authorizedDescribeSmalltalkClass,
+    authorizedDescribeSmalltalkMethod: imagesApi.authorizedDescribeSmalltalkMethod,
   });
   await adapter.ensureSchema(IMAGE, IDS);
 
@@ -396,6 +398,7 @@ test('olm: edit-during-active-follow defers the self-observation reread; a secon
     authorizedReadProject: imagesApi.authorizedReadProject,
     authorizedRenameProject: imagesApi.authorizedRenameProject,
     authorizedDescribeSmalltalkClass: imagesApi.authorizedDescribeSmalltalkClass,
+    authorizedDescribeSmalltalkMethod: imagesApi.authorizedDescribeSmalltalkMethod,
   });
   await adapter.ensureSchema(IMAGE, IDS);
 

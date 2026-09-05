@@ -92,6 +92,7 @@ async function setup() {
     authorizedReadProject: imagesApi.authorizedReadProject,
     authorizedRenameProject: imagesApi.authorizedRenameProject,
     authorizedDescribeSmalltalkClass: imagesApi.authorizedDescribeSmalltalkClass,
+    authorizedDescribeSmalltalkMethod: imagesApi.authorizedDescribeSmalltalkMethod,
   });
 
   const schema = await adapter.ensureSchema(IMAGE, IDS);
@@ -148,6 +149,7 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
         authorizedReadProject: imagesApi.authorizedReadProject,
         authorizedRenameProject: imagesApi.authorizedRenameProject,
         authorizedDescribeSmalltalkClass: imagesApi.authorizedDescribeSmalltalkClass,
+        authorizedDescribeSmalltalkMethod: imagesApi.authorizedDescribeSmalltalkMethod,
       }).ensureSchema('bare', IDS),
       /no Smalltalk kernel/,
     );
@@ -947,7 +949,7 @@ test('createImageClientAdapter validates services and helpers (unit, no runtime)
     images: {}, invocations: {}, executor: {}, authority: {require: () => {}},
     defineClass: () => {}, installCallableInterfaceV2: () => {}, installImageCreationBinding: () => {},
     installImageMutationBinding: () => {}, installImageObjectReadBinding: () => {}, installImageObservationBinding: () => {}, findSmalltalkKernel: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
-    objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, unpackCompositeValue: () => {}, normalizeTypeDeclarations: () => {}, authorizedReadProject: () => {}, authorizedRenameProject: () => {}, authorizedDescribeSmalltalkClass: () => {},
+    objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, unpackCompositeValue: () => {}, normalizeTypeDeclarations: () => {}, authorizedReadProject: () => {}, authorizedRenameProject: () => {}, authorizedDescribeSmalltalkClass: () => {}, authorizedDescribeSmalltalkMethod: () => {},
   };
   assert.ok(createImageClientAdapter(good));
   const missing = {...good};
@@ -967,6 +969,9 @@ test('createImageClientAdapter validates services and helpers (unit, no runtime)
   const noNativeClassBrowse = {...good};
   delete noNativeClassBrowse.authorizedDescribeSmalltalkClass;
   assert.throws(() => createImageClientAdapter(noNativeClassBrowse), /missing required helper: authorizedDescribeSmalltalkClass/);
+  const noNativeMethodBrowse = {...good};
+  delete noNativeMethodBrowse.authorizedDescribeSmalltalkMethod;
+  assert.throws(() => createImageClientAdapter(noNativeMethodBrowse), /missing required helper: authorizedDescribeSmalltalkMethod/);
   const noAuthorityRequire = {...good, authority: {}};
   assert.throws(() => createImageClientAdapter(noAuthorityRequire), /authority service is missing required operation: require/);
 });
@@ -983,7 +988,7 @@ test('readProject delegates the Images-owned demand unchanged to the injected au
     installImageMutationBinding: () => {}, installImageObjectReadBinding: () => {}, installImageObservationBinding: () => {}, findSmalltalkKernel: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
     objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, unpackCompositeValue: () => {}, normalizeTypeDeclarations: () => {},
     authorizedRenameProject: () => {},
-    authorizedDescribeSmalltalkClass: () => {},
+    authorizedDescribeSmalltalkClass: () => {}, authorizedDescribeSmalltalkMethod: () => {},
     authorizedReadProject: ({images, imageId, projectId, require}) => {
       assert.equal(images, client.images);
       assert.equal(imageId, 'img');
@@ -1009,7 +1014,7 @@ test('ensureSchema validates its ids eagerly (unit)', async () => {
     images: {}, invocations: {}, executor: {}, authority: {require: () => {}},
     defineClass: () => {}, installCallableInterfaceV2: () => {}, installImageCreationBinding: () => {},
     installImageMutationBinding: () => {}, installImageObjectReadBinding: () => {}, installImageObservationBinding: () => {}, findSmalltalkKernel: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
-    objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, unpackCompositeValue: () => {}, normalizeTypeDeclarations: () => {}, authorizedReadProject: () => {}, authorizedRenameProject: () => {}, authorizedDescribeSmalltalkClass: () => {},
+    objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, unpackCompositeValue: () => {}, normalizeTypeDeclarations: () => {}, authorizedReadProject: () => {}, authorizedRenameProject: () => {}, authorizedDescribeSmalltalkClass: () => {}, authorizedDescribeSmalltalkMethod: () => {},
   };
   const adapter = createImageClientAdapter(good);
   await assert.rejects(adapter.ensureSchema('img', {}), /ids\.shapeId/);
@@ -1112,7 +1117,7 @@ test('renameProject delegates to authorizedRenameProject mapping ONLY the argume
     installImageMutationBinding: () => {}, installImageObjectReadBinding: () => {}, installImageObservationBinding: () => {}, findSmalltalkKernel: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
     objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, unpackCompositeValue: () => {}, normalizeTypeDeclarations: () => {},
     authorizedReadProject: () => {},
-    authorizedDescribeSmalltalkClass: () => {},
+    authorizedDescribeSmalltalkClass: () => {}, authorizedDescribeSmalltalkMethod: () => {},
     authorizedRenameProject: ({images: receivedImages, imageId, projectId, name, expectedVersionToken, require, ...rest}) => {
       assert.equal(receivedImages, images);
       assert.equal(imageId, 'img');

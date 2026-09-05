@@ -104,6 +104,7 @@ function adapterClients(runtime) {
     authorizedReadProject: imagesApi.authorizedReadProject,
     authorizedRenameProject: imagesApi.authorizedRenameProject,
     authorizedDescribeSmalltalkClass: imagesApi.authorizedDescribeSmalltalkClass,
+    authorizedDescribeSmalltalkMethod: imagesApi.authorizedDescribeSmalltalkMethod,
   };
 }
 

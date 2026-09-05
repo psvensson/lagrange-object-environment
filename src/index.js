@@ -48,9 +48,13 @@ export {
   LOCATOR_RELATION as NATIVE_CLASS_LOCATOR_RELATION,
   NATIVE_CLASS_PRESENTATION_KIND,
   NATIVE_CLASS_SUBJECT_KIND,
+  NATIVE_METHOD_PRESENTATION_KIND,
+  NATIVE_METHOD_SUBJECT_KIND,
   NativeClassPresentationError,
   createNativeClassPresentationProvider,
   createNativeClassSubject,
+  createNativeMethodPresentationProvider,
+  createNativeMethodSubject,
   createNativeSmalltalkBrowser,
   resolveNativeClassLocator,
 } from './native-smalltalk-browser.js';

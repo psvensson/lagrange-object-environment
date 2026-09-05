@@ -79,6 +79,7 @@ test('Phase 1 end-to-end: open -> present -> navigate -> command -> authorized m
     authorizedReadProject: imagesApi.authorizedReadProject,
     authorizedRenameProject: imagesApi.authorizedRenameProject,
     authorizedDescribeSmalltalkClass: imagesApi.authorizedDescribeSmalltalkClass,
+    authorizedDescribeSmalltalkMethod: imagesApi.authorizedDescribeSmalltalkMethod,
   });
   await adapter.ensureSchema(IMAGE, IDS);
 

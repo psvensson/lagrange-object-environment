@@ -59,7 +59,7 @@ fn accepts_green_fixtures() {
         assert_eq!(doc.version, 1);
         seen += 1;
     }
-    assert!(seen >= 7, "expected the green conformance corpus (>= 7 fixtures), found {seen}");
+    assert!(seen >= 8, "expected the green conformance corpus (>= 8 fixtures), found {seen}");
 }
 
 /// The validator LOUDLY rejects every checked-in RED conformance fixture — the
@@ -215,6 +215,27 @@ fn fixtures_drive_real_gtk_controls_and_identical_intents() {
     );
     assert!(native.action_labels().is_empty(), "a native class pane offers no actions in E1");
     assert!(native.editable_texts().is_empty(), "E1 is presentation/navigation only: nothing is editable");
+
+    // --- native-method: the authorized method description realizes in GTK from
+    // the SAME fixture bytes the DOM consumes. source/provenance rows are absent
+    // entirely, and E2 Slice A ships no action on this pane.
+    let method = realize(&parse_semantic_ui(&read_fixture("native-method.json")).expect("native method validates"));
+    let method_text = method.visible_text();
+    assert!(method_text.iter().any(|t| t == "Method: childFirst"), "{method_text:?}");
+    assert!(method_text.iter().any(|t| t == "instance"), "the declaring side is shown: {method_text:?}");
+    assert!(
+        method_text.iter().any(|t| t == "-> smalltalk/class/BrowseChild"),
+        "the DECLARING class is shown: {method_text:?}"
+    );
+    assert!(
+        method_text.iter().any(|t| t == "-> smalltalk/class/BrowseChild/method/Y2hpbGRGaXJzdA"),
+        "the Images-owned Block identity is shown -- the whole point of the second authorization: {method_text:?}"
+    );
+    assert!(
+        !method_text.iter().any(|t| t == "Source" || t == "Provenance"),
+        "a truthful absence is an omitted row, never an empty one: {method_text:?}"
+    );
+    assert!(method.action_labels().is_empty(), "Slice A adds no action to a native method pane");
 
     // --- unavailable + unauthorized: reason lines, no refs/actions.
     let un = realize(&parse_semantic_ui(&read_fixture("unavailable.json")).unwrap());

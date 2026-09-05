@@ -276,13 +276,14 @@ function createImageClientAdapter(client) {
     authorizedReadProject,
     authorizedRenameProject,
     authorizedDescribeSmalltalkClass,
+    authorizedDescribeSmalltalkMethod,
   } = client;
 
   if (typeof authorityService.require !== 'function') {
     throw new TypeError('lagrange-images client authority service is missing required operation: require');
   }
 
-  for (const [name, fn] of Object.entries({defineClass, installCallableInterfaceV2, installImageCreationBinding, installImageMutationBinding, installImageObjectReadBinding, installImageObservationBinding, findSmalltalkKernel, objectRef, objectResource, parseObjectResource, objectVersionToken, textValue, packCompositeValue, unpackCompositeValue, normalizeTypeDeclarations, authorizedReadProject, authorizedRenameProject, authorizedDescribeSmalltalkClass})) {
+  for (const [name, fn] of Object.entries({defineClass, installCallableInterfaceV2, installImageCreationBinding, installImageMutationBinding, installImageObjectReadBinding, installImageObservationBinding, findSmalltalkKernel, objectRef, objectResource, parseObjectResource, objectVersionToken, textValue, packCompositeValue, unpackCompositeValue, normalizeTypeDeclarations, authorizedReadProject, authorizedRenameProject, authorizedDescribeSmalltalkClass, authorizedDescribeSmalltalkMethod})) {
     if (typeof fn !== 'function') {
       throw new TypeError(`lagrange-images client is missing required helper: ${name}`);
     }
@@ -380,6 +381,39 @@ function createImageClientAdapter(client) {
   }
 
   /**
+   * Describe ONE native Smalltalk METHOD through Images' authorized browsing seam
+   * (Images ADR 0087 `authorizedDescribeSmalltalkMethod`).
+   *
+   * Returns Images' `smalltalk-method-description/v1` record UNCHANGED: the
+   * declaring class, the side, the selector, the exact Block ref currently bound
+   * to it, and `source`/`provenance` — which Images truthfully reports as null,
+   * because the class builder installs a method's semantic program and keeps no
+   * text it compiled from.
+   *
+   * TWO INDEPENDENT AUTHORITY CHECKS, both Images'. The class read authorizes
+   * resolving the selector against the class's OWN method dictionary; the Block
+   * is then authorized SEPARATELY before its locator is disclosed. Class-read
+   * authority may show that `foo` exists and must never yield the Block behind
+   * it, so this seam exists precisely to make that second check happen — it is
+   * not a convenience wrapper over the class read.
+   *
+   * The caller does not need the Block ref in advance and MUST NOT compute one:
+   * Images owns the method's identity and reveals it only after both checks
+   * pass. The `selector` is a caller-supplied name that legitimately arrives
+   * from an authorized class description; Images re-resolves it against the
+   * CURRENT dictionary, so a stale selector cannot yield a stale Block.
+   */
+  async function describeSmalltalkMethod({imageId, classRef, selector, authority = null} = {}) {
+    return authorizedDescribeSmalltalkMethod({
+      images,
+      imageId,
+      classRef,
+      selector,
+      require: (demand) => authorityService.require(authority, demand),
+    });
+  }
+
+  /**
    * The Environment<->Images ERROR MAPPING for the browse seam above. This
    * interaction owner owns it (ownership row 49): a consumer classifies
    * nothing, and no Images message text is ever propagated.
@@ -402,6 +436,31 @@ function createImageClientAdapter(client) {
    * recorded on Bead lagrange-object-environment-azj rather than hidden here.
    */
   function classifySmalltalkClassReadError(error) {
+    return error?.name === 'AuthorityError' ? 'unauthorized' : 'unavailable';
+  }
+
+  /**
+   * The same mapping for the METHOD seam, owned here for the same reason: a
+   * consumer must not reason about Images error classes, and no Images message
+   * text crosses this boundary.
+   *
+   * The outcomes are NOT symmetric with the class seam's, and that asymmetry is
+   * licensed rather than accidental:
+   *   without class authority  BOTH an existing and a missing selector are
+   *                            AuthorityError -> 'unauthorized'. Images checks
+   *                            the class BEFORE resolving anything, so the seam
+   *                            is no existence oracle.
+   *   with class authority     a selector the class does not implement is a
+   *                            plain TypeError -> 'unavailable', while a Block
+   *                            the caller may not read is AuthorityError ->
+   *                            'unauthorized'. That distinction discloses
+   *                            nothing new: class read already listed every
+   *                            selector the class implements.
+   * Bead azj records that 'unavailable' now also covers "this class does not
+   * implement that selector" (a stale descriptor), which is operationally
+   * different from "the read failed" and has no diagnostic channel yet.
+   */
+  function classifySmalltalkMethodReadError(error) {
     return error?.name === 'AuthorityError' ? 'unauthorized' : 'unavailable';
   }
 
@@ -1042,13 +1101,21 @@ function createImageClientAdapter(client) {
     readProject,
     renameProject,
     projectWritableFields: PROJECT_WRITABLE_FIELDS,
-    // The authorized native class browsing seam and its error mapping. There is
-    // deliberately NO describeSmalltalkMethod here: E1 presents selector NAMES,
-    // and class-read authority must never yield the Block behind a selector.
-    // Uncallable beats un-called — E2 adds the method seam with its own
-    // independent Block authorization (Bead lagrange-object-environment-eij.2).
+    // The two authorized native browsing seams of Images ADR 0087, and their
+    // error mappings. They are SEPARATE on purpose: the class seam yields
+    // selector NAMES and never the Block behind one, and reaching a Block means
+    // calling the method seam, which authorizes it independently. Neither is a
+    // richer reading of the other.
+    //
+    // These are the ONLY native-Smalltalk capabilities this adapter exposes:
+    // one authorized description per concern, and no generic Block read, method
+    // dictionary, WASM/module artifact, compiler, class-building or import API.
+    // `test/native-smalltalk-browser.integration.test.js` fences that surface by
+    // enumerating every method-shaped member, so the claim is proven, not prose.
     describeSmalltalkClass,
     classifySmalltalkClassReadError,
+    describeSmalltalkMethod,
+    classifySmalltalkMethodReadError,
     readObject,
     authorizedReadObject,
     resolveAssetBytes,

@@ -5,9 +5,13 @@ import {
   LOCATOR_RELATION,
   NATIVE_CLASS_PRESENTATION_KIND,
   NATIVE_CLASS_SUBJECT_KIND,
+  NATIVE_METHOD_PRESENTATION_KIND,
+  NATIVE_METHOD_SUBJECT_KIND,
   NativeClassPresentationError,
   createNativeClassPresentationProvider,
   createNativeClassSubject,
+  createNativeMethodPresentationProvider,
+  createNativeMethodSubject,
   createNativeSmalltalkBrowser,
   resolveNativeClassLocator,
 } from '../src/native-smalltalk-browser.js';
@@ -53,10 +57,43 @@ function description(overrides = {}) {
 function registryWithNativeClass(extraProviders = []) {
   const registry = createPresentationRegistry();
   registry.register(createNativeClassPresentationProvider());
+  registry.register(createNativeMethodPresentationProvider());
   for (const provider of extraProviders) registry.register(provider);
   registry.register(createUnavailableRefProvider());
   registry.register(createUnauthorizedRefProvider());
   return registry;
+}
+
+const SELECTOR = 'childFirst';
+const BLOCK_REF = ref('smalltalk/class/BrowseChild/method/Y2hpbGRGaXJzdA');
+
+// A canonical Images method description, as DATA the fake adapter returns.
+function methodDescription(overrides = {}) {
+  return Object.freeze({
+    format: 'smalltalk-method-description/v1',
+    class: CLASS_REF,
+    side: 'instance',
+    selector: SELECTOR,
+    method: BLOCK_REF,
+    source: null,
+    provenance: null,
+    ...overrides,
+  });
+}
+
+function methodFakeAdapter({describeMethod, classifyMethod} = {}) {
+  const calls = [];
+  return {
+    calls,
+    describeSmalltalkClass: () => description(),
+    classifySmalltalkClassReadError: (error) => (error?.name === 'AuthorityError' ? 'unauthorized' : 'unavailable'),
+    describeSmalltalkMethod(args) {
+      calls.push(args);
+      return describeMethod ? describeMethod(args) : methodDescription();
+    },
+    classifySmalltalkMethodReadError: classifyMethod
+      ?? ((error) => (error?.name === 'AuthorityError' ? 'unauthorized' : 'unavailable')),
+  };
 }
 
 // A fake adapter with the same seam shape the real ImageClientAdapter exposes.
@@ -70,6 +107,8 @@ function fakeAdapter({describe, classify} = {}) {
     },
     classifySmalltalkClassReadError: classify
       ?? ((error) => (error?.name === 'AuthorityError' ? 'unauthorized' : 'unavailable')),
+    describeSmalltalkMethod() { throw new TypeError('this fake adapter browses classes only'); },
+    classifySmalltalkMethodReadError: (error) => (error?.name === 'AuthorityError' ? 'unauthorized' : 'unavailable'),
   };
 }
 
@@ -267,8 +306,23 @@ test('any other failure presents as unavailable and NEVER leaks an Images storag
 });
 
 test('the browser refuses an adapter without the interaction owner\'s error mapping', () => {
+  const registry = createPresentationRegistry();
   assert.throws(
-    () => createNativeSmalltalkBrowser({adapter: {describeSmalltalkClass: () => {}}, presentationRegistry: createPresentationRegistry()}),
+    () => createNativeSmalltalkBrowser({adapter: {describeSmalltalkClass: () => {}}, presentationRegistry: registry}),
+    /describeSmalltalkMethod/,
+  );
+  assert.throws(
+    () => createNativeSmalltalkBrowser({
+      adapter: {describeSmalltalkClass: () => {}, describeSmalltalkMethod: () => {}},
+      presentationRegistry: registry,
+    }),
+    /classifySmalltalkMethodReadError/,
+  );
+  assert.throws(
+    () => createNativeSmalltalkBrowser({
+      adapter: {describeSmalltalkClass: () => {}, describeSmalltalkMethod: () => {}, classifySmalltalkMethodReadError: () => {}},
+      presentationRegistry: registry,
+    }),
     /classifySmalltalkClassReadError/,
   );
   assert.throws(() => createNativeSmalltalkBrowser({adapter: {}, presentationRegistry: createPresentationRegistry()}), /describeSmalltalkClass/);
@@ -378,4 +432,190 @@ test('the projection shows selector NAMES as text and never a Provenance row', (
     parameters: {smalltalkClass: description({selectors: []}), locators: []},
   });
   assert.equal(none.root.children.some((child) => child.label === 'Selectors'), false);
+});
+
+// --- the METHOD twin of the class unit proofs above (E2 Slice A) ---
+
+test('the native-method subject carries class + selector and rejects what it cannot browse', () => {
+  const subject = createNativeMethodSubject({imageId: IMAGE, classRef: CLASS_REF, selector: SELECTOR});
+  assert.equal(subject.kind, NATIVE_METHOD_SUBJECT_KIND);
+  assert.equal(subject.classRef, CLASS_REF, 'the caller-supplied ref is carried by IDENTITY');
+  assert.equal(subject.selector, SELECTOR);
+  assert.ok(Object.isFrozen(subject));
+
+  // Same reason as the class subject: a pinned-ref is a caller mistake and must
+  // not come back looking like a missing method.
+  assert.throws(
+    () => createNativeMethodSubject({imageId: IMAGE, classRef: {kind: 'pinned-ref', imageId: IMAGE, objectId: 'c', revision: 1}, selector: SELECTOR}),
+    /unpinned \{kind: "ref"\} classRef/,
+  );
+  assert.throws(
+    () => createNativeMethodSubject({imageId: IMAGE, classRef: {kind: 'ref', imageId: 'other', objectId: 'c'}, selector: SELECTOR}),
+    /classRef must name image img/,
+  );
+  assert.throws(() => createNativeMethodSubject({imageId: IMAGE, classRef: CLASS_REF}), /selector/);
+  assert.throws(() => createNativeMethodSubject({imageId: IMAGE, classRef: CLASS_REF, selector: ''}), /selector/);
+});
+
+test('browseMethod makes ONE authorized call carrying exactly the subject and authority', async () => {
+  const adapter = methodFakeAdapter();
+  const browser = createNativeSmalltalkBrowser({adapter, presentationRegistry: registryWithNativeClass()});
+  const authority = Object.freeze({opaque: true});
+
+  const presentation = await browser.browseMethod(
+    createNativeMethodSubject({imageId: IMAGE, classRef: CLASS_REF, selector: SELECTOR}), {authority},
+  );
+
+  assert.equal(adapter.calls.length, 1);
+  assert.deepEqual(Object.keys(adapter.calls[0]).sort(), ['authority', 'classRef', 'imageId', 'selector'],
+    'the method seam receives the subject and authority ONLY');
+  assert.equal(adapter.calls[0].classRef, CLASS_REF);
+  assert.equal(adapter.calls[0].selector, SELECTOR);
+  assert.equal(adapter.calls[0].authority, authority, 'authority is threaded per call, never stored');
+  assert.equal(presentation.kind, NATIVE_METHOD_PRESENTATION_KIND);
+  assert.equal(presentation.context.smalltalkMethod.method, BLOCK_REF, 'the Images record, by identity');
+});
+
+test('the method provider refuses a description that is not its own subject\'s', () => {
+  const provider = createNativeMethodPresentationProvider();
+  const subject = createNativeMethodSubject({imageId: IMAGE, classRef: CLASS_REF, selector: SELECTOR});
+  assert.equal(provider.present({kind: 'ref', imageId: IMAGE, objectId: 'x'}), null, 'disjoint by subject kind');
+  assert.equal(provider.present(createNativeClassSubject({imageId: IMAGE, classRef: CLASS_REF}), {}), null,
+    'a class subject is not a method subject');
+  assert.throws(() => provider.present(subject, {}), /canonical smalltalk-method-description\/v1/);
+  // A description for a DIFFERENT selector, or a different declaring class, is
+  // not this subject's — accepting either would let one authorized read stand in
+  // for another.
+  assert.throws(
+    () => provider.present(subject, {smalltalkMethod: methodDescription({selector: 'somethingElse'})}),
+    /description of ITS OWN subject/,
+  );
+  assert.throws(
+    () => provider.present(subject, {smalltalkMethod: methodDescription({class: ref('smalltalk/class/Other')})}),
+    /description of ITS OWN subject/,
+  );
+});
+
+test('browseMethod requires EXACTLY ONE presentation, on both the success and failure paths', async () => {
+  const subject = createNativeMethodSubject({imageId: IMAGE, classRef: CLASS_REF, selector: SELECTOR});
+
+  const none = createNativeSmalltalkBrowser({adapter: methodFakeAdapter(), presentationRegistry: createPresentationRegistry()});
+  await assert.rejects(none.browseMethod(subject), /no native method presentation was discovered/);
+
+  const wrongKind = createPresentationRegistry();
+  wrongKind.register(Object.freeze({
+    id: 'origin-flavoured-method',
+    present(s) {
+      if (!s || s.kind !== NATIVE_METHOD_SUBJECT_KIND) return null;
+      return new Presentation({id: 'other', subject: s, kind: 'cuis-method', context: {}, state: {}});
+    },
+  }));
+  const wrongKindBrowser = createNativeSmalltalkBrowser({adapter: methodFakeAdapter(), presentationRegistry: wrongKind});
+  await assert.rejects(wrongKindBrowser.browseMethod(subject), /is cuis-method, not native-method/);
+
+  // The FAILURE path takes no first match either.
+  const denied = Object.assign(new Error('denied'), {name: 'AuthorityError'});
+  const failing = methodFakeAdapter({describeMethod: () => { throw denied; }});
+  const doubled = createPresentationRegistry();
+  doubled.register(createUnauthorizedRefProvider());
+  doubled.register(createUnauthorizedRefProvider());
+  await assert.rejects(
+    createNativeSmalltalkBrowser({adapter: failing, presentationRegistry: doubled}).browseMethod(subject),
+    /ambiguous presentations for a unauthorized-ref native method read/,
+  );
+  await assert.rejects(
+    createNativeSmalltalkBrowser({adapter: failing, presentationRegistry: createPresentationRegistry()}).browseMethod(subject),
+    /no presentation was discovered for a unauthorized-ref native method read/,
+  );
+});
+
+test('a failed method read presents through the ordinary route and names the CLASS, not the Block', async () => {
+  const subject = createNativeMethodSubject({imageId: IMAGE, classRef: CLASS_REF, selector: SELECTOR});
+  const denied = Object.assign(new Error('not authorized: object/read on YXBw.blah'), {name: 'AuthorityError'});
+  const unauthorized = await createNativeSmalltalkBrowser({
+    adapter: methodFakeAdapter({describeMethod: () => { throw denied; }}),
+    presentationRegistry: registryWithNativeClass(),
+  }).browseMethod(subject);
+  assert.equal(unauthorized.kind, 'unauthorized-reference');
+  assert.equal(unauthorized.context.reason, 'not authorized to read this native method');
+  assert.equal(unauthorized.subject.objectId, CLASS_REF.objectId,
+    'a denied caller is told about the class it named, never about the Block it may not read');
+  assert.equal(JSON.stringify(unauthorized.context).includes('/method/'), false);
+
+  const missing = await createNativeSmalltalkBrowser({
+    adapter: methodFakeAdapter({describeMethod: () => { throw new TypeError('native class X does not implement Y'); }}),
+    presentationRegistry: registryWithNativeClass(),
+  }).browseMethod(subject);
+  assert.equal(missing.kind, 'unavailable-reference');
+  assert.equal(missing.context.reason, 'this native method could not be read');
+  assert.equal(missing.context.reason.includes('does not implement'), false,
+    'the Images message never reaches a consumer');
+});
+
+test('the native-method projection shows only what Images owns, and omits absent rows', () => {
+  const doc = semanticUiForPresentation({
+    kind: NATIVE_METHOD_PRESENTATION_KIND,
+    subject: {kind: NATIVE_METHOD_SUBJECT_KIND, imageId: IMAGE, classRef: CLASS_REF, selector: SELECTOR},
+    parameters: {smalltalkMethod: methodDescription()},
+  });
+  assert.deepEqual(doc.root.children.filter((c) => c.kind === 'field').map((c) => c.label),
+    ['Selector', 'Side', 'Declaring class', 'Method']);
+  // source and provenance are null: the rows are ABSENT, not empty. An empty row
+  // would suggest a durable field exists (Images jtz.1).
+  for (const absent of ['Source', 'Provenance']) {
+    assert.equal(doc.root.children.some((c) => c.label === absent), false, `${absent} must not be rendered`);
+  }
+  assert.equal(doc.root.children.some((c) => c.kind === 'action'), false,
+    'Slice A ships no activation on a native method pane');
+});
+
+test('the Environment composes NO Images object id anywhere in src/', async () => {
+  // The plan's structural companion to the redefinition proof: a method's Block
+  // id is Images' identity, and the only honest way to have one is to be given
+  // it. A template like `${classId}/method/${...}` in src/ would mean the
+  // Environment could manufacture a method identity without an authorized read —
+  // which is exactly the wrong implementation the integration proof is designed
+  // to catch at runtime. This catches it at rest, in any file, forever.
+  const {readdirSync, readFileSync} = await import('node:fs');
+  const {join} = await import('node:path');
+  const walk = (dir) => readdirSync(dir, {withFileTypes: true}).flatMap((entry) => (
+    entry.isDirectory() ? walk(join(dir, entry.name)) : [join(dir, entry.name)]
+  ));
+  // Method and Block id fragments are forbidden OUTRIGHT: composing one would
+  // manufacture a method identity without an authorized read.
+  const forbiddenEverywhere = ['/method/', '/revision/', 'smalltalk/block/', 'smalltalk/metaclass/'];
+  // Class id composition has exactly ONE pre-existing site, `classIdFor` in the
+  // adapter, used only on the control-plane/schema path (`images.getObject` for
+  // the probe and Perspective classes, never a user-facing read). It predates
+  // native browsing and is pinned here rather than hidden, so a SECOND site —
+  // or any spread into the browsing lane — goes red. Bead lagrange-object-
+  // environment-c9v records the smell itself.
+  const classFragmentAllowance = new Set(['src/image-client-adapter.js']);
+  const offenders = [];
+  const root = new URL('../src', import.meta.url).pathname;
+  for (const file of walk(root).filter((f) => f.endsWith('.js'))) {
+    const relative = `src/${file.slice(root.length + 1)}`;
+    const source = readFileSync(file, 'utf8');
+    const fragments = classFragmentAllowance.has(relative)
+      ? forbiddenEverywhere
+      : [...forbiddenEverywhere, 'smalltalk/class/'];
+    for (const fragment of fragments) {
+      // A LITERAL id fragment in code, not the word in prose: the fragment
+      // adjacent to a string/template delimiter.
+      for (const quote of ['`', "'", '"']) {
+        if (source.includes(`${quote}${fragment}`) || source.includes(`${fragment}${quote}`)) {
+          offenders.push(`${relative}: ${fragment}`);
+        }
+      }
+    }
+  }
+  assert.deepEqual(offenders, [],
+    'no module under src/ may compose or parse an Images METHOD/Block id, and only the one '
+    + 'documented control-plane site may compose a class id; identity comes from Images');
+  // The allowance is not a blank cheque: the browsing lane itself must be clean.
+  assert.equal(
+    readFileSync(new URL('../src/native-smalltalk-browser.js', import.meta.url), 'utf8').includes("'smalltalk/"),
+    false,
+    'the native browsing owner composes no Images id at all',
+  );
 });
