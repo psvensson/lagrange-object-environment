@@ -7,6 +7,7 @@ The documents here define the object-environment boundary before they define a v
 - [RendererAdapter contract](contracts/renderer-adapter.md) — the host-portability boundary between the environment and a host's renderer
 - [Core concepts](concepts.md) — Image, Project, Presentation, Command, Perspective and Session
 - [Object-native theming and durable environment state](decisions/0015-durable-environment-state-and-themes-are-objects.md) — Themes/tokens/profiles/defaults are ordinary image objects; DTCG is interchange, not authority
+- [One browser and first-class documentation](decisions/0016-one-browser-and-first-class-documentation.md) — one semantic browser across languages; Documentation is a common facet stored independently of source, while language comments remain optional explicit projections
 - [Projects and collaborative work](projects-and-collaboration.md) — organization, history UX, Git projection and multi-author work
 - [Identity, authority and sharing](security-and-sharing.md) — principals, transient authority and invitations
 - [Ownership registry](ownership.md) — single owner for every major subsystem and every cross-subsystem interaction
