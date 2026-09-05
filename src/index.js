@@ -45,6 +45,17 @@ export {
 } from './project-browser.js';
 
 export {
+  LOCATOR_RELATION as NATIVE_CLASS_LOCATOR_RELATION,
+  NATIVE_CLASS_PRESENTATION_KIND,
+  NATIVE_CLASS_SUBJECT_KIND,
+  NativeClassPresentationError,
+  createNativeClassPresentationProvider,
+  createNativeClassSubject,
+  createNativeSmalltalkBrowser,
+  resolveNativeClassLocator,
+} from './native-smalltalk-browser.js';
+
+export {
   createObjectInspectorProvider,
   createUnavailableRefProvider,
   createUnauthorizedRefProvider,

@@ -401,6 +401,14 @@ window.__lagrangeProof = {
       fieldValues: Array.from(root.querySelectorAll('.lagrange-tool-fields dd')).map((d) => d.querySelector('input')?.value ?? d.textContent),
       fieldInputs: Array.from(root.querySelectorAll('.lagrange-tool-field-input')).map((i) => i.value),
       buttons: Array.from(root.querySelectorAll('.lagrange-tool-references button')).map((b) => b.textContent),
+      // Every collection ROW's text, whatever node kind rendered it. An
+      // `action` row and a `text` row both appear here, so a test can assert
+      // that a row is VISIBLE separately from whether it is ACTIVATABLE.
+      collectionRows: Array.from(root.querySelectorAll('.lagrange-tool-references li')).map((li) => li.textContent),
+      // Every control the user could operate, anywhere in the pane. Exhaustive
+      // over what renderSemanticUiToDom can EMIT (which is what the E1
+      // native-class negative needs), not over HTML in general.
+      controls: Array.from(root.querySelectorAll('button, input, select, textarea, a[href], [role="button"], [tabindex]')).map((el) => el.tagName.toLowerCase()),
       clickButton: (i) => { root.querySelectorAll('.lagrange-tool-references button')[i]?.click(); },
       // Type into the i-th editable input and press Enter (commit).
       editField: (i, text) => {

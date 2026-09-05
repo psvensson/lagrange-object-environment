@@ -203,7 +203,7 @@ function createProjectBrowser({adapter, presentationRegistry, compositor} = {}) 
   }
   /**
    * The consumer-owned transient-token supplier for the shell's edit-binding
-   * contract (rows 63/64): returns the token paired with EXACTLY this displayed
+   * contract (rows 64/65): returns the token paired with EXACTLY this displayed
    * descriptor, or null. Null whenever the descriptor is not the paired object
    * (a structurally equal copy is not it), the pairing's generation is stale,
    * the active subject moved, or the Compositor no longer shows that exact

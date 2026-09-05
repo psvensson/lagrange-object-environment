@@ -145,7 +145,7 @@ test('CI: the dispatch seam is INJECTED, not a hard-coded kind switch (sentinel 
 // the CHECKED-IN fixtures (the SAME bytes the Linux GTK realizer consumes).
 // This also covers the unavailable/unauthorized kinds, which had NO DOM-level
 // coverage before L2.
-test('CI: the browser realizer renders the checked-in SemanticUi fixtures (all five kinds)', {skip: !available && 'no Chrome available'}, async () => {
+test('CI: the browser realizer renders the checked-in SemanticUi fixtures (all six kinds)', {skip: !available && 'no Chrome available'}, async () => {
   await withProofPage(async ({page}) => {
     const result = await page.evaluate(async () => {
       const out = {};
@@ -183,6 +183,24 @@ test('CI: the browser realizer renders the checked-in SemanticUi fixtures (all f
       editableProject.editField(0, 'New');
       out.editableProjectIntent = editableProject.takeIntents();
       editableProject.dispose();
+      // native-class (Images ADR 0087): the authorized native Smalltalk class
+      // description renders from the SAME fixture bytes the GTK realizer
+      // consumes. Selectors and locators are TEXT, so there are NO buttons:
+      // class-read authority must not imply a method ref or a navigation route.
+      const nativeClass = await window.__lagrangeProof.renderSemanticUiFixture('../fixtures/semantic-ui/native-class.json', 'native-class');
+      out.nativeClass = {
+        heading: nativeClass.heading,
+        fields: nativeClass.fields,
+        fieldValues: nativeClass.fieldValues,
+        fieldInputs: nativeClass.fieldInputs,
+        buttons: nativeClass.buttons,
+        collectionRows: nativeClass.collectionRows,
+        controls: nativeClass.controls,
+      };
+      // Nothing was clicked or typed: the pane offers nothing to operate. Any
+      // intent here would mean E1 shipped an affordance it cannot route.
+      out.nativeClassIntents = nativeClass.takeIntents();
+      nativeClass.dispose();
       // unavailable + unauthorized: heading + an explicit reason line, no refs.
       const un = await window.__lagrangeProof.renderSemanticUiFixture('../fixtures/semantic-ui/unavailable.json', 'unavailable-reference');
       out.unavailable = {heading: un.heading, reason: un.reason, buttons: un.buttons};
@@ -230,6 +248,29 @@ test('CI: the browser realizer renders the checked-in SemanticUi fixtures (all f
     assert.deepEqual(result.editableProject.fieldInputs, ['Alpha'], 'only the Name field renders an <input>');
     assert.deepEqual(result.editableProjectIntent, [{kind: 'edit-field', key: 0, text: 'New'}],
       'Enter on the Name input emits the ordinary raw-string edit-field intent');
+    // native-class: the class's own facts, and nothing activatable.
+    assert.equal(result.nativeClass.heading, 'Class: BrowseChild');
+    assert.deepEqual(result.nativeClass.fields, ['Name', 'Side', 'Class', 'Instance variables', 'Indexed']);
+    assert.ok(result.nativeClass.fieldValues.includes('instance'), 'the kernel-decided side is displayed');
+    assert.ok(result.nativeClass.fieldValues.includes('baseValue, childFirst'), 'declared layout NAMES are displayed');
+    // The selector and locator ROWS are VISIBLE — the same information GTK shows
+    // from the same bytes.
+    assert.deepEqual(result.nativeClass.collectionRows, [
+      // The class's OWN selector names (baseValue is an instance VARIABLE and
+      // renders as a field, not a row), then both locators.
+      'childFirst', 'childSecond',
+      'superclass -> img/smalltalk/class/BrowseBase',
+      'class-side -> img/smalltalk/metaclass/BrowseChild',
+    ], 'own selector names and both locators are rendered as visible rows');
+    // ...and NOTHING in the pane is operable. This is the E1 negative: a
+    // rendered locator must not become a control that emits an intent no owner
+    // routes (the dead affordance Bead pnf records). Activation arrives with
+    // E2's routing amendment to ownership row 64 (Bead gzz), not before.
+    assert.deepEqual(result.nativeClass.buttons, [], 'no activatable rows');
+    assert.deepEqual(result.nativeClass.controls, [], 'no operable control of ANY kind in a native-class pane');
+    assert.deepEqual(result.nativeClass.fieldInputs, [], 'E1 is presentation/navigation only: nothing is editable');
+    assert.deepEqual(result.nativeClassIntents, [], 'rendering a native class emits no intent');
+
     // unavailable + unauthorized (the previously-uncovered kinds)
     assert.equal(result.unavailable.heading, 'unavailable-reference');
     assert.equal(result.unavailable.reason, 'Unavailable: obj-gone (not found)');

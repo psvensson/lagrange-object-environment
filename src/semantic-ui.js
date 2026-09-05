@@ -204,6 +204,7 @@ function semanticUiForPresentation(presentationDescriptor) {
   const subject = presentationDescriptor?.subject ?? {};
   const objectId = subject.objectId ?? '';
   const project = params.project ?? {};
+  const smalltalkClass = params.smalltalkClass ?? {};
 
   const children = [];
 
@@ -214,6 +215,8 @@ function semanticUiForPresentation(presentationDescriptor) {
       ? `Inspector: ${objectId}`
       : kind === 'project'
         ? `Project: ${typeof project.name === 'string' ? project.name : ''}`
+      : kind === 'native-class'
+        ? `Class: ${typeof smalltalkClass.name === 'string' ? smalltalkClass.name : ''}`
       : kind; // unavailable-reference | unauthorized-reference
   children.push({kind: 'text', role: 'heading', text: heading});
 
@@ -249,6 +252,61 @@ function semanticUiForPresentation(presentationDescriptor) {
         }),
       });
     }
+  } else if (kind === 'native-class') {
+    // The authorized native Smalltalk class description (Images ADR 0087),
+    // rendered as display text only. The class's own identity and its
+    // superclass/class-side LOCATORS appear as text, never as refs and never as
+    // action(key) rows: E1 ships no activation route for them, and an
+    // affordance that routes nowhere is the defect Bead pnf records. Wiring
+    // activation is Bead gzz, with E2.
+    children.push({kind: 'field', label: 'Name', text: valueText(smalltalkClass.name)});
+    // instance vs class side is the kernel's metaclass decision, reported as it
+    // came; never inferred here from a name or an id spelling.
+    children.push({kind: 'field', label: 'Side', text: valueText(smalltalkClass.side)});
+    children.push({kind: 'field', label: 'Class', text: valueText(smalltalkClass.class)});
+    // LAYOUT. `null` and `{instanceVariables: []}` are DIFFERENT answers and
+    // must stay different documents: a Metaclass and the kernel's abstract
+    // classes declare no instance layout at all, while a class declaring zero
+    // instance variables has an empty one and its instances exist. An ABSENT
+    // `layout` key is treated exactly like `null` (both ports state this rule
+    // identically, per the CONFORMANCE NOTE above).
+    const layout = smalltalkClass.layout ?? null;
+    if (layout === null) {
+      children.push({kind: 'field', label: 'Layout', text: '(no declared instance layout)'});
+    } else {
+      const instanceVariables = Array.isArray(layout.instanceVariables) ? layout.instanceVariables : [];
+      children.push({kind: 'field', label: 'Instance variables', text: instanceVariables.join(', ')});
+      children.push({kind: 'field', label: 'Indexed', text: valueText(layout.indexed)});
+    }
+    // The class's OWN canonical selector names, in Images' order. Deliberately
+    // TEXT, not actions: class-read authority may show that `foo` exists, and
+    // must not imply a method ref is available behind it (E2 invokes the
+    // separate method seam, which authorizes the Block independently).
+    const selectors = Array.isArray(smalltalkClass.selectors) ? smalltalkClass.selectors : [];
+    if (selectors.length > 0) {
+      children.push({
+        kind: 'collection',
+        label: 'Selectors',
+        items: selectors.map((selector) => ({kind: 'text', text: valueText(selector)})),
+      });
+    }
+    // Locators, in the browser-owned order. Display only: following one is a
+    // fresh authorized read the consumer performs, not something this document
+    // can trigger.
+    const locators = Array.isArray(params.locators) ? params.locators : [];
+    if (locators.length > 0) {
+      children.push({
+        kind: 'collection',
+        label: 'Locators',
+        items: locators.map((locator) => ({
+          kind: 'text',
+          text: `${valueText(locator?.relation)} -> ${valueText(locator?.ref?.imageId)}/${valueText(locator?.ref?.objectId)}`,
+        })),
+      });
+    }
+    // `provenance` is deliberately NOT rendered. Images owns no durable
+    // native-class provenance today and truthfully answers null; an empty
+    // Provenance row would imply a field that does not exist (Images jtz.1).
   } else if (kind === 'unavailable-reference' || kind === 'unauthorized-reference') {
     // An explicit reason, nothing else.
     const reason = `${kind === 'unauthorized-reference' ? 'Not authorized' : 'Unavailable'}: ${objectId}${params.reason ? ` (${params.reason})` : ''}`;

@@ -172,18 +172,24 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
                 'createProject',
                 'addProjectMember',
                 'projectObjectId',
-              ];
-              // ADMISSION FACT for the Images 9af24da bump, deliberately separate from the
-              // requirement list above: the authorized native Smalltalk browsing seams of
-              // Images ADR 0087. No BYTE assertion (revision literal, length, sha256, module
-              // count) can show that the artifact's CLOSURE actually links and resolves them
-              // through the sole public alias -- that is what this proves. Object Environment
-              // E1 consumes only the class seam; the method seam is listed because Images
-              // publishes the pair and E2 consumes it next.
-              const admittedNativeBrowseSeams = [
+                // Images ADR 0087. Promoted from the admission list below to a
+                // REQUIREMENT by Object Environment E1: createImageClientAdapter
+                // now refuses to construct without it, so both native
+                // compositions genuinely need it from the artifact.
                 'authorizedDescribeSmalltalkClass',
-                'authorizedDescribeSmalltalkMethod',
               ];
+              // The ONE authorized native Smalltalk browsing seam the Environment consumes
+              // today (Images ADR 0087, Object Environment E1). Deliberately NOT the whole
+              // ADR 0087 pair: `authorizedDescribeSmalltalkMethod` is not required here,
+              // because nothing in this repository calls it yet and a requirement without a
+              // consumer is a guess about E2 rather than a fact about E1. E2 adds it when it
+              // consumes it.
+              //
+              // Nor are Images' class-building or Cuis-import helpers required: the native
+              // lane deliberately cannot construct a class, and that gap is Bead
+              // lagrange-object-environment-aov, not something to paper over by widening this
+              // list.
+              const consumedNativeBrowseSeam = 'authorizedDescribeSmalltalkClass';
               return {
                 sameModule: exact.setDefaultCryptoProvider === alias.setDefaultCryptoProvider,
                 marker: host.marker,
@@ -192,26 +198,28 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
                 missingEnvironmentExports: requiredEnvironmentExports.filter(
                   (name) => typeof alias[name] !== 'function',
                 ),
-                missingNativeBrowseSeams: admittedNativeBrowseSeams.filter(
-                  (name) => typeof alias[name] !== 'function',
-                ),
-                // The seams reached through the public alias must be the EXACT functions the
-                // OWNER module defines, not wrappers the barrel built. Comparing the alias to
+                // BY NAME, not by count. The count above is a non-vacuity/closure check --
+                // it catches a list silently shrinking -- while THIS is the semantic
+                // contract: the exact function the Environment calls is exported and callable.
+                consumedNativeBrowseSeamIsCallable: typeof alias[consumedNativeBrowseSeam] === 'function',
+                consumedNativeBrowseSeamName: consumedNativeBrowseSeam,
+                requiredListNamesTheBrowseSeam: requiredEnvironmentExports.includes(consumedNativeBrowseSeam),
+                // The seam reached through the public alias must be the EXACT function the
+                // OWNER module defines, not a wrapper the barrel built. Comparing the alias to
                 // the canonical entry would prove nothing -- the alias RESOLVES to that entry,
                 // so both names denote one module namespace and `===` holds for every key,
                 // `undefined === undefined` included. The owner module is the only comparison
                 // that can fail, and it also fails CLOSED at a revision whose closure does not
                 // carry it (import throws -> false).
-                browseSeamsAreOwnerFunctions: await (async () => {
+                browseSeamIsTheOwnerFunction: await (async () => {
                   let owner = null;
                   try {
                     owner = await import('src/language/smalltalk-browse.js');
                   } catch {
                     return false;
                   }
-                  return admittedNativeBrowseSeams.every(
-                    (name) => typeof owner[name] === 'function' && owner[name] === alias[name],
-                  );
+                  return typeof owner[consumedNativeBrowseSeam] === 'function'
+                    && owner[consumedNativeBrowseSeam] === alias[consumedNativeBrowseSeam];
                 })(),
               };
             })()"#,
@@ -222,20 +230,27 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
     assert_eq!(report["sameModule"], true);
     assert_eq!(report["marker"], "host-overlay");
     assert_eq!(report["exportedCreate"], "function");
-    assert_eq!(report["requiredEnvironmentExportCount"], 22);
+    // A NON-VACUITY / closure check only: it catches the requirement list silently
+    // shrinking. The semantic contract is the by-name assertions below.
+    assert_eq!(report["requiredEnvironmentExportCount"], 23);
     assert_eq!(
         report["missingEnvironmentExports"],
         serde_json::json!([]),
         "every B3 composition helper must be callable through the sole public portable-runtime alias"
     );
+    // The semantic contract, asserted BY NAME rather than inferred from the count.
+    assert_eq!(report["consumedNativeBrowseSeamName"], "authorizedDescribeSmalltalkClass");
     assert_eq!(
-        report["missingNativeBrowseSeams"],
-        serde_json::json!([]),
-        "the pinned revision must LINK and expose the ADR 0087 authorized native browsing seams through the alias"
+        report["consumedNativeBrowseSeamIsCallable"], true,
+        "the pinned revision must LINK and expose authorizedDescribeSmalltalkClass through the public alias"
     );
     assert_eq!(
-        report["browseSeamsAreOwnerFunctions"], true,
-        "the alias must expose the ADR 0087 seams as the exact functions src/language/smalltalk-browse.js defines"
+        report["requiredListNamesTheBrowseSeam"], true,
+        "the Environment's requirement list must NAME the browse seam, not merely be long enough"
+    );
+    assert_eq!(
+        report["browseSeamIsTheOwnerFunction"], true,
+        "the alias must expose authorizedDescribeSmalltalkClass as the exact function src/language/smalltalk-browse.js defines"
     );
 
     actor.shutdown().await;
