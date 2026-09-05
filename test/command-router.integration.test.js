@@ -81,6 +81,7 @@ test('PR D: semantic interaction on a view routes Command -> authorized image mu
     normalizeTypeDeclarations: imagesApi.normalizeTypeDeclarations,
     authorizedReadProject: imagesApi.authorizedReadProject,
     authorizedRenameProject: imagesApi.authorizedRenameProject,
+    authorizedDescribeSmalltalkClass: imagesApi.authorizedDescribeSmalltalkClass,
   });
   await adapter.ensureSchema(IMAGE, IDS);
 

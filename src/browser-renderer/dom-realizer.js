@@ -77,13 +77,30 @@ function renderNode(node, listen, onAction, onEdit) {
       const ul = document.createElement('ul');
       ul.className = 'lagrange-tool-references';
       for (const item of node.items) {
+        // Dispatch on the ITEM's own kind. A collection of `action` items is a
+        // list of activatable rows; a collection of `text` items is a list of
+        // DISPLAY rows and must render as text, NOT as a button that emits an
+        // intent nothing routes (the dead affordance of Bead pnf). The
+        // vocabulary allows any node kind in `items`, so the realizer dispatches
+        // rather than assuming.
+        //
+        // `action` stays handled HERE rather than as a top-level renderNode
+        // case, so a BARE action outside a collection keeps throwing exactly as
+        // it did before — the GTK realizer deliberately renders nothing for one
+        // (semantic_gtk.rs `Node::Action` arm), and giving the DOM a top-level
+        // action case would create a new cross-host divergence for an input no
+        // projector emits.
         const li = document.createElement('li');
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.dataset.itemKey = String(item.key); // descriptor-local key
-        button.textContent = item.label;
-        listen(button, 'click', () => onAction(item.key));
-        li.appendChild(button);
+        if (item.kind === 'action') {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.dataset.itemKey = String(item.key); // descriptor-local key
+          button.textContent = item.label;
+          listen(button, 'click', () => onAction(item.key));
+          li.appendChild(button);
+        } else {
+          li.appendChild(renderNode(item, listen, onAction, onEdit));
+        }
         ul.appendChild(li);
       }
       return ul;

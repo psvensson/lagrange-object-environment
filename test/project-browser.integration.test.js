@@ -103,6 +103,7 @@ function adapterClients(runtime) {
     normalizeTypeDeclarations: imagesApi.normalizeTypeDeclarations,
     authorizedReadProject: imagesApi.authorizedReadProject,
     authorizedRenameProject: imagesApi.authorizedRenameProject,
+    authorizedDescribeSmalltalkClass: imagesApi.authorizedDescribeSmalltalkClass,
   };
 }
 

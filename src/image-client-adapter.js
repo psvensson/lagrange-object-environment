@@ -275,13 +275,14 @@ function createImageClientAdapter(client) {
     normalizeTypeDeclarations,
     authorizedReadProject,
     authorizedRenameProject,
+    authorizedDescribeSmalltalkClass,
   } = client;
 
   if (typeof authorityService.require !== 'function') {
     throw new TypeError('lagrange-images client authority service is missing required operation: require');
   }
 
-  for (const [name, fn] of Object.entries({defineClass, installCallableInterfaceV2, installImageCreationBinding, installImageMutationBinding, installImageObjectReadBinding, installImageObservationBinding, findSmalltalkKernel, objectRef, objectResource, parseObjectResource, objectVersionToken, textValue, packCompositeValue, unpackCompositeValue, normalizeTypeDeclarations, authorizedReadProject, authorizedRenameProject})) {
+  for (const [name, fn] of Object.entries({defineClass, installCallableInterfaceV2, installImageCreationBinding, installImageMutationBinding, installImageObjectReadBinding, installImageObservationBinding, findSmalltalkKernel, objectRef, objectResource, parseObjectResource, objectVersionToken, textValue, packCompositeValue, unpackCompositeValue, normalizeTypeDeclarations, authorizedReadProject, authorizedRenameProject, authorizedDescribeSmalltalkClass})) {
     if (typeof fn !== 'function') {
       throw new TypeError(`lagrange-images client is missing required helper: ${name}`);
     }
@@ -343,6 +344,65 @@ function createImageClientAdapter(client) {
       expectedVersionToken: versionToken,
       require: (demand) => authorityService.require(authority, demand),
     });
+  }
+
+  /**
+   * Describe ONE native Symmetric Smalltalk class through Images' authorized
+   * browsing seam (Images ADR 0087 `authorizedDescribeSmalltalkClass`).
+   *
+   * Returns Images' `smalltalk-class-description/v1` record UNCHANGED and
+   * uninterpreted: identity/name, instance-vs-class side, superclass and
+   * class-side LOCATORS, the declared native layout (ordered NAMES + whether
+   * instances are indexable) and the class's OWN canonical selector names.
+   * Images decides every one of those facts; this adapter bridges only the
+   * caller's opaque authority context to the injected runtime's check-only
+   * `require(context, demand)`, exactly as `readProject` does.
+   *
+   * What this seam deliberately does NOT do: decode a Behavior slot, a
+   * MethodDictionary, a Shape or an object id; walk a superclass chain;
+   * recognize a Cuis-imported class as anything other than a native class; or
+   * reach the METHOD seam. A Cuis-origin class and a hand-declared one take
+   * this one route, because origin is not identity.
+   *
+   * AUTHORITY. Images requires `object/read` on the Class (or Metaclass) OBJECT
+   * before it discloses existence, so a denied caller cannot tell an existing
+   * class from a missing one. The `superclass` and `classSide` refs in the
+   * result are LOCATORS, never inherited grants: browsing what they name is a
+   * fresh call with that object's own authority (ADR 0005, as amended).
+   */
+  async function describeSmalltalkClass({imageId, classRef, authority = null} = {}) {
+    return authorizedDescribeSmalltalkClass({
+      images,
+      imageId,
+      classRef,
+      require: (demand) => authorityService.require(authority, demand),
+    });
+  }
+
+  /**
+   * The Environment<->Images ERROR MAPPING for the browse seam above. This
+   * interaction owner owns it (ownership row 49): a consumer classifies
+   * nothing, and no Images message text is ever propagated.
+   *
+   * Two outcomes, matching the generic object lane's vocabulary so a denied
+   * class browse presents through the SAME unauthorized/unavailable route as
+   * any other denied read — there is no native-specific failure presentation:
+   *   'unauthorized'  the authority check refused (AuthorityError). Because
+   *                   Images authorizes BEFORE any existence check, this is the
+   *                   answer for an existing AND a missing class alike.
+   *   'unavailable'   anything else — the class is missing, its instance-shape
+   *                   edge dangles, the image carries no Smalltalk kernel, or
+   *                   the caller supplied a malformed ref.
+   *
+   * The MESSAGE is dropped on purpose. Images' browse errors legitimately name
+   * storage (`not a smalltalk/behavior-shape/v1 behavior: <id>`), and copying
+   * one into a presented reason would put an Images storage shape id in the
+   * Environment UI — the exact decoding this whole lane exists to avoid. The
+   * cost is that four different causes collapse into one reason; that trade is
+   * recorded on Bead lagrange-object-environment-azj rather than hidden here.
+   */
+  function classifySmalltalkClassReadError(error) {
+    return error?.name === 'AuthorityError' ? 'unauthorized' : 'unavailable';
   }
 
   const dispatcher = createCommandDispatcher({
@@ -982,6 +1042,13 @@ function createImageClientAdapter(client) {
     readProject,
     renameProject,
     projectWritableFields: PROJECT_WRITABLE_FIELDS,
+    // The authorized native class browsing seam and its error mapping. There is
+    // deliberately NO describeSmalltalkMethod here: E1 presents selector NAMES,
+    // and class-read authority must never yield the Block behind a selector.
+    // Uncallable beats un-called — E2 adds the method seam with its own
+    // independent Block authorization (Bead lagrange-object-environment-eij.2).
+    describeSmalltalkClass,
+    classifySmalltalkClassReadError,
     readObject,
     authorizedReadObject,
     resolveAssetBytes,

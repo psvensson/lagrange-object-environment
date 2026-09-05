@@ -238,16 +238,26 @@ fn render_node(
         Node::Collection { items, .. } => {
             let list = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
             list.set_widget_name("lagrange-tool-references");
+            // Dispatch on the ITEM's own kind, exactly as the DOM realizer does.
+            // A collection of `action` items is a list of activatable rows; a
+            // collection of `text` items is a list of DISPLAY rows and must
+            // render as labels — neither dropped (the two hosts would then show
+            // different information from the same bytes) nor turned into buttons
+            // that emit an intent nothing routes (the dead affordance of Bead
+            // pnf). The vocabulary allows any node kind here.
             for item in items {
-                if let Node::Action { key, label } = item {
-                    let button = gtk4::Button::with_label(label);
-                    let intents = Rc::clone(intents);
-                    let key = *key;
-                    button.connect_clicked(move |_| {
-                        intents.borrow_mut().push(Intent::activate_item(key));
-                    });
-                    buttons.borrow_mut().push((key, button.clone()));
-                    list.append(&button);
+                match item {
+                    Node::Action { key, label } => {
+                        let button = gtk4::Button::with_label(label);
+                        let intents = Rc::clone(intents);
+                        let key = *key;
+                        button.connect_clicked(move |_| {
+                            intents.borrow_mut().push(Intent::activate_item(key));
+                        });
+                        buttons.borrow_mut().push((key, button.clone()));
+                        list.append(&button);
+                    }
+                    other => render_node(other, &list, intents, buttons, entries),
                 }
             }
             container.append(&list);

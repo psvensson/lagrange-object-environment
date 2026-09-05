@@ -39,12 +39,27 @@ fn read_fixture(name: &str) -> String {
 /// browser validator accepts).
 #[test]
 fn accepts_green_fixtures() {
-    for name in ["navigator.json", "inspector.json", "project.json", "unavailable.json", "unauthorized.json"] {
-        let json = read_fixture(name);
+    // Derived from the directory rather than hard-coded: a green fixture the
+    // browser validator accepts but this one never sees is precisely the
+    // cross-host divergence the shared corpus exists to prevent.
+    let mut seen = 0;
+    for entry in std::fs::read_dir(fixture_path("")).expect("fixture dir") {
+        let entry = entry.expect("fixture entry");
+        if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        // Not a SemanticUi document: the canonical cross-host INTENT bytes.
+        if !name.ends_with(".json") || name == "edit-field-intent.json" {
+            continue;
+        }
+        let json = read_fixture(&name);
         let doc = parse_semantic_ui(&json).unwrap_or_else(|e| panic!("green fixture {name} must validate: {e}"));
         assert_eq!(doc.kind, "semantic-ui");
         assert_eq!(doc.version, 1);
+        seen += 1;
     }
+    assert!(seen >= 7, "expected the green conformance corpus (>= 7 fixtures), found {seen}");
 }
 
 /// The validator LOUDLY rejects every checked-in RED conformance fixture — the
@@ -182,6 +197,24 @@ fn fixtures_drive_real_gtk_controls_and_identical_intents() {
     );
     assert!(editable_project.edit_field(1, "x").is_none(), "no editable field at key 1 (Project ID is read-only)");
     assert_eq!(editable_project.activate(0), Some(Intent::activate_item(0)), "members remain activation actions");
+
+    // --- native-class: the authorized native Smalltalk class description
+    // (Images ADR 0087) builds real GTK controls from the SAME fixture bytes the
+    // DOM consumes. Selectors and locators are TEXT rows, so the pane offers NO
+    // actions at all: class-read authority must not imply a method ref or a
+    // navigation route exists (Beads eij.2 and gzz).
+    let native = realize(&parse_semantic_ui(&read_fixture("native-class.json")).expect("native class validates"));
+    let native_text = native.visible_text();
+    assert!(native_text.iter().any(|t| t == "Class: BrowseChild"), "{native_text:?}");
+    assert!(native_text.iter().any(|t| t == "instance"), "the kernel-decided side is shown: {native_text:?}");
+    assert!(native_text.iter().any(|t| t == "baseValue, childFirst"), "declared layout names shown: {native_text:?}");
+    assert!(native_text.iter().any(|t| t == "childFirst"), "own selector names shown: {native_text:?}");
+    assert!(
+        native_text.iter().any(|t| t == "superclass -> img/smalltalk/class/BrowseBase"),
+        "the superclass locator is shown as text: {native_text:?}"
+    );
+    assert!(native.action_labels().is_empty(), "a native class pane offers no actions in E1");
+    assert!(native.editable_texts().is_empty(), "E1 is presentation/navigation only: nothing is editable");
 
     // --- unavailable + unauthorized: reason lines, no refs/actions.
     let un = realize(&parse_semantic_ui(&read_fixture("unavailable.json")).unwrap());

@@ -40,6 +40,14 @@ jobs:
         run: CI= npm install
       - working-directory: lagrange-object-environment
         run: npm test
+        env:
+          # The real-runtime integration files skip SILENTLY when no sibling
+          # lagrange-images resolves, which would make "all green" and "nothing
+          # ran" indistinguishable — including for E1's only identity proof.
+          # The sibling is checked out above at the pinned revision, so here a
+          # silent skip is a hard failure instead. test/ci-policy.test.js keeps
+          # this executable.
+          LAGRANGE_IMAGES_REQUIRED: '1'
       # Package installation is its own bounded step so the proof step's
       # deadline is attributable to the proof (apt-get varied 20 s -> 3m25 on
       # 2026-09-04).

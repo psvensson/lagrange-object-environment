@@ -59,6 +59,22 @@ test('ci policy: the browser proof step is bounded, runs only the proof, and the
   exactlyOneTimeout(windowOf(CI, (l) => l === '  linux-host:', /^  \S/, 'the linux-host job'), 4, 'the linux-host job', 120);
 });
 
+// The real-runtime integration files (including E1's only identity proof) skip
+// SILENTLY when no sibling lagrange-images resolves, so "all green" and "nothing
+// ran" look identical. CI checks the sibling out at the pinned revision, so the
+// npm test step must demand it — otherwise the demand is a comment, not a gate.
+test('ci policy: the npm test step REQUIRES the pinned sibling Images runtime', () => {
+  const step = windowOf(CI, (l) => l.trim() === 'run: npm test', /^      - /, 'the npm test step');
+  assert.ok(
+    step.some((l) => /^\s+LAGRANGE_IMAGES_REQUIRED: '1'$/.test(l)),
+    "the npm test step must set LAGRANGE_IMAGES_REQUIRED: '1' so a silently skipped integration lane fails",
+  );
+  assert.ok(
+    CI.some((l) => isCode(l) && l.includes('repository: psvensson/lagrange-images')),
+    'requiring the sibling runtime is only meaningful if the workflow checks it out',
+  );
+});
+
 test('ci policy: nothing in the workflow or the scripts forces the runner to exit past a leak', () => {
   assert.ok(!CI.some((l) => isCode(l) && l.includes('--test-force-exit')), 'ci.yml must not use --test-force-exit');
   for (const [name, script] of Object.entries(PACKAGE.scripts)) {

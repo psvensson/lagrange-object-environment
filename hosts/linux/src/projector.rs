@@ -60,6 +60,10 @@ pub fn project(descriptor: &Value) -> Result<SemanticUi, String> {
     let subject = descriptor.get("subject").cloned().unwrap_or(Value::Object(Map::new()));
     let object_id = subject.get("objectId").and_then(|o| o.as_str()).unwrap_or("");
     let project = params.get("project").cloned().unwrap_or(Value::Object(Map::new()));
+    let smalltalk_class = params
+        .get("smalltalkClass")
+        .cloned()
+        .unwrap_or(Value::Object(Map::new()));
 
     let mut children: Vec<Value> = Vec::new();
 
@@ -70,6 +74,10 @@ pub fn project(descriptor: &Value) -> Result<SemanticUi, String> {
         "project" => format!(
             "Project: {}",
             project.get("name").and_then(|n| n.as_str()).unwrap_or("")
+        ),
+        "native-class" => format!(
+            "Class: {}",
+            smalltalk_class.get("name").and_then(|n| n.as_str()).unwrap_or("")
         ),
         _ => kind.to_string(), // unavailable-reference | unauthorized-reference
     };
@@ -136,6 +144,104 @@ pub fn project(descriptor: &Value) -> Result<SemanticUi, String> {
                 .collect();
             children.push(json!({"kind": "collection", "label": "Members", "items": items}));
         }
+    } else if kind == "native-class" {
+        // The authorized native Smalltalk class description (Images ADR 0087),
+        // display text only. Locators are TEXT rows, not action(key): the
+        // Environment ships no activation route for them yet (Bead gzz), and
+        // the JS projector makes the same choice for the same reason.
+        children.push(json!({
+            "kind": "field",
+            "label": "Name",
+            "text": smalltalk_class.get("name").map(value_text).unwrap_or_default(),
+        }));
+        children.push(json!({
+            "kind": "field",
+            "label": "Side",
+            "text": smalltalk_class.get("side").map(value_text).unwrap_or_default(),
+        }));
+        children.push(json!({
+            "kind": "field",
+            "label": "Class",
+            "text": smalltalk_class.get("class").map(value_text).unwrap_or_default(),
+        }));
+        // LAYOUT: `null` and `{instanceVariables: []}` are DIFFERENT answers and
+        // must stay different documents. An ABSENT `layout` key is treated
+        // exactly like `null` — `.get()` yielding None and an explicit
+        // Value::Null take the same branch, matching the JS `?? null`.
+        match smalltalk_class.get("layout") {
+            None | Some(Value::Null) => children.push(json!({
+                "kind": "field", "label": "Layout", "text": "(no declared instance layout)",
+            })),
+            Some(layout) => {
+                let empty_vars: Vec<Value> = Vec::new();
+                // COERCE each entry, never filter: the JS projector renders this
+                // with `instanceVariables.join(', ')`, which String-coerces every
+                // element. Dropping a non-string here would make the two ports
+                // answer differently from the same bytes — the exact divergence
+                // this port exists to avoid. (Images emits names, so this is
+                // defensive; the two rules still have to match.)
+                let instance_variables: Vec<String> = layout
+                    .get("instanceVariables")
+                    .and_then(|v| v.as_array())
+                    .unwrap_or(&empty_vars)
+                    .iter()
+                    .map(value_text)
+                    .collect();
+                children.push(json!({
+                    "kind": "field",
+                    "label": "Instance variables",
+                    "text": instance_variables.join(", "),
+                }));
+                children.push(json!({
+                    "kind": "field",
+                    "label": "Indexed",
+                    "text": layout.get("indexed").map(value_text).unwrap_or_default(),
+                }));
+            }
+        }
+        let empty_selectors: Vec<Value> = Vec::new();
+        let selectors = smalltalk_class
+            .get("selectors")
+            .and_then(|s| s.as_array())
+            .unwrap_or(&empty_selectors);
+        if !selectors.is_empty() {
+            let items: Vec<Value> = selectors
+                .iter()
+                .map(|selector| json!({"kind": "text", "text": value_text(selector)}))
+                .collect();
+            children.push(json!({"kind": "collection", "label": "Selectors", "items": items}));
+        }
+        // The browser-owned ordered locator list is INDEXED, never re-derived
+        // from smalltalkClass.superclass/classSide: re-deriving would make this
+        // port a second decider of which relations are navigable and in what
+        // order.
+        let empty_locators: Vec<Value> = Vec::new();
+        let locators = params
+            .get("locators")
+            .and_then(|l| l.as_array())
+            .unwrap_or(&empty_locators);
+        if !locators.is_empty() {
+            let items: Vec<Value> = locators
+                .iter()
+                .map(|locator| {
+                    let relation = locator.get("relation").map(value_text).unwrap_or_default();
+                    let image_id = locator
+                        .get("ref")
+                        .and_then(|r| r.get("imageId"))
+                        .map(value_text)
+                        .unwrap_or_default();
+                    let object_id = locator
+                        .get("ref")
+                        .and_then(|r| r.get("objectId"))
+                        .map(value_text)
+                        .unwrap_or_default();
+                    json!({"kind": "text", "text": format!("{relation} -> {image_id}/{object_id}")})
+                })
+                .collect();
+            children.push(json!({"kind": "collection", "label": "Locators", "items": items}));
+        }
+        // `provenance` is deliberately NOT rendered; Images owns no durable
+        // native-class provenance today (Images jtz.1).
     } else if kind == "unavailable-reference" || kind == "unauthorized-reference" {
         let base = if kind == "unauthorized-reference" { "Not authorized" } else { "Unavailable" };
         let reason = match params.get("reason").and_then(|r| r.as_str()) {
