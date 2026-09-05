@@ -17,7 +17,7 @@ Lagrange Images execution
   transient context + require(operation, resource)
 
 Object Environment
-  How should permitted objects and sharing intent be exposed to a human?
+  How should permitted objects, durable preferences and sharing intent be exposed to a human?
 ```
 
 These may be deployed together, but they should not collapse into one semantic layer.
@@ -30,6 +30,23 @@ The environment works with an authenticated principal identity supplied by the l
 
 External SSO and an installation-provided identity service can therefore converge on the same environment contracts.
 
+### EnvironmentProfile is preference data, not identity
+
+ADR 0015 introduces an ordinary image-level `EnvironmentProfile` for durable preferences such as a selected Theme or default Perspective.
+
+The profile may contain an opaque external `principalKey` so the one `ProfileResolver` can associate the object with the authenticated principal. That field is descriptive data only:
+
+```text
+external authenticated principal != EnvironmentProfile
+EnvironmentProfile.principalKey   != authentication
+EnvironmentProfile                != authority
+Theme ref from profile            != authority to read Theme
+```
+
+A forged or duplicated profile naming another principal cannot authenticate the caller or grant any right. Profile lookup starts from the principal supplied by the trusted identity layer, and every profile/theme read or write still crosses the ordinary image authorization boundary.
+
+No profile needs to exist for a principal who has never personalized the environment. In that case the environment uses the image's ordinary `EnvironmentCatalog` defaults without writing on login/open. The profile is materialized lazily on the first deliberate durable personalization through the single ProfileResolver interaction described by ADR 0015.
+
 ## Authority is transient
 
 `lagrange-images` ADR 0037 deliberately makes authority execution context rather than program data.
@@ -38,6 +55,8 @@ External SSO and an installation-provided identity service can therefore converg
 principal != capability
 reference != authority
 Perspective != authority
+EnvironmentProfile != authority
+Theme != authority
 Project != authority
 ```
 
@@ -54,6 +73,8 @@ ObjectRef      != permission to dereference
 Presentation   != permission to read subject
 Command        != permission to invoke
 Perspective    != permission to access everything it mentions
+EnvironmentProfile ref != permission to read its preferences
+Theme ref      != permission to read Theme/DesignToken objects
 Project edge   != permission to follow the edge
 ```
 
@@ -81,9 +102,11 @@ Share Project A with Alice as editor
 
 must therefore ask a trusted lower authority API to create whatever explicit rights the eventual authority model defines. The environment must not simulate this by assuming reachable objects are authorized.
 
-## Perspectives and sharing
+## Perspectives, Themes and sharing
 
-A Perspective may be stored as ordinary image data, and the UI may offer private/shared/published modes. Those modes are **sharing intent and policy UX**, not authority encoded in the Perspective itself.
+A Perspective is stored as ordinary image data, and the UI may offer private/shared/published modes. Those modes are **sharing intent and policy UX**, not authority encoded in the Perspective itself.
+
+A Theme is likewise ordinary image data and may be shared or published using ordinary object-sharing mechanisms. Sharing a Theme ref and authorizing the Theme/DesignToken graph remain separate operations.
 
 Sharing a Perspective and sharing everything referenced by it are always separate operations.
 

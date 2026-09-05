@@ -6,6 +6,7 @@ The documents here define the object-environment boundary before they define a v
 - [Portable client host boundary](architecture/portable-client-host.md) — "no browser required" plus the WASM/WIT-centered client execution direction (ADRs 0013/0014); native per-language embeddings are bounded fallbacks, not the language-support architecture
 - [RendererAdapter contract](contracts/renderer-adapter.md) — the host-portability boundary between the environment and a host's renderer
 - [Core concepts](concepts.md) — Image, Project, Presentation, Command, Perspective and Session
+- [Object-native theming and durable environment state](decisions/0015-durable-environment-state-and-themes-are-objects.md) — Themes/tokens/profiles/defaults are ordinary image objects; DTCG is interchange, not authority
 - [Projects and collaborative work](projects-and-collaboration.md) — organization, history UX, Git projection and multi-author work
 - [Identity, authority and sharing](security-and-sharing.md) — principals, transient authority and invitations
 - [Ownership registry](ownership.md) — single owner for every major subsystem and every cross-subsystem interaction

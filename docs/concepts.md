@@ -6,6 +6,8 @@ The Image is the persistent computational world and therefore the workspace.
 
 The environment does not own image storage or image identity. It observes and invokes objects through public Lagrange Images contracts.
 
+Durable environment semantics also live in the Image as ordinary objects. Perspectives are the first implemented example; Themes, DesignTokens, EnvironmentProfiles and the EnvironmentCatalog follow the same rule (ADR 0015). There is no separate durable settings/theme store beside the image.
+
 ## Project
 
 A Project is language-neutral semantic organization inside an image: a useful root or relationship structure for code, notes, tasks, data, artifacts and other Projects.
@@ -24,7 +26,7 @@ It carries enough semantic identity that selecting or invoking on the rendered r
 
 A subject may have many simultaneous presentations. Presentation state should be split carefully between durable intention and transient rendering state.
 
-A presentation is neither the object nor an authority token.
+A presentation is neither the object nor an authority token. It does not own concrete appearance values; a semantic appearance role may be named only where necessary, while Theme resolution remains renderer-neutral and renderer adapters materialize native values.
 
 ## Command
 
@@ -44,6 +46,49 @@ Useful properties to explore later include:
 - command composition/macros
 
 Authorization is deliberately not on this list. A command may be visible/applicable while the protected operation is denied below the environment.
+
+## EnvironmentCatalog
+
+The EnvironmentCatalog is the one well-known ordinary image object through which shared environment defaults are discovered.
+
+It is provisioned idempotently with the environment package/schema, not opportunistically by user Sessions. Its initial responsibility is small: point at the canonical default Theme and the set of stock Themes. Future shared defaults belong here only when they truly need an image-level discovery point.
+
+The catalog is not a settings service and confers no authority to the objects it references.
+
+## Theme and DesignToken
+
+A Theme answers: **what renderer-neutral visual language should the environment use?**
+
+A Theme is an ordinary image object graph. Its semantic token definitions are ordinary `DesignToken` child objects, and it may refer to a base Theme for inheritance/derivation.
+
+Typical semantic token paths include:
+
+- `surface` / `surface.raised`
+- `text.primary` / `text.secondary`
+- `accent`
+- `selection`
+- spacing/density roles
+- typography roles
+- border/radius/shadow roles
+- motion roles where relevant
+
+A DesignToken carries a stable semantic path, a type and its ordinary value data. Complete Theme authority must not be hidden in one opaque CSS/DTCG blob.
+
+DTCG is the preferred interchange projection for compatible design-token types; Penpot, Style Dictionary and similar tools may import/export that projection. The Theme/DesignToken object graph remains authoritative.
+
+`ThemeResolver` owns inheritance, token override/type validation and the resolved semantic token set. Renderer adapters only realize that result in native mechanisms such as CSS custom properties or GTK style values.
+
+Because Theme/DesignToken state is ordinary image state, live edits use the ordinary authorized observation/live-query path rather than polling or a theme-specific change channel.
+
+## EnvironmentProfile
+
+An EnvironmentProfile answers: **what durable environment preferences has this principal deliberately chosen in this image?**
+
+It is an ordinary image object which may refer to a selected Theme, a default Perspective and future durable preferences. It contains an opaque external `principalKey` only to associate the data with the authenticated principal.
+
+The profile is **not identity and not authority**. Authentication/principal identity stay in the trusted control plane; a profile object cannot authenticate somebody or grant access merely because its `principalKey` names them.
+
+No profile is created just because a principal opens an image. If none exists, catalog defaults apply without a write. The default profile is created lazily on the first deliberate durable personalization through the one ProfileResolver interaction, with uniqueness-safe creation rather than shell read-then-create.
 
 ## Perspective
 
@@ -72,7 +117,7 @@ notebook-like investigation
 spatial/diagram perspective
 ```
 
-A Perspective can be persisted as ordinary image data, but neither the Perspective nor its refs confer authority.
+A durable Perspective is persisted as ordinary image data (ADR 0012); neither the Perspective nor its refs confer authority.
 
 ## Session
 

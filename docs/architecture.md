@@ -45,6 +45,16 @@ Dependencies point downward. The environment consumes public image/control-plane
 
 The split is semantic rather than based on durability: Lagrange Images can define a Project model using ordinary image objects; this repository defines how a person sees, edits, compares, shares and collaborates around those Projects.
 
+## Durable environment state is object state
+
+Every durable semantic thing owned by this repository is represented as ordinary Lagrange image objects and refs between them. Perspective persistence is the first implemented example; ADR 0015 generalizes the rule to Themes, design tokens, environment profiles/preferences and future durable environment defaults.
+
+There is no second durable settings/configuration world beside the image. CSS files, GTK style data, DTCG documents, browser storage or identity-provider account settings may be transient realizations or interchange mechanisms, but none is the durable authority for environment semantics.
+
+The distinction remains durability, not "everything at runtime is an object": Session state, renderer/GPU handles, caches and other transient machinery stay transient. Executable implementation and schema definitions are not confused with user data.
+
+Shared environment defaults are themselves ordinary objects discovered through one well-known `EnvironmentCatalog` object installed idempotently by environment provisioning. Per-user durable preferences live in an ordinary `EnvironmentProfile`; absence of a profile means inherit catalog defaults and does not force a write on login. See ADR 0015.
+
 ## Layer ownership
 
 ### 1. Rendering and input substrate
@@ -54,6 +64,8 @@ Owns pixels, surfaces, text shaping, accessibility, keyboard/pointer/touch event
 Renderer adapters also own concrete browser/native graphics resources such as GPU adapters/devices/queues, surfaces and frames. For Component-backed presentations they may implement exact-version WIT graphics interfaces, with `wasi:webgpu` as the preferred low-level direction and `wasi-gfx`-style surface interfaces above it. Those interfaces are replaceable/versioned adapter contracts, not environment ontology.
 
 Concrete GPU/surface handles are Session/runtime machinery. They are not image refs and must not become durable Perspective state.
+
+Renderer adapters also own **native realization** of an already-resolved semantic Theme (for example CSS custom properties or GTK CSS/custom properties). They do not own Theme inheritance, token meaning or a second renderer-local set of semantic defaults; those belong to the renderer-neutral Theme owner defined by ADR 0015.
 
 It does **not** decide what image objects mean.
 
@@ -88,6 +100,8 @@ ServiceRef
 ```
 
 All are views of the same underlying subject. Presentation identity must not replace image object identity.
+
+A presentation/SemanticUi description may name a stable semantic appearance role only when a real semantic distinction cannot be derived from the node itself. It never carries CSS, GTK style strings, concrete colors/fonts or other renderer-specific appearance values. Theme values come through the one Theme resolution path in ADR 0015.
 
 A graphical presentation may be backed by an ordinary WebAssembly Component. That does not create an application boundary or a separate 3D object model:
 
@@ -173,13 +187,13 @@ It does not contain the image objects as owned resources. Its subjects are refer
 
 A Perspective may deliberately retain useful presentation intention such as the chosen presentation kind, layout, camera pose or visualization parameters. It never retains native/window/GPU handles; a restored Session recreates those through the Compositor and RendererAdapter.
 
-A Perspective may itself be persisted as ordinary image objects. Its existence or visibility grants no authority to anything it references.
+A durable Perspective **is persisted as ordinary image objects** (ADR 0012), not merely as an optional representation. Its existence or visibility grants no authority to anything it references.
 
 ### 9. Session
 
 Session state is ephemeral and client-local by default. Hover, open menus, active drag, caret blink, pointer position, GPU/device/surface resources and rendering caches should not produce durable image history.
 
-A deliberate user action can promote useful state into a Perspective; ordinary UI mechanics should not.
+A deliberate user action can promote useful state into a Perspective or another ordinary durable environment object; ordinary UI mechanics should not.
 
 ## Image is the workspace
 
@@ -191,11 +205,23 @@ Image
   |
   +-- domain/program objects
   +-- image-level Projects
-  +-- ordinary objects representing Perspectives
+  +-- EnvironmentCatalog (well-known environment default refs)
+  +-- Theme / DesignToken object graphs
+  +-- EnvironmentProfile objects (durable user preferences)
+  +-- Perspective / presentation object graphs
   `-- durable history/revisions
 
 Project
   durable semantic organization within the Image
+
+EnvironmentCatalog
+  durable image-level discovery point for shared environment defaults
+
+EnvironmentProfile
+  durable, non-authoritative preferences associated with an external principal
+
+Theme
+  durable renderer-neutral semantic appearance object graph
 
 Perspective
   durable way to inhabit some of that world
@@ -204,13 +230,15 @@ Session
   current transient interaction
 ```
 
-The absence of Workspace is architectural, not merely a naming decision. If future requirements appear to need one, first determine whether they are actually about organization (Project), view state (Perspective), authorization (lower authority layer) or transience (Session).
+The absence of Workspace is architectural, not merely a naming decision. If future requirements appear to need one, first determine whether they are actually about organization (Project), view state (Perspective), durable environment preference (EnvironmentProfile/Theme), authorization (lower authority layer) or transience (Session).
 
 ## Authority boundary
 
-The environment does not own grants and should not persist authorization tokens in a Project, Perspective or Session.
+The environment does not own grants and should not persist authorization tokens in a Project, Perspective, Theme, EnvironmentProfile or Session.
 
 `lagrange-images` ADR 0037 makes authority execution context rather than program data. A trusted host/control plane issues and revokes root authority; image execution receives only a checkable per-call context and enforces concrete operations. The environment drives user-facing sharing intent through those lower APIs.
+
+An `EnvironmentProfile.principalKey` is descriptive data associating preferences with the external authenticated principal. It is not authentication, does not grant authority, and cannot replace the principal supplied by the trusted identity layer. Profile/theme reads and writes remain separately authorized ordinary image operations.
 
 Graphics authority is independent from image authority. A renderer Component may be permitted to use a GPU/surface without thereby gaining permission to read or mutate its semantic subject. Protected semantic reads and mutations still cross the normal authorized image APIs.
 
@@ -225,5 +253,6 @@ Current v0 authority is exact-match. There is no implied rule that "read Project
 - building an application framework
 - duplicating Project, image storage or history semantics
 - defining a second authorization/grant model
+- defining a second durable settings/theme/profile store beside ordinary image objects
 - remote eval as a generic UI escape hatch
 - teaching `lagrange-images` about Perspectives, presentations, panes, windows or pixels
