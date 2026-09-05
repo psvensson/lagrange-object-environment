@@ -30,8 +30,9 @@ After native import, Cuis provenance may influence presentations and available C
 - [x] identify the public image observation/change-feed seam needed by live presentations (ADR 0009; `src/image-observation.js`)
 - [x] identify command invocation/transaction semantics without adding UI concerns to images (ADR 0010; `src/command-dispatcher.js`)
 - [x] establish Component-backed 2D/3D graphics as ordinary Presentations, with concrete GPU/surface/WIT hosting owned by `RendererAdapter` (ADR 0011; paired with `lagrange-images` ADR 0063)
+- [x] establish the general object-native durability rule: Themes, design tokens, EnvironmentProfiles and shared environment defaults are ordinary image objects; DTCG/tool representations are projections only; shared defaults provision eagerly and per-user preferences materialize lazily (ADR 0015)
 
-Success: the environment can represent its semantic state without inventing storage, Project, history, authorization, import or graphics-object machinery.
+Success: the environment can represent its semantic state without inventing storage, Project, history, authorization, import, graphics-object, theme or preference machinery beside the image.
 
 ## Phase 1 — first live object loop ✅ **COMPLETE**
 
@@ -91,6 +92,23 @@ Success: inspector/browser tools and Component-backed 2D/3D presentations can be
 
 Do not design a common scene graph before the low-level Component boundary is proven with existing ecosystem interfaces and examples.
 
+## Phase 2.5 — object-native theming and visual modification
+
+Implement ADR 0015 before visual polish hardens into renderer-local conventions. This phase must reuse the ordinary object/read/write/observation boundaries rather than creating a settings subsystem.
+
+- [ ] define the minimal ordinary-object Shapes/classes for `EnvironmentCatalog`, `Theme`, `DesignToken` and `EnvironmentProfile`; keep complete Theme authority graph-visible rather than one opaque DTCG/CSS blob
+- [ ] add one idempotent environment provisioner that installs those Shapes/classes and creates the single stable-id `EnvironmentCatalog` plus canonical stock/default Theme graph; normal Sessions never create shared defaults
+- [ ] define `ThemeResolver` as the sole owner of base-theme traversal, token override/type validation and resolved semantic token values; prove inheritance-cycle/type mismatch failures
+- [ ] seed a small coherent semantic token vocabulary (surface/text/accent/selection/spacing/radius/typography/etc.) using established design-system practice without importing another framework's component ontology
+- [ ] make the browser/DOM realization consume the resolved token set (prefer CSS custom properties) with no parallel hard-coded semantic theme
+- [ ] make the GTK/native realization consume the same resolved token set through its native style mechanism; add A/B proof that both renderers resolve the same semantic values even though their native materialization differs
+- [ ] keep SemanticUi renderer-neutral: add an appearance-role field only if a concrete presentation proves node semantics alone are insufficient; never pass CSS/GTK values across the semantic boundary
+- [ ] implement DTCG import/export as a projection of Theme/DesignToken objects, with Style Dictionary/Penpot interoperability treated as tooling at the edge rather than runtime authority
+- [ ] use the ordinary authorized observation/live-query path so an authorized Theme/DesignToken edit re-resolves and updates every affected live view without polling or a theme-specific distributed channel
+- [ ] build the first generic Theme presentation/editor from ordinary object presentations/Commands: choose a Theme, inspect/edit representative tokens, and see DOM+GTK update through the same live path
+
+Success: visual style can be changed substantially by editing ordinary image objects, the same Theme produces renderer-appropriate DOM and GTK output, and no CSS/DTCG/native toolkit state can become a competing durable source of truth.
+
 ## Phase 3 — generic live tools
 
 - [x] first read-only durable Project browser: authorized canonical descriptor, Project Presentation, DOM+GTK SemanticUi, member activation through generic cross-Image navigation, explicit refresh/retarget and observation-driven reread (`src/project-browser.js`; Bead mky)
@@ -143,6 +161,10 @@ Success: an existing Cuis application becomes ordinary native classes, methods a
 After the live interaction loop and lower authority APIs are stable:
 
 - [ ] principal/group picker backed by cluster identity APIs
+- [ ] implement `ProfileResolver` as the sole authenticated-principal -> image-local default `EnvironmentProfile` interaction; the external principal remains identity, the profile remains ordinary non-authoritative image data
+- [ ] resolve absence of a profile to `EnvironmentCatalog.defaultTheme` without writing anything on login/open
+- [ ] lazily materialize the default `EnvironmentProfile` only on the first deliberate durable personalization; require one atomic/uniqueness-safe get-or-create boundary for `(image, principalKey, default-profile-kind)` rather than shell read-then-create
+- [ ] persist selected Theme as an ordinary ref from the EnvironmentProfile; changing it in one Session propagates through ordinary authorized observation to other relevant Sessions
 - [ ] define the lower authority contract needed to express "share this Project" without transitive-ref assumptions
 - [ ] share object/Project flow through trusted authorization APIs
 - [ ] share/publish Perspective independently of referenced-object authority
@@ -150,7 +172,7 @@ After the live interaction loop and lower authority APIs are stable:
 - [ ] collaborative Perspective semantics
 - [ ] presence as ephemeral/session data unless deliberately persisted
 
-Success: two users can inhabit overlapping parts of one image with different authority and independently chosen views.
+Success: two users can inhabit overlapping parts of one image with different authority and independently chosen durable views/appearance, while identity remains external and preferences remain ordinary image objects.
 
 ## Later experiments
 
