@@ -4,7 +4,7 @@
 //! shims). Bead lagrange-object-environment-3zb step 0.
 //!
 //! RESULT (Bead lagrange-object-environment-0fg, resolved 2026-09-02): B0 is
-//! **GREEN**. The full 109-module portable-runtime closure now LINKS, EVALUATES,
+//! **GREEN**. The full 112-module portable-runtime closure now LINKS, EVALUATES,
 //! exports the portable API, and preserves the crypto-provider contract under the
 //! pinned runtime — asserted by `full_closure_links_and_exports_api`.
 //!
@@ -64,7 +64,7 @@
 //! that decision: `js_env::install_host_globals` now installs spec-faithful
 //! coders, so this probe installs nothing and simply inherits them — which also
 //! means this test now exercises the PRODUCTION coders against the real
-//! 109-module closure. The old minimal shim survives only as the FALSIFIER's
+//! 112-module closure. The old minimal shim survives only as the FALSIFIER's
 //! subject in `tests/text_coders.rs`, where it is asserted to behave differently
 //! (it decodes `ED A0 80` to a lone surrogate and encodes `U+D800` as WTF-8,
 //! both of which the production coders refuse).

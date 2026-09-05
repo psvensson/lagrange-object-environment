@@ -23,7 +23,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: psvensson/lagrange-images
-          ref: c0f2346e559529fc810d9d94e7e0bec84bf12f54
+          ref: 9af24da93eba17357b05168ad5fc657be51bce94
           path: lagrange-images
       # v5+ runs on the Node.js 24 action runtime (v4 targeted the deprecated
       # Node.js 20 runtime; Bead u2y). Automatic package-manager caching (a v5

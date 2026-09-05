@@ -54,9 +54,19 @@ pub const PORTABLE_RUNTIME_ARTIFACT_ENTRY: &str = "src/portable-runtime.js";
 /// same commit — the two lanes consume different Images entries (this artifact's
 /// `src/portable-runtime.js`; the sibling's `src/runtime.js`) at ONE revision.
 /// `tests/portable_images_artifact.rs` asserts the agreement.
+///
+/// LANE SCOPE OF A BUMP'S ADMISSION ARGUMENT (Bead 3uw). The two consumers do not
+/// see the same Images surface, so a bump must say which lane each argument
+/// covers. An analytic per-module argument covers the NATIVE lane only: the
+/// vendored artifact is exactly the canonical module closure of
+/// `src/portable-runtime.js`. The JS integration lane imports `src/runtime.js`,
+/// whose `export *` barrels additionally evaluate `toolchain/*` and
+/// `foreign-runtime/*` at import time, so its delta is strictly wider than the
+/// closure and its evidence is EMPIRICAL: the full suite against the exact
+/// revision, recorded as a pass count with zero skipped.
 pub const PORTABLE_RUNTIME_SOURCE_REVISION: &str =
-    "c0f2346e559529fc810d9d94e7e0bec84bf12f54";
+    "9af24da93eba17357b05168ad5fc657be51bce94";
 
 /// Images-published identity over the exact canonical material bytes above.
 pub const PORTABLE_RUNTIME_CONTENT_IDENTITY: &str =
-    "sha256:5f2d80b421e7d63074d77419ca269818aa409142f6469e351c3b7f898e5409b3";
+    "sha256:becf65c428ece3b156168e0d987f1e1d1e52328d387eef64f299080020a9db0b";

@@ -18,9 +18,9 @@ use sha2::{Digest, Sha256};
 fn embedded_portable_runtime_artifact_is_the_pinned_canonical_material() {
     assert_eq!(
         PORTABLE_RUNTIME_SOURCE_REVISION,
-        "c0f2346e559529fc810d9d94e7e0bec84bf12f54"
+        "9af24da93eba17357b05168ad5fc657be51bce94"
     );
-    assert_eq!(PORTABLE_RUNTIME_ARTIFACT_BYTES.len(), 1_112_768);
+    assert_eq!(PORTABLE_RUNTIME_ARTIFACT_BYTES.len(), 1_180_089);
     assert_eq!(PORTABLE_RUNTIME_ARTIFACT_BYTES.last(), Some(&b'}'));
 
     let digest = Sha256::digest(PORTABLE_RUNTIME_ARTIFACT_BYTES);
@@ -33,7 +33,7 @@ fn embedded_portable_runtime_artifact_is_the_pinned_canonical_material() {
         serde_json::from_slice(PORTABLE_RUNTIME_ARTIFACT_BYTES).expect("pinned artifact is JSON");
     assert_eq!(artifact["format"], PORTABLE_RUNTIME_ARTIFACT_FORMAT);
     assert_eq!(artifact["entry"], PORTABLE_RUNTIME_ARTIFACT_ENTRY);
-    assert_eq!(artifact["modules"].as_array().map(Vec::len), Some(109));
+    assert_eq!(artifact["modules"].as_array().map(Vec::len), Some(112));
     assert!(
         artifact.get("provenance").is_none(),
         "canonical material must not contain the external source provenance"
@@ -173,6 +173,17 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
                 'addProjectMember',
                 'projectObjectId',
               ];
+              // ADMISSION FACT for the Images 9af24da bump, deliberately separate from the
+              // requirement list above: the authorized native Smalltalk browsing seams of
+              // Images ADR 0087. No BYTE assertion (revision literal, length, sha256, module
+              // count) can show that the artifact's CLOSURE actually links and resolves them
+              // through the sole public alias -- that is what this proves. Object Environment
+              // E1 consumes only the class seam; the method seam is listed because Images
+              // publishes the pair and E2 consumes it next.
+              const admittedNativeBrowseSeams = [
+                'authorizedDescribeSmalltalkClass',
+                'authorizedDescribeSmalltalkMethod',
+              ];
               return {
                 sameModule: exact.setDefaultCryptoProvider === alias.setDefaultCryptoProvider,
                 marker: host.marker,
@@ -181,6 +192,27 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
                 missingEnvironmentExports: requiredEnvironmentExports.filter(
                   (name) => typeof alias[name] !== 'function',
                 ),
+                missingNativeBrowseSeams: admittedNativeBrowseSeams.filter(
+                  (name) => typeof alias[name] !== 'function',
+                ),
+                // The seams reached through the public alias must be the EXACT functions the
+                // OWNER module defines, not wrappers the barrel built. Comparing the alias to
+                // the canonical entry would prove nothing -- the alias RESOLVES to that entry,
+                // so both names denote one module namespace and `===` holds for every key,
+                // `undefined === undefined` included. The owner module is the only comparison
+                // that can fail, and it also fails CLOSED at a revision whose closure does not
+                // carry it (import throws -> false).
+                browseSeamsAreOwnerFunctions: await (async () => {
+                  let owner = null;
+                  try {
+                    owner = await import('src/language/smalltalk-browse.js');
+                  } catch {
+                    return false;
+                  }
+                  return admittedNativeBrowseSeams.every(
+                    (name) => typeof owner[name] === 'function' && owner[name] === alias[name],
+                  );
+                })(),
               };
             })()"#,
         )
@@ -195,6 +227,15 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
         report["missingEnvironmentExports"],
         serde_json::json!([]),
         "every B3 composition helper must be callable through the sole public portable-runtime alias"
+    );
+    assert_eq!(
+        report["missingNativeBrowseSeams"],
+        serde_json::json!([]),
+        "the pinned revision must LINK and expose the ADR 0087 authorized native browsing seams through the alias"
+    );
+    assert_eq!(
+        report["browseSeamsAreOwnerFunctions"], true,
+        "the alias must expose the ADR 0087 seams as the exact functions src/language/smalltalk-browse.js defines"
     );
 
     actor.shutdown().await;
