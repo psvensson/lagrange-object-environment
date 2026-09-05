@@ -17,3 +17,4 @@ The first decisions intentionally constrain semantics while leaving visual desig
 13. [0013 — The browser is a reference host, not the client platform — "no browser required"](0013-portable-client-host.md) *(client-runtime direction superseded by 0014; host/rendering decisions remain in force)*
 14. [0014 — WASM/WIT is the central portable client execution boundary](0014-wasm-centered-client-execution.md)
 15. [0015 — Durable environment state, themes and user preferences are ordinary image objects](0015-durable-environment-state-and-themes-are-objects.md)
+16. [0016 — One semantic browser exposes first-class documentation as a common facet](0016-one-browser-and-first-class-documentation.md)
