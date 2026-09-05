@@ -153,10 +153,9 @@ pub fn project(descriptor: &Value) -> Result<SemanticUi, String> {
             children.push(json!({"kind": "collection", "label": "Members", "items": items}));
         }
     } else if kind == "native-class" {
-        // The authorized native Smalltalk class description (Images ADR 0087),
-        // display text only. Locators are TEXT rows, not action(key): the
-        // Environment ships no activation route for them yet (Bead gzz), and
-        // the JS projector makes the same choice for the same reason.
+        // The authorized native Smalltalk class description (Images ADR 0087).
+        // Its selector and relation rows are ACTIONS keyed by position in the one
+        // browser-owned target array (Bead gzz); everything else is display text.
         children.push(json!({
             "kind": "field",
             "label": "Name",
@@ -213,46 +212,50 @@ pub fn project(descriptor: &Value) -> Result<SemanticUi, String> {
                 }));
             }
         }
-        let empty_selectors: Vec<Value> = Vec::new();
-        let selectors = smalltalk_class
-            .get("selectors")
-            .and_then(|s| s.as_array())
-            .unwrap_or(&empty_selectors);
-        if !selectors.is_empty() {
-            let items: Vec<Value> = selectors
+        // ACTIONS OVER THE ONE BROWSER-OWNED TARGET ARRAY, a literal port of the
+        // JS projector's rule. The array is ENUMERATED ONCE with its index, and
+        // the index IS the action key; groups only BUCKET rows for display. This
+        // port performs no offset arithmetic and — critically — never RESOLVES a
+        // target: it does not reconstruct {classRef, selector}, does not decide
+        // class-versus-method, and does not twin `descriptor_references` below.
+        // There is ONE Environment semantic resolver and it is in JS; GTK emits
+        // the descriptor-local key and pushes it to the guest.
+        let empty_targets: Vec<Value> = Vec::new();
+        let targets = params
+            .get("targets")
+            .and_then(|t| t.as_array())
+            .unwrap_or(&empty_targets);
+        // Insertion-ordered buckets: selector, relation, then any unrecognized
+        // group in first-seen order. An unknown group is never dropped, and an
+        // empty bucket is omitted entirely.
+        let mut buckets: Vec<(&str, Vec<Value>)> =
+            vec![("selector", Vec::new()), ("relation", Vec::new()), ("other", Vec::new())];
+        for (key, entry) in targets.iter().enumerate() {
+            let group = entry.get("group").and_then(|g| g.as_str()).unwrap_or("other");
+            let action = json!({
+                "kind": "action",
+                "key": key,
+                "label": entry.get("label").map(value_text).unwrap_or_default(),
+            });
+            // Every UNRECOGNIZED group shares the ONE trailing bucket, never one
+            // bucket per unknown group (which would emit several collections all
+            // labelled 'Other'). Nothing is dropped; both ports answer alike.
+            let slot = buckets
                 .iter()
-                .map(|selector| json!({"kind": "text", "text": value_text(selector)}))
-                .collect();
-            children.push(json!({"kind": "collection", "label": "Selectors", "items": items}));
+                .position(|(name, _)| *name == group)
+                .unwrap_or(buckets.len() - 1);
+            buckets[slot].1.push(action);
         }
-        // The browser-owned ordered locator list is INDEXED, never re-derived
-        // from smalltalkClass.superclass/classSide: re-deriving would make this
-        // port a second decider of which relations are navigable and in what
-        // order.
-        let empty_locators: Vec<Value> = Vec::new();
-        let locators = params
-            .get("locators")
-            .and_then(|l| l.as_array())
-            .unwrap_or(&empty_locators);
-        if !locators.is_empty() {
-            let items: Vec<Value> = locators
-                .iter()
-                .map(|locator| {
-                    let relation = locator.get("relation").map(value_text).unwrap_or_default();
-                    let image_id = locator
-                        .get("ref")
-                        .and_then(|r| r.get("imageId"))
-                        .map(value_text)
-                        .unwrap_or_default();
-                    let object_id = locator
-                        .get("ref")
-                        .and_then(|r| r.get("objectId"))
-                        .map(value_text)
-                        .unwrap_or_default();
-                    json!({"kind": "text", "text": format!("{relation} -> {image_id}/{object_id}")})
-                })
-                .collect();
-            children.push(json!({"kind": "collection", "label": "Locators", "items": items}));
+        for (group, items) in buckets {
+            if items.is_empty() {
+                continue;
+            }
+            let label = match group {
+                "selector" => "Selectors",
+                "relation" => "Relations",
+                _ => "Other",
+            };
+            children.push(json!({"kind": "collection", "label": label, "items": items}));
         }
         // `provenance` is deliberately NOT rendered; Images owns no durable
         // native-class provenance today (Images jtz.1).

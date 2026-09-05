@@ -40,26 +40,30 @@
         "label": "Selectors",
         "items": [
           {
-            "kind": "text",
-            "text": "childFirst"
+            "kind": "action",
+            "key": 0,
+            "label": "childFirst"
           },
           {
-            "kind": "text",
-            "text": "childSecond"
+            "kind": "action",
+            "key": 1,
+            "label": "childSecond"
           }
         ]
       },
       {
         "kind": "collection",
-        "label": "Locators",
+        "label": "Relations",
         "items": [
           {
-            "kind": "text",
-            "text": "superclass -> img/smalltalk/class/BrowseBase"
+            "kind": "action",
+            "key": 2,
+            "label": "superclass -> img/smalltalk/class/BrowseBase"
           },
           {
-            "kind": "text",
-            "text": "class-side -> img/smalltalk/metaclass/BrowseChild"
+            "kind": "action",
+            "key": 3,
+            "label": "class-side -> img/smalltalk/metaclass/BrowseChild"
           }
         ]
       }

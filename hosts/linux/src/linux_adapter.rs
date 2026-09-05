@@ -62,9 +62,17 @@ const TOOL_KINDS: &[&str] = &[
     "navigator",
     "inspector",
     "project",
+    "native-class",
+    "native-method",
     "unavailable-reference",
     "unauthorized-reference",
 ];
+
+/// The tool-kind list, exposed so the cross-host parity test can compare it with
+/// the browser realizer's. Not part of the adapter contract.
+pub fn tool_kinds() -> &'static [&'static str] {
+    TOOL_KINDS
+}
 
 fn is_tool_kind(kind: &str) -> bool {
     TOOL_KINDS.contains(&kind)

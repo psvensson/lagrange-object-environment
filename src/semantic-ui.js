@@ -256,12 +256,10 @@ function semanticUiForPresentation(presentationDescriptor) {
       });
     }
   } else if (kind === 'native-class') {
-    // The authorized native Smalltalk class description (Images ADR 0087),
-    // rendered as display text only. The class's own identity and its
-    // superclass/class-side LOCATORS appear as text, never as refs and never as
-    // action(key) rows: E1 ships no activation route for them, and an
-    // affordance that routes nowhere is the defect Bead pnf records. Wiring
-    // activation is Bead gzz, with E2.
+    // The authorized native Smalltalk class description (Images ADR 0087). Its
+    // own identity, side and declared layout are display TEXT and never refs;
+    // its selectors and class relations are ACTIONS carrying only a
+    // descriptor-local integer key (Bead gzz).
     children.push({kind: 'field', label: 'Name', text: valueText(smalltalkClass.name)});
     // instance vs class side is the kernel's metaclass decision, reported as it
     // came; never inferred here from a name or an id spelling.
@@ -281,31 +279,35 @@ function semanticUiForPresentation(presentationDescriptor) {
       children.push({kind: 'field', label: 'Instance variables', text: instanceVariables.join(', ')});
       children.push({kind: 'field', label: 'Indexed', text: valueText(layout.indexed)});
     }
-    // The class's OWN canonical selector names, in Images' order. Deliberately
-    // TEXT, not actions: class-read authority may show that `foo` exists, and
-    // must not imply a method ref is available behind it (E2 invokes the
-    // separate method seam, which authorizes the Block independently).
-    const selectors = Array.isArray(smalltalkClass.selectors) ? smalltalkClass.selectors : [];
-    if (selectors.length > 0) {
-      children.push({
-        kind: 'collection',
-        label: 'Selectors',
-        items: selectors.map((selector) => ({kind: 'text', text: valueText(selector)})),
-      });
-    }
-    // Locators, in the browser-owned order. Display only: following one is a
-    // fresh authorized read the consumer performs, not something this document
-    // can trigger.
-    const locators = Array.isArray(params.locators) ? params.locators : [];
-    if (locators.length > 0) {
-      children.push({
-        kind: 'collection',
-        label: 'Locators',
-        items: locators.map((locator) => ({
-          kind: 'text',
-          text: `${valueText(locator?.relation)} -> ${valueText(locator?.ref?.imageId)}/${valueText(locator?.ref?.objectId)}`,
-        })),
-      });
+    // ACTIONS OVER THE ONE BROWSER-OWNED TARGET ARRAY.
+    //
+    // A class shows two visually separate groups — its own selectors and its
+    // class relations — but they share ONE key space, because each action's key
+    // is the entry's INDEX IN `parameters.targets`. Keying the groups
+    // independently from zero would let the same emitted integer name two
+    // different semantic targets. So this loop enumerates the array ONCE, with
+    // its index, and only BUCKETS by group for display: it performs no offset
+    // arithmetic, reconstructs no target, and invents no label.
+    //
+    // An action node carries EXACTLY {kind, key, label}. The key is the only
+    // capability that crosses the renderer boundary; the target itself never
+    // does. (Validation would reject a nested ref, but would happily pass a
+    // stray `selector` string, so the key set is asserted directly in the
+    // projector tests.)
+    const targets = Array.isArray(params.targets) ? params.targets : [];
+    const buckets = new Map([['selector', []], ['relation', []], ['other', []]]);
+    targets.forEach((entry, key) => {
+      // Every UNRECOGNIZED group shares ONE trailing bucket — not one bucket per
+      // unknown group, which would emit several collections all labelled 'Other'.
+      // Nothing is ever dropped, and the two ports answer identically.
+      const group = buckets.has(entry?.group) ? entry.group : 'other';
+      buckets.get(group).push({kind: 'action', key, label: valueText(entry?.label)});
+    });
+    const bucketLabel = {selector: 'Selectors', relation: 'Relations', other: 'Other'};
+    for (const [group, items] of buckets) {
+      // An EMPTY bucket is omitted entirely.
+      if (items.length === 0) continue;
+      children.push({kind: 'collection', label: bucketLabel[group], items});
     }
     // `provenance` is deliberately NOT rendered. Images owns no durable
     // native-class provenance today and truthfully answers null; an empty

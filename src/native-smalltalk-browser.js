@@ -37,13 +37,19 @@ import {UNAVAILABLE_REF_KIND, UNAUTHORIZED_REF_KIND} from './object-navigator.js
  * The Environment never derives, predicts or reconstructs that Block ref — it
  * composes no object id at all.
  *
- * NOT OWNED HERE: discovery (`PresentationRegistry`), rendering, view admission
- * and lifecycle (`Compositor`), generic object navigation (`ObjectNavigator`),
- * and the renderer activate-item -> semantic ref coupling (`EnvironmentShell`,
- * ownership row 64; routing an ACTIVATED locator to this browser is Bead
- * lagrange-object-environment-gzz, with E2). A native-class Presentation is
- * deliberately NOT Perspective-persistable — `encodePresentations` requires a
- * ref subject — exactly as a Project Presentation is not.
+ * NOT OWNED HERE: discovery (`PresentationRegistry`), rendering, and the
+ * renderer activate-item routing itself (`EnvironmentShell`, ownership row 64 —
+ * this owner CONTRIBUTES the activation binding that one table routes to, and
+ * owns only what a target MEANS; the shell owns handle -> live view, binding
+ * choice, resolver validation and delegation, and learns nothing about
+ * Smalltalk). Generic object navigation stays with `ObjectNavigator`, which a
+ * native activation never touches: delegated navigation performs no selection,
+ * no focus and no inspector reread. This owner DOES admit and re-present its own
+ * one logical view through the Compositor (the ProjectBrowser precedent), but
+ * the Compositor remains the sole owner of view admission and lifecycle. A
+ * native Presentation is deliberately NOT Perspective-persistable —
+ * `encodePresentations` requires a ref subject — exactly as a Project
+ * Presentation is not.
  */
 
 const NATIVE_CLASS_SUBJECT_KIND = 'native-class';
@@ -62,6 +68,18 @@ const LOCATOR_RELATION = Object.freeze({
   SUPERCLASS: 'superclass',
   CLASS_SIDE: 'class-side',
 });
+
+// Display bucketing for the one target array. VISUAL only: it groups rows, it
+// never partitions the key space.
+const TARGET_GROUP = Object.freeze({
+  SELECTOR: 'selector',
+  RELATION: 'relation',
+});
+
+// The one logical view a native browse presents into. Class and method
+// presentations SHARE it: presentOn detaches before attaching, so the kind
+// change is an ordinary re-presentation rather than a second view.
+const NATIVE_SMALLTALK_VIEW_ID = 'native-smalltalk-view';
 
 // The reasons a failed browse presents. FIXED and Environment-owned: Images'
 // own browse messages legitimately name storage (`not a
@@ -217,43 +235,76 @@ function createNativeMethodPresentationProvider() {
 }
 
 /**
- * The ordered locator list for one description: the SINGLE list a consumer
- * indexes. The refs are the description's own, held BY IDENTITY; a null
- * relation is skipped, so a root class contributes no superclass row and a
- * Metaclass contributes no class-side row (the kernel's `nil` terminates the
- * chain — a root class does not have a superclass named "nil").
+ * THE ONE ordered activation-target array for a native-class description.
+ *
+ * This is the E2 key-space invariant. A class presents two visually separate
+ * groups — its own selectors and its class relations — and if each group were
+ * keyed from zero the SAME emitted integer would name two different semantic
+ * targets. So there is exactly ONE array, this one, and every action key is an
+ * index into it. The projector buckets by `group` for display and derives each
+ * key from the entry's POSITION HERE; the resolver indexes this same array.
+ * Neither reconstructs a target, and neither does offset arithmetic.
+ *
+ * Each `target` is an EXISTING browse subject — the same values `browse` and
+ * `browseMethod` already take — built from the description's own refs and
+ * canonical selector strings BY IDENTITY. There is deliberately no
+ * `{kind:'navigation-target'}` wrapper: these subjects already mean exactly
+ * "browse this", and because both carry an `imageId`, SemanticUi's ref
+ * detection catches one that ever leaks into a node.
+ *
+ * Order: the class's own selectors, then superclass, then class side. A null
+ * relation is skipped, so a root class contributes no superclass entry and a
+ * Metaclass no class-side entry (the kernel's `nil` terminates the chain — a
+ * root class does not have a superclass named "nil").
  */
-function nativeClassLocators(description) {
-  const locators = [];
-  if (description.superclass) {
-    locators.push(Object.freeze({relation: LOCATOR_RELATION.SUPERCLASS, ref: description.superclass}));
+function nativeClassActivationTargets(subject, description) {
+  const entries = [];
+  for (const selector of description.selectors ?? []) {
+    entries.push(Object.freeze({
+      // `description.class` rather than `subject.classRef`: Images echoes the
+      // caller's ref, so today they are the same object — but the invariant this
+      // module states is that a target holds the DESCRIPTION's own refs, and it
+      // should be true by construction rather than by coincidence.
+      target: createNativeMethodSubject({imageId: subject.imageId, classRef: description.class, selector}),
+      group: TARGET_GROUP.SELECTOR,
+      label: selector,
+    }));
   }
-  if (description.classSide) {
-    locators.push(Object.freeze({relation: LOCATOR_RELATION.CLASS_SIDE, ref: description.classSide}));
-  }
-  return Object.freeze(locators);
+  const relation = (kind, ref) => Object.freeze({
+    target: createNativeClassSubject({imageId: subject.imageId, classRef: ref}),
+    group: TARGET_GROUP.RELATION,
+    label: `${kind} -> ${ref.imageId}/${ref.objectId}`,
+  });
+  if (description.superclass) entries.push(relation(LOCATOR_RELATION.SUPERCLASS, description.superclass));
+  if (description.classSide) entries.push(relation(LOCATOR_RELATION.CLASS_SIDE, description.classSide));
+  return Object.freeze(entries);
 }
 
 /**
- * Resolve one locator of the CURRENT native-class presentation descriptor to
- * the Images ref it names, or null. PURE over the descriptor and over the same
- * ordered array the projector renders, so there is no second decider. The
- * returned ref is a locator: browsing it needs its own authority.
+ * Resolve one descriptor-local activation key of the CURRENT native-class
+ * presentation descriptor to the semantic target it names, or null.
+ *
+ * PURE over the descriptor, and it INDEXES the same ordered array the projector
+ * keyed — it never re-derives a target from `smalltalkClass.superclass`,
+ * `classSide` or `selectors`. A re-deriving resolver and a re-deriving
+ * projector would agree with each other while both ignoring the browser, which
+ * is exactly the failure the A->B descriptor-transition proof is built to catch.
+ *
+ * The returned subject is a browse LOCATOR: acting on it is a fresh authorized
+ * read under whatever authority the caller supplies then.
  */
-function resolveNativeClassLocator(presentationDescriptor, key) {
+function resolveNativeTarget(presentationDescriptor, key) {
   if (presentationDescriptor?.kind !== NATIVE_CLASS_PRESENTATION_KIND) return null;
-  const locators = presentationDescriptor?.parameters?.locators;
-  if (!Array.isArray(locators)
-      || !Number.isSafeInteger(key) || key < 0 || key >= locators.length) {
+  const targets = presentationDescriptor?.parameters?.targets;
+  if (!Array.isArray(targets)
+      || !Number.isSafeInteger(key) || key < 0 || key >= targets.length) {
     return null;
   }
-  const ref = locators[key]?.ref;
-  if (!ref || ref.kind !== 'ref'
-      || typeof ref.imageId !== 'string' || ref.imageId.length === 0
-      || typeof ref.objectId !== 'string' || ref.objectId.length === 0) {
+  const target = targets[key]?.target;
+  if (!target || (target.kind !== NATIVE_CLASS_SUBJECT_KIND && target.kind !== NATIVE_METHOD_SUBJECT_KIND)) {
     return null;
   }
-  return ref;
+  return target;
 }
 
 /**
@@ -278,11 +329,11 @@ function createNativeClassPresentationProvider() {
           || smalltalkClass.class?.imageId !== subject.imageId) {
         throw new TypeError('native class presentation requires the description of ITS OWN subject');
       }
-      // The ordered locator list is the BROWSER's, threaded in. Falling back to
-      // deriving it here would make this provider a second locus for the list
-      // the ownership registry says the browser solely owns — and a silent one.
-      if (!Array.isArray(context.locators)) {
-        throw new TypeError('native class presentation requires the browser-owned ordered locators array');
+      // The ordered activation-target array is the BROWSER's, threaded in.
+      // Deriving it here would make this provider a second locus for the one
+      // array that owns the key space — and a silent one.
+      if (!Array.isArray(context.targets)) {
+        throw new TypeError('native class presentation requires the browser-owned ordered targets array');
       }
       return new Presentation({
         id: nativeClassPresentationId(subject),
@@ -290,7 +341,7 @@ function createNativeClassPresentationProvider() {
         kind: NATIVE_CLASS_PRESENTATION_KIND,
         // The Images-owned description, preserved BY IDENTITY. No copied name,
         // selector array, layout or ref; no shadow class model.
-        context: {smalltalkClass, locators: context.locators},
+        context: {smalltalkClass, targets: context.targets},
         state: {},
       });
     },
@@ -323,7 +374,7 @@ function exactNativeClassPresentation({subject, presentations, failures}) {
   return candidates[0];
 }
 
-function createNativeSmalltalkBrowser({adapter, presentationRegistry} = {}) {
+function createNativeSmalltalkBrowser({adapter, presentationRegistry, compositor} = {}) {
   if (!adapter || typeof adapter.describeSmalltalkClass !== 'function') {
     throw new TypeError('createNativeSmalltalkBrowser requires an adapter with describeSmalltalkClass');
   }
@@ -341,6 +392,14 @@ function createNativeSmalltalkBrowser({adapter, presentationRegistry} = {}) {
   }
   if (!presentationRegistry || typeof presentationRegistry.discover !== 'function') {
     throw new TypeError('createNativeSmalltalkBrowser requires a PresentationRegistry');
+  }
+  // REQUIRED, the ProjectBrowser precedent: this owner presents into one logical
+  // view, and a browser that could not present would make `activationBinding`
+  // a promise it cannot keep.
+  if (!compositor
+      || typeof compositor.openView !== 'function'
+      || typeof compositor.presentOn !== 'function') {
+    throw new TypeError('createNativeSmalltalkBrowser requires a Compositor (openView, presentOn)');
   }
 
   /**
@@ -409,7 +468,7 @@ function createNativeSmalltalkBrowser({adapter, presentationRegistry} = {}) {
       }
       return presentations[0];
     }
-    const context = {smalltalkClass, locators: nativeClassLocators(smalltalkClass)};
+    const context = {smalltalkClass, targets: nativeClassActivationTargets(required, smalltalkClass)};
     const {presentations, failures} = presentationRegistry.discover(required, context);
     return exactNativeClassPresentation({subject: required, presentations, failures});
   }
@@ -483,11 +542,78 @@ function createNativeSmalltalkBrowser({adapter, presentationRegistry} = {}) {
     return candidates[0];
   }
 
-  return Object.freeze({browse, browseMethod, toPresentationDescriptor});
+  // Browse a subject of EITHER kind. The only place that maps a semantic target
+  // to the read it implies — one small dispatch, in the owner that defines both
+  // subject kinds, so the shell never learns what a target means.
+  async function browseTarget(target, {authority = null} = {}) {
+    if (target?.kind === NATIVE_METHOD_SUBJECT_KIND) return browseMethod(target, {authority});
+    return browse(target, {authority});
+  }
+
+  /**
+   * open(subject, {authority, viewDescriptor}) — read, then admit ONE logical
+   * native Smalltalk view through the Compositor.
+   */
+  async function open(subject, {authority = null, viewDescriptor} = {}) {
+    const presentation = await browseTarget(subject, {authority});
+    const presentationDescriptor = toPresentationDescriptor(presentation);
+    await compositor.openView({viewId: NATIVE_SMALLTALK_VIEW_ID, viewDescriptor, presentationDescriptor});
+    return presentationDescriptor;
+  }
+
+  /**
+   * present(subject, {authority}) — read afresh and re-present into the SAME
+   * logical view. Class and method descriptors share it; presentOn detaches
+   * before attaching, so the kind change is an ordinary re-presentation.
+   */
+  async function present(subject, {authority = null} = {}) {
+    const presentation = await browseTarget(subject, {authority});
+    const presentationDescriptor = toPresentationDescriptor(presentation);
+    await compositor.presentOn(NATIVE_SMALLTALK_VIEW_ID, presentationDescriptor);
+    return presentationDescriptor;
+  }
+
+  /**
+   * The activation binding this owner contributes to EnvironmentShell's one
+   * activation table (ownership row 64). The shell owns handle -> live view,
+   * binding choice, resolver validation and delegation; this owner supplies the
+   * pure resolver over its own key space and the consumer that says what a
+   * target MEANS.
+   *
+   * `authorityFor(target)` is the COMPOSITION's: authority is fresh per
+   * navigation action and is never inherited from the subject, the descriptor or
+   * the shell (the delegated context carries none, by design). Error reporting
+   * stays with the composition too, through bindIntents' top-level
+   * onActivateError — the ProjectBrowser precedent, which likewise leaves
+   * onEdited/onEditError to its composition.
+   */
+  function activationBinding({authorityFor} = {}) {
+    if (typeof authorityFor !== 'function') {
+      throw new TypeError('activationBinding requires authorityFor(target) — authority is per action, never inherited');
+    }
+    return Object.freeze({
+      viewId: NATIVE_SMALLTALK_VIEW_ID,
+      resolveItem: resolveNativeTarget,
+      activateTarget: async (target) => present(target, {authority: authorityFor(target)}),
+    });
+  }
+
+  return Object.freeze({
+    viewId: NATIVE_SMALLTALK_VIEW_ID,
+    browse,
+    browseMethod,
+    browseTarget,
+    open,
+    present,
+    activationBinding,
+    toPresentationDescriptor,
+  });
 }
 
 export {
   LOCATOR_RELATION,
+  NATIVE_SMALLTALK_VIEW_ID,
+  TARGET_GROUP,
   NATIVE_CLASS_PRESENTATION_KIND,
   NATIVE_CLASS_SUBJECT_KIND,
   NATIVE_METHOD_PRESENTATION_KIND,
@@ -500,8 +626,8 @@ export {
   createNativeMethodPresentationProvider,
   createNativeMethodSubject,
   createNativeSmalltalkBrowser,
-  // nativeClassLocators is deliberately NOT exported: the ordered locator list
-  // has ONE locus (browse), and an importable deriver would quietly reopen the
+  // nativeClassActivationTargets is deliberately NOT exported: the ordered array
+  // has ONE locus (browse), and an importable builder would quietly reopen the
   // second one the provider's fallback used to be.
-  resolveNativeClassLocator,
+  resolveNativeTarget,
 };

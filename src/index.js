@@ -45,7 +45,9 @@ export {
 } from './project-browser.js';
 
 export {
-  LOCATOR_RELATION as NATIVE_CLASS_LOCATOR_RELATION,
+  LOCATOR_RELATION as NATIVE_CLASS_RELATION,
+  NATIVE_SMALLTALK_VIEW_ID,
+  TARGET_GROUP as NATIVE_TARGET_GROUP,
   NATIVE_CLASS_PRESENTATION_KIND,
   NATIVE_CLASS_SUBJECT_KIND,
   NATIVE_METHOD_PRESENTATION_KIND,
@@ -56,7 +58,7 @@ export {
   createNativeMethodPresentationProvider,
   createNativeMethodSubject,
   createNativeSmalltalkBrowser,
-  resolveNativeClassLocator,
+  resolveNativeTarget,
 } from './native-smalltalk-browser.js';
 
 export {

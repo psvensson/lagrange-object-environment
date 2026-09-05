@@ -25,6 +25,9 @@ function referencesOfValue(value) {
 }
 
 function makeShell({records = {}, readError = null, authorityFor = null, writableSlots = []} = {}) {
+  // Mutable so a test can make LATER reads reject (the initial workspace open
+  // must still succeed). Defaults to the caller's static readError.
+  let currentReadError = readError;
   const presentationRegistry = createPresentationRegistry();
   presentationRegistry.register(createObjectInspectorProvider());
   presentationRegistry.register(createUnavailableRefProvider());
@@ -34,7 +37,7 @@ function makeShell({records = {}, readError = null, authorityFor = null, writabl
   const adapter = {
     async readObject({imageId, objectId, authority, blockId} = {}) {
       readCalls.push({imageId, objectId, authority, blockId});
-      if (readError) throw readError;
+      if (currentReadError) throw currentReadError;
       if (authorityFor && !authorityFor({imageId, objectId, authority})) {
         const denied = new Error(`not authorized: object/read ${objectId}`);
         denied.name = 'AuthorityError';
@@ -48,7 +51,10 @@ function makeShell({records = {}, readError = null, authorityFor = null, writabl
   const rendererAdapter = createFakeRendererAdapter();
   const compositor = createCompositor({rendererAdapter});
   const shell = createEnvironmentShell({navigator, selectionModel, compositor, writableSlots});
-  return {shell, navigator, selectionModel, compositor, rendererAdapter, readCalls};
+  return {
+    shell, navigator, selectionModel, compositor, rendererAdapter, readCalls,
+    failRead: (error) => { currentReadError = error; },
+  };
 }
 
 test('openWorkspace + selectObject: selection drives the inspector via a descriptor through presentOn', async () => {
@@ -905,4 +911,370 @@ test('P8c structural guard: the shell never consults the Compositor\'s durable i
   const source = readFileSync(fileURLToPath(new URL('../src/environment-shell.js', import.meta.url)), 'utf8');
   assert.ok(!source.includes('durableIntent('), 'src/environment-shell.js must not call durableIntent( — durable intent lists lost views by design and is never evidence of a live realization');
   assert.ok(!/viewStatus\([^)]*\)\s*===\s*'live'/.test(source), 'the shell must not re-decide liveness via viewStatus(...) === \'live\'');
+});
+
+// ---------------------------------------------------------------------------
+// E2 / Bead gzz: the AMENDED activation contract (ownership row 64).
+//
+// This lane is AUTHORITATIVE for the routing contract. A host proves realization
+// and emission; it must never be the only oracle for who owns activation, or a
+// broken host would be able to make the contract look right.
+// ---------------------------------------------------------------------------
+
+// A resolver that hands back whatever the test wants, so the shell's
+// classification can be exercised without any consumer being correct.
+function activationHarness({resolveItem, activateTarget, onActivateError, records} = {}) {
+  let readFailure = null;
+  const made = makeShell({
+    records: records ?? {
+      'obj-root': {slots: {'slot-b': ref('obj-b')}, indexed: []},
+      'obj-b': {slots: {'slot-title': {kind: 'text', value: 'B'}}, indexed: []},
+    },
+  });
+  // Count ObjectNavigator.navigate DIRECTLY rather than counting reads and
+  // calling it navigation: the negative claims navigate was not called, so that
+  // is what it should observe.
+  let navigates = 0;
+  const realNavigate = made.navigator.navigate;
+  made.navigator = Object.freeze({
+    ...made.navigator,
+    navigate: (...args) => { navigates += 1; return realNavigate(...args); },
+  });
+  const shell = createEnvironmentShell({
+    navigator: made.navigator, selectionModel: made.selectionModel, compositor: made.compositor,
+  });
+  made.shell = shell;
+  made.navigateCount = () => navigates;
+  made.readFailure = (error) => { readFailure = error; made.failRead(error); };
+  void readFailure;
+
+  const handlers = new Set();
+  const adapter = {onIntent: (fn) => { handlers.add(fn); return () => handlers.delete(fn); }};
+  const emit = (surfaceHandle, key = 0) => {
+    for (const fn of handlers) fn({kind: 'activate-item', key}, surfaceHandle);
+  };
+  return {...made, adapter, emit, bind: (extra = {}) => made.shell.bindIntents({
+    adapter,
+    activationBindings: [{viewId: 'navigator-view', resolveItem, ...(activateTarget ? {activateTarget} : {})}],
+    onActivateError,
+    ...extra,
+  })};
+}
+
+
+test('gzz: an ObjectRef still takes the selection path, unchanged', async () => {
+  const seen = [];
+  const h = activationHarness({
+    resolveItem: () => ref('obj-b'),
+    activateTarget: (target) => { seen.push(target); },
+  });
+  await h.shell.openWorkspace(ref('obj-root'), {});
+  h.bind();
+  h.emit(h.compositor.surfaceHandleForView('navigator-view'));
+  await settle();
+  // A ref is a ref even under a delegated binding: selection, not delegation.
+  assert.deepEqual(h.selectionModel.selectedSubject(), ref('obj-b'));
+  assert.deepEqual(seen, [], 'activateTarget is not consulted for a ref');
+  await h.compositor.destroy();
+});
+
+test('gzz: a semantic target delegates EXACTLY ONCE and touches no generic state', async () => {
+  const seen = [];
+  const target = Object.freeze({kind: 'native-class', imageId: 'img', classRef: ref('smalltalk/class/X')});
+  const h = activationHarness({
+    resolveItem: () => target,
+    activateTarget: (t, context) => { seen.push({t, context}); },
+  });
+  await h.shell.openWorkspace(ref('obj-root'), {});
+  const inspectorBefore = h.compositor.liveView('inspector-view').presentationDescriptor;
+  const focusBefore = h.compositor.focusedView();
+  const navigatesBefore = h.navigateCount();
+  const tokenBefore = h.shell._inspectorToken();
+  h.bind();
+  h.emit(h.compositor.surfaceHandleForView('navigator-view'));
+  await settle();
+
+  assert.equal(seen.length, 1, 'delegated exactly once');
+  assert.equal(seen[0].t, target, 'the target crosses VERBATIM, by identity');
+  // The context is EXACTLY {viewId}: no authority, no readBlockId, no handle.
+  assert.deepEqual(Object.keys(seen[0].context), ['viewId']);
+  assert.equal(seen[0].context.viewId, 'navigator-view');
+
+  // ...and NOTHING generic moved. selectObject clears the inspector token FIRST,
+  // so a wrongly-routed target that then failed could leave the descriptor
+  // unchanged — all five are asserted together.
+  assert.equal(h.selectionModel.selectedSubject(), null, 'selection untouched');
+  assert.equal(h.compositor.liveView('inspector-view').presentationDescriptor, inspectorBefore,
+    'the inspector descriptor is the SAME object');
+  assert.equal(h.compositor.focusedView(), focusBefore, 'no focus change: delegation is not a selection gesture');
+  assert.equal(h.navigateCount(), navigatesBefore, 'no authorized read was issued (navigate was not called)');
+  // THE ONE THAT CATCHES A WRONGLY-ROUTED TARGET THAT THEN FAILED: selectObject
+  // clears the paired inspector token FIRST, before selecting or reading. An
+  // implementation that routed a target into it and then threw would leave the
+  // descriptor and selection untouched and slip past every assertion above.
+  assert.deepEqual(h.shell._inspectorToken(), tokenBefore, 'the paired inspector token was not cleared');
+  // The inspector's own reread never ran: no additional authorized read was
+  // issued by the delegation (selectObject would have issued one).
+  await h.compositor.destroy();
+});
+
+test('gzz: null is the ONLY resolver no-op; every other malformed answer is reported once', async () => {
+  const cases = [
+    ['undefined', () => undefined, /returned undefined/],
+    ['a ref without objectId', () => ({kind: 'ref', imageId: 'img'}), /without a non-empty objectId/],
+    ['an array', () => [1], /null, an object ref, or a plain semantic target/],
+    ['a string', () => 'obj-b', /null, an object ref, or a plain semantic target/],
+    ['a class instance', () => new (class Thing {})(), /null, an object ref, or a plain semantic target/],
+  ];
+  for (const [label, resolveItem, pattern] of cases) {
+    const errors = [];
+    const h = activationHarness({
+      resolveItem,
+      activateTarget: () => { throw new Error('must not be consulted'); },
+      onActivateError: (error, context) => errors.push({error, context}),
+    });
+    await h.shell.openWorkspace(ref('obj-root'), {});
+    h.bind();
+    h.emit(h.compositor.surfaceHandleForView('navigator-view'));
+    await settle();
+    assert.equal(errors.length, 1, `${label}: reported exactly once`);
+    assert.match(errors[0].error.message, pattern, label);
+    assert.deepEqual(Object.keys(errors[0].context), ['viewId']);
+    assert.equal(h.selectionModel.selectedSubject(), null, `${label}: nothing was selected`);
+    await h.compositor.destroy();
+  }
+
+  // null really is a no-op: no error, no selection.
+  const errors = [];
+  const quiet = activationHarness({resolveItem: () => null, onActivateError: (e) => errors.push(e)});
+  await quiet.shell.openWorkspace(ref('obj-root'), {});
+  quiet.bind();
+  quiet.emit(quiet.compositor.surfaceHandleForView('navigator-view'));
+  await settle();
+  assert.deepEqual(errors, [], 'null is an intentional stale/out-of-range no-op');
+  await quiet.compositor.destroy();
+});
+
+test('gzz: a semantic target WITHOUT activateTarget is loud, not a silent no-op', async () => {
+  const errors = [];
+  const h = activationHarness({
+    resolveItem: () => ({kind: 'native-class', imageId: 'img', classRef: ref('smalltalk/class/X')}),
+    onActivateError: (error) => errors.push(error),
+  });
+  await h.shell.openWorkspace(ref('obj-root'), {});
+  h.bind();
+  h.emit(h.compositor.surfaceHandleForView('navigator-view'));
+  await settle();
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /supplies no activateTarget consumer/);
+  // And the DIRECT path rejects, which is where a caller can see it without a hook.
+  await assert.rejects(
+    h.shell.handleActivateItem({viewId: 'navigator-view', key: 0, resolveItem: () => ({kind: 'x', imageId: 'i'})}),
+    /supplies no activateTarget consumer/,
+  );
+  await h.compositor.destroy();
+});
+
+test('gzz: a failing consumer and a failing selection are each reported exactly once', async () => {
+  const consumerErrors = [];
+  const consumer = activationHarness({
+    resolveItem: () => ({kind: 'native-class', imageId: 'img', classRef: ref('smalltalk/class/X')}),
+    activateTarget: async () => { throw new Error('consumer exploded'); },
+    onActivateError: (error) => consumerErrors.push(error),
+  });
+  await consumer.shell.openWorkspace(ref('obj-root'), {});
+  consumer.bind();
+  consumer.emit(consumer.compositor.surfaceHandleForView('navigator-view'));
+  await settle();
+  assert.equal(consumerErrors.length, 1);
+  assert.match(consumerErrors[0].message, /consumer exploded/);
+  await consumer.compositor.destroy();
+
+  // The ordinary ref path reports through the SAME channel. Finding the case that
+  // genuinely REJECTS took care: a failed READ does not, because ObjectNavigator
+  // materializes it into an unavailable-reference subject by design. Asserting
+  // `<= 1` on that would have passed on ZERO reports — the silent swallow this
+  // hook exists to eliminate. A failing RENDERER attach does reject, through
+  // presentOn, and is the honest case.
+  const selectErrors = [];
+  const failing = activationHarness({
+    resolveItem: () => ref('obj-b'),
+    onActivateError: (error) => selectErrors.push(error),
+  });
+  await failing.shell.openWorkspace(ref('obj-root'), {});
+  failing.bind();
+  failing.rendererAdapter.failNext('attachPresentation');
+  failing.emit(failing.compositor.surfaceHandleForView('navigator-view'));
+  await settle();
+  assert.equal(selectErrors.length, 1, 'a rejecting selection path is reported EXACTLY once');
+  await failing.compositor.destroy();
+});
+
+test('gzz: a throwing onActivateError does not start a second reporting loop', async () => {
+  let calls = 0;
+  const h = activationHarness({
+    resolveItem: () => undefined,
+    onActivateError: () => { calls += 1; throw new Error('the reporter itself failed'); },
+  });
+  await h.shell.openWorkspace(ref('obj-root'), {});
+  h.bind();
+  h.emit(h.compositor.surfaceHandleForView('navigator-view'));
+  await settle();
+  assert.equal(calls, 1, 'reported once; the reporter\'s own failure is contained');
+  await h.compositor.destroy();
+});
+
+test('gzz: an activation binding rejects unknown keys and a non-function activateTarget', async () => {
+  const h = activationHarness({resolveItem: () => null});
+  await h.shell.openWorkspace(ref('obj-root'), {});
+  // A typo'd key must not be silently dropped: that would degrade a delegated
+  // binding to the ref path and turn a semantic target into a silent no-op.
+  assert.throws(
+    () => h.shell.bindIntents({
+      adapter: h.adapter,
+      activationBindings: [{viewId: 'navigator-view', resolveItem: () => null, activateTargets: () => {}}],
+    }),
+    /unknown keys activateTargets/,
+  );
+  assert.throws(
+    () => h.shell.bindIntents({
+      adapter: h.adapter,
+      activationBindings: [{viewId: 'navigator-view', resolveItem: () => null, activateTarget: 'nope'}],
+    }),
+    /activateTarget must be a function/,
+  );
+  assert.throws(
+    () => h.shell.bindIntents({adapter: h.adapter, onActivateError: 'nope'}),
+    /onActivateError must be a function/,
+  );
+  await h.compositor.destroy();
+});
+
+test('gzz: the shell learns nothing about what a semantic target MEANS', async () => {
+  const {readFileSync} = await import('node:fs');
+  const source = readFileSync(new URL('../src/environment-shell.js', import.meta.url), 'utf8');
+  // The shell routes by SHAPE and by BINDING, never by domain. A branch on
+  // target.kind === 'native-method' here would move meaning into the wrong owner.
+  //
+  // Whole-word/exact patterns, not bare substrings: `readBlockId` is a legitimate
+  // pre-existing parameter of the object-read lane and must not trip a scan for
+  // "Block", which is the kind of false positive that gets a fence deleted
+  // instead of fixed.
+  const forbidden = [
+    /native-class/, /native-method/, /smalltalk/i, /\bcuis\b/i,
+    /\bselectors?\b/i, /\bBlock\b/, /\bmetaclass/i,
+  ];
+  for (const pattern of forbidden) {
+    assert.equal(pattern.test(source), false, `EnvironmentShell must not mention ${pattern}`);
+  }
+  // And it never branches on what a target IS.
+  // `target?.kind` must be caught too: optional chaining is the obvious way the
+  // forbidden branch would actually be written.
+  assert.equal(/target\s*\??\s*\.\s*kind/.test(source), false, 'the shell must not branch on target.kind');
+});
+
+test('gzz REQUIRED NEGATIVE: an activated native-class locator never lands in the generic inspector', async () => {
+  // Bead gzz's DELIVER clause names this explicitly. The hazard is a MISBINDING:
+  // someone binds the shell's DEFAULT navigator resolver to a native-class view.
+  // That resolver reads `parameters.references` — which a native-class descriptor
+  // does not have — so it must resolve to nothing and select nothing, rather than
+  // reaching ObjectNavigator with some other ref.
+  const nativeDescriptor = {
+    kind: 'native-class',
+    subject: {kind: 'native-class', imageId: 'img', classRef: ref('smalltalk/class/X')},
+    parameters: {
+      smalltalkClass: {
+        format: 'smalltalk-class-description/v1', class: ref('smalltalk/class/X'), name: 'X',
+        side: 'instance', superclass: ref('smalltalk/class/Object'), classSide: null,
+        layout: null, selectors: ['foo'], provenance: null,
+      },
+      targets: [
+        {target: {kind: 'native-method', imageId: 'img', classRef: ref('smalltalk/class/X'), selector: 'foo'}, group: 'selector', label: 'foo'},
+        {target: {kind: 'native-class', imageId: 'img', classRef: ref('smalltalk/class/Object')}, group: 'relation', label: 'superclass -> img/smalltalk/class/Object'},
+      ],
+    },
+  };
+  const errors = [];
+  const h = activationHarness({resolveItem: () => null, onActivateError: (e) => errors.push(e)});
+  await h.shell.openWorkspace(ref('obj-root'), {});
+  await h.compositor.openView({
+    viewId: 'native-smalltalk-view',
+    viewDescriptor: {kind: 'surface', width: 10, height: 10},
+    presentationDescriptor: nativeDescriptor,
+  });
+
+  const selectionBefore = h.selectionModel.selectedSubject();
+  const tokenBefore = h.shell._inspectorToken();
+  const inspectorBefore = h.compositor.liveView('inspector-view').presentationDescriptor;
+  const navigatesBefore = h.navigateCount();
+
+  // THE MISBINDING, in its most direct form: handleActivateItem's DEFAULT
+  // resolveItem IS the shell's navigator reference resolver, so naming the
+  // native view here is exactly "the generic resolver, pointed at a native
+  // descriptor" — no new export needed to reach the real default.
+  for (const key of [0, 1]) {
+    const resolved = await h.shell.handleActivateItem({viewId: 'native-smalltalk-view', key});
+    assert.equal(resolved, null, `key ${key} resolves to nothing under the generic resolver`);
+  }
+  await settle();
+
+  // Nothing selected, nothing navigated, no inspector movement: an activated
+  // native row cannot become a generic object selection by misbinding.
+  assert.equal(h.selectionModel.selectedSubject(), selectionBefore);
+  assert.equal(h.navigateCount(), navigatesBefore, 'ObjectNavigator was never reached');
+  assert.equal(h.compositor.liveView('inspector-view').presentationDescriptor, inspectorBefore);
+  assert.deepEqual(h.shell._inspectorToken(), tokenBefore);
+  assert.deepEqual(errors, [], 'a native descriptor has no reference rows, so this is a clean no-op');
+  await h.compositor.destroy();
+});
+
+test('gzz: a DELEGATED binding survives close + re-open of its logical view, with no rebind', async () => {
+  // The never-skipped twin of the integration lane's lifecycle leg: amendment
+  // clause 8 makes THIS lane authoritative for the routing contract, so the
+  // delegated binding's survival must be proven where nothing can skip.
+  const seen = [];
+  const target = Object.freeze({kind: 'native-class', imageId: 'img', classRef: ref('smalltalk/class/X')});
+  const descriptor = {
+    kind: 'native-class',
+    subject: {kind: 'native-class', imageId: 'img', classRef: ref('smalltalk/class/X')},
+    parameters: {targets: [{target, group: 'relation', label: 'superclass -> img/x'}]},
+  };
+  const h = activationHarness({
+    resolveItem: (d, key) => d.parameters.targets[key]?.target ?? null,
+    activateTarget: (t) => { seen.push(t); },
+  });
+  await h.shell.openWorkspace(ref('obj-root'), {});
+  const open = () => h.compositor.openView({
+    viewId: 'native-smalltalk-view',
+    viewDescriptor: {kind: 'surface', width: 10, height: 10},
+    presentationDescriptor: descriptor,
+  });
+  await open();
+  h.shell.bindIntents({
+    adapter: h.adapter,
+    activationBindings: [{
+      viewId: 'native-smalltalk-view',
+      resolveItem: (d, key) => d.parameters.targets[key]?.target ?? null,
+      activateTarget: (t) => { seen.push(t); },
+    }],
+  });
+  const firstHandle = h.compositor.surfaceHandleForView('native-smalltalk-view');
+  h.emit(firstHandle, 0);
+  await settle();
+  assert.equal(seen.length, 1);
+
+  // Close and re-open the SAME logical view: a NEW handle, no rebind.
+  await h.compositor.closeView('native-smalltalk-view');
+  await open();
+  const secondHandle = h.compositor.surfaceHandleForView('native-smalltalk-view');
+  assert.notEqual(secondHandle, firstHandle);
+  h.emit(secondHandle, 0);
+  await settle();
+  assert.equal(seen.length, 2, 'the view-keyed binding still routes under the new handle');
+
+  // The STALE handle routes nowhere — stopped before any resolver runs.
+  h.emit(firstHandle, 0);
+  await settle();
+  assert.equal(seen.length, 2, 'a dead handle is ignored before the binding is consulted');
+  await h.compositor.destroy();
 });

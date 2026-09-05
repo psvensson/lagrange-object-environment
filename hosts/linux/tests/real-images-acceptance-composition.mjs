@@ -19,6 +19,7 @@ import {
 } from 'object-presentation-providers';
 import {createSelectionModel} from 'selection-model';
 import {createImageClientAdapter, classIdFor} from 'image-client-adapter';
+import {createNativeClassPresentationProvider, createNativeClassSubject, createNativeMethodPresentationProvider, createNativeSmalltalkBrowser} from 'native-smalltalk-browser';
 import {createProjectBrowser, createProjectPresentationProvider, createProjectSubject} from 'project-browser';
 import {observeChanges} from 'image-observation';
 import {
@@ -139,6 +140,8 @@ async function setup({imageId, ids}) {
   presentationRegistry.register(createUnavailableRefProvider());
   presentationRegistry.register(createUnauthorizedRefProvider());
   presentationRegistry.register(createProjectPresentationProvider());
+  presentationRegistry.register(createNativeClassPresentationProvider());
+  presentationRegistry.register(createNativeMethodPresentationProvider());
 
   const commandRegistry = createCommandRegistry();
   // The ORDINARY Project rename Command (okv Slice C): composition-registered,
@@ -240,6 +243,35 @@ async function setup({imageId, ids}) {
     unsubscribeIntents: null,
   };
   // ---- Project rename leg (okv Slice C; driven only by real_images_acceptance) ----
+  // NATIVE SMALLTALK BROWSING (Bead gzz). The class it browses is the ordinary
+  // probe class `ensureSchema` already defines through Images' own `defineClass`,
+  // so this lane needs no class-building helper of its own. It has no selectors
+  // (the portable runtime exports no method installer, Bead aov), which is
+  // exactly why the SELECTOR leg is proven in the JS lane and the CLASS-LOCATOR
+  // leg is proven here, natively, end to end.
+  const nativeBrowser = createNativeSmalltalkBrowser({adapter, presentationRegistry, compositor});
+  const nativeClassRef = objectRef(imageId, classIdFor(ids.className));
+  session.openNativeClass = async () => {
+    await nativeBrowser.open(createNativeClassSubject({imageId, classRef: nativeClassRef}), {
+      authority: authorities.read(nativeClassRef.objectId),
+      viewDescriptor: {kind: 'surface', width: 200, height: 200},
+    });
+    return {
+      nativeSurfaceHandle: compositor.surfaceHandleForView(nativeBrowser.viewId),
+      name: compositor.liveView(nativeBrowser.viewId).presentationDescriptor.parameters.smalltalkClass.name,
+    };
+  };
+  session.nativeState = async () => {
+    const live = compositor.liveView(nativeBrowser.viewId);
+    if (!live) return {kind: null, name: null};
+    const {kind, parameters} = live.presentationDescriptor;
+    return {
+      kind,
+      name: parameters.smalltalkClass?.name ?? null,
+      targets: (parameters.targets ?? []).map((entry) => ({group: entry.group, label: entry.label})),
+    };
+  };
+
   session.projectId = null;
   session.lastProjectEdit = null;
   session.openProject = async () => {
@@ -347,6 +379,18 @@ async function setup({imageId, ids}) {
       // intent on the live project view routes to rename-project with the
       // browser's own field resolver and paired token; the reread after a commit
       // uses a per-call Project READ authority (the rename authority is write-only).
+      activationBindings: [
+        // Two bindings live in ONE activation table and only this one delegates:
+        // the navigator binding (navigator: true above) resolves to an ordinary
+        // ref and keeps the historical selection path. That is the per-binding
+        // discrimination, proven by construction rather than asserted.
+        nativeBrowser.activationBinding({
+          authorityFor: (target) => authorities.read(target.classRef.objectId),
+        }),
+      ],
+      onActivateError: (error) => {
+        globalThis.__lastActivateError = String(error?.message ?? error);
+      },
       editBindings: [{
         viewId: browser.viewId,
         commandId: 'rename-project',

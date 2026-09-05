@@ -28,12 +28,16 @@ const CASES = {
   // editable field (key = its index in `writable`); id/namespace stay read-only.
   'project-editable': {kind: 'project', subject: {kind: 'project', imageId: 'image-a', projectId: 'project-alpha'}, parameters: {project: {format: 'lagrange-project/v1', projectId: 'project-alpha', name: 'Alpha', namespace: {kind: 'ref', imageId: 'image-a', objectId: 'workspace'}, members: [{key: 'member/a', role: 'source', target: {kind: 'ref', imageId: 'image-a', objectId: 'obj-a'}}, {key: 'member/b', role: 'dependency', target: {kind: 'ref', imageId: 'image-b', objectId: 'obj-b'}}]}, writable: ['name']}},
   // The authorized native Smalltalk class description (Images ADR 0087),
-  // preserved by identity in the descriptor. `layout` present with a NON-empty
-  // instanceVariables plus a class-side locator; the null-layout and
-  // empty-instanceVariables cases are distinguished in
-  // test/native-smalltalk-browser.test.js, because that distinction is the one
-  // most easily collapsed by accident.
-  'native-class': {kind: 'native-class', subject: {kind: 'native-class', imageId: 'img', classRef: ref('smalltalk/class/BrowseChild')}, parameters: {smalltalkClass: {format: 'smalltalk-class-description/v1', class: ref('smalltalk/class/BrowseChild'), name: 'BrowseChild', side: 'instance', superclass: ref('smalltalk/class/BrowseBase'), classSide: ref('smalltalk/metaclass/BrowseChild'), layout: {instanceVariables: ['baseValue', 'childFirst'], indexed: 'none'}, selectors: ['childFirst', 'childSecond'], provenance: null}, locators: [{relation: 'superclass', ref: ref('smalltalk/class/BrowseBase')}, {relation: 'class-side', ref: ref('smalltalk/metaclass/BrowseChild')}]}},
+  // preserved by identity in the descriptor. It carries BOTH groups — two
+  // selectors and two class relations — because a single-group fixture cannot
+  // falsify key-space collision: the whole point is that all four actions draw
+  // their keys from ONE array.
+  'native-class': {kind: 'native-class', subject: {kind: 'native-class', imageId: 'img', classRef: ref('smalltalk/class/BrowseChild')}, parameters: {smalltalkClass: {format: 'smalltalk-class-description/v1', class: ref('smalltalk/class/BrowseChild'), name: 'BrowseChild', side: 'instance', superclass: ref('smalltalk/class/BrowseBase'), classSide: ref('smalltalk/metaclass/BrowseChild'), layout: {instanceVariables: ['baseValue', 'childFirst'], indexed: 'none'}, selectors: ['childFirst', 'childSecond'], provenance: null}, targets: [
+    {target: {kind: 'native-method', imageId: 'img', classRef: ref('smalltalk/class/BrowseChild'), selector: 'childFirst'}, group: 'selector', label: 'childFirst'},
+    {target: {kind: 'native-method', imageId: 'img', classRef: ref('smalltalk/class/BrowseChild'), selector: 'childSecond'}, group: 'selector', label: 'childSecond'},
+    {target: {kind: 'native-class', imageId: 'img', classRef: ref('smalltalk/class/BrowseBase')}, group: 'relation', label: 'superclass -> img/smalltalk/class/BrowseBase'},
+    {target: {kind: 'native-class', imageId: 'img', classRef: ref('smalltalk/metaclass/BrowseChild')}, group: 'relation', label: 'class-side -> img/smalltalk/metaclass/BrowseChild'},
+  ]}},
   // The authorized native METHOD description (Images ADR 0087). source and
   // provenance are null, so neither row is emitted at all.
   'native-method': {kind: 'native-method', subject: {kind: 'native-method', imageId: 'img', classRef: ref('smalltalk/class/BrowseChild'), selector: 'childFirst'}, parameters: {smalltalkMethod: {format: 'smalltalk-method-description/v1', class: ref('smalltalk/class/BrowseChild'), side: 'instance', selector: 'childFirst', method: ref('smalltalk/class/BrowseChild/method/Y2hpbGRGaXJzdA'), source: null, provenance: null}}},
@@ -143,6 +147,12 @@ test('action keys stay descriptor-local integers (the PR #33 security property)'
 
 test('Project members expose durable identity as text but actions carry only transient indices', () => {
   assert.equal(isToolKind('project'), true, 'the browser dispatches Project through the SemanticUi DOM route');
+  // The native kinds must be SEMANTIC TOOL kinds in the browser too: a kind the
+  // browser did not admit would go to the Component realizer while GTK realizes
+  // it as tool UI. The cross-host parity test pins the two lists equal; this is
+  // the browser half of that claim, asserted rather than inferred.
+  assert.equal(isToolKind('native-class'), true, 'the browser dispatches a native class through the SemanticUi DOM route');
+  assert.equal(isToolKind('native-method'), true, 'and a native method too');
   const doc = semanticUiForPresentation(CASES.project);
   const collection = doc.root.children.find((child) => child.kind === 'collection');
   assert.equal(collection.label, 'Members');

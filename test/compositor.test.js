@@ -413,3 +413,57 @@ test('liveView(viewId): the current live snapshot for a logical view; null when 
   assert.ok(compositor.durableIntent().some((x) => x.viewId === 'v'), 'durable intent still lists the lost view (by design)');
   await compositor.destroy();
 });
+
+// The fake renderer's optional REALIZATION seam (E2 / Bead gzz). It exists so a
+// headless lane can prove the renderer -> shell -> consumer path; its contract
+// is that it emits the key IT REALIZED, never one it computed.
+test('the fake renderer emits the realized action key, not the ordinal it was asked for', async () => {
+  // A document whose action DOCUMENT ORDER differs from its KEY order. This is
+  // the only shape that can tell "read the realized key" apart from "return the
+  // ordinal" — with a document whose keys happen to equal their positions, both
+  // implementations agree and the proof is vacuous.
+  const projector = () => ({
+    kind: 'semantic-ui',
+    version: 1,
+    root: {
+      kind: 'group',
+      title: 'Class: X',
+      children: [
+        {kind: 'collection', label: 'Selectors', items: [{kind: 'action', key: 7, label: 'seven'}]},
+        {kind: 'collection', label: 'Relations', items: [{kind: 'action', key: 3, label: 'three'}]},
+      ],
+    },
+  });
+  const adapter = createFakeRendererAdapter({projector});
+  const handle = await adapter.createSurface({kind: 'surface'});
+  await adapter.attachPresentation(handle, {kind: 'native-class', subject: {}, parameters: {}});
+
+  const seen = [];
+  adapter.onIntent((intent, from) => seen.push({intent, from}));
+  assert.deepEqual(adapter.realizedActions(handle).map((a) => a.key), [7, 3]);
+
+  // Ordinal 0 is the FIRST realized action, whose key is 7 — not 0.
+  assert.deepEqual(adapter.activateAction(handle, 0), {kind: 'activate-item', key: 7});
+  assert.deepEqual(adapter.activateAction(handle, 1), {kind: 'activate-item', key: 3});
+  assert.deepEqual(seen.map((s) => s.intent.key), [7, 3]);
+  assert.deepEqual(seen.map((s) => s.from), [handle, handle]);
+  assert.throws(() => adapter.activateAction(handle, 2), /no realized action 2/);
+
+  // The realization is a SNAPSHOT taken at attach: detaching drops it, so a
+  // later activation cannot interact with a document this surface no longer
+  // shows.
+  await adapter.detachPresentation(handle);
+  assert.equal(adapter.realizedDocument(handle), null);
+  assert.throws(() => adapter.activateAction(handle, 0), /no realized action/);
+  await adapter.destroyAll();
+});
+
+test('the fake renderer without a projector is unchanged: no realization, no intents', async () => {
+  const adapter = createFakeRendererAdapter();
+  const handle = await adapter.createSurface({kind: 'surface'});
+  await adapter.attachPresentation(handle, {kind: 'inspector', subject: {}, parameters: {}});
+  assert.equal(adapter.realizedDocument(handle), null, 'nothing is projected when nothing was injected');
+  assert.deepEqual(adapter.realizedActions(handle), []);
+  assert.throws(() => adapter.activateAction(handle, 0), /no realized action/);
+  await adapter.destroyAll();
+});
