@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted as architectural direction. Implementation is deliberately deferred until the current Cuis-first browser vertical has completed E2 and a real source/documentation consumer supplies pressure.
+Accepted as architectural direction. Implementation is deliberately DEFERRED, and remains so: E2 (live native class/method navigation) merged on 2026-09-05, satisfying the first activation condition, but the second — a real source/documentation consumer supplying pressure — is not met. Note also that Images truthfully reports `source: null` and `provenance: null` for a native method today, so there is no authoritative source or documentation content for this facet to display; E3's own readiness audit records that as a lower dependency rather than an Environment gap. This ADR is direction, not a licence to start.
 
 ## Context
 

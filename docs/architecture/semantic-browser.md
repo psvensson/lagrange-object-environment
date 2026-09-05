@@ -144,7 +144,7 @@ Themes and host realizers decide appearance through the existing renderer-neutra
 
 Renderer activation always returns a descriptor-local integer key through the existing EnvironmentShell activation owner.
 
-The current E2 native-Smalltalk work is establishing the important general case: a browser action may resolve not only to an ordinary ObjectRef but to another semantic browse subject such as a native Method locator. The language/browser consumer owns target meaning; EnvironmentShell owns the single renderer-action routing interaction.
+E2 established the important general case and is merged: a browser action may resolve not only to an ordinary ObjectRef but to another semantic browse subject such as a native Method locator. `EnvironmentShell` owns the single renderer-action routing interaction and classifies the resolver's answer without knowing what any target MEANS; the language/browser consumer owns target meaning through a per-binding `activateTarget` callback. Ownership row 64 was amended in place rather than gaining a sibling — which is the concrete evidence that a second language personality can join this table without a second activation owner.
 
 A future personality must reuse that path. It must not add `SmalltalkClickRouter`, `LispNavigator`, `JavaScriptActivationService`, or equivalent parallel owners.
 
@@ -195,6 +195,8 @@ Nor should it be immediately renamed to `SemanticBrowser` merely because the dir
 The extraction rule is:
 
 > Factor a generic semantic-browser owner only after E2 plus a second substantially different semantic shape prove which responsibilities are genuinely common.
+
+E2 is now merged, so the first half of that condition is met and the second is not. `NativeSmalltalkBrowser` remains the only concrete pressure, and extraction stays dormant until a genuinely different language shape exists to generalize against — one example cannot show which of its responsibilities are common and which are Smalltalk's.
 
 Until then, duplicating a small amount of personality-local orchestration may be safer than inventing a generic framework with no second consumer. But duplicated **system owners** are never acceptable: activation, selection, rendering, authority and discovery remain generic now.
 
