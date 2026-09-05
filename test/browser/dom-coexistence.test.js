@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFile, readdir} from 'node:fs/promises';
+import {dirname, join} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {available, withProofPage} from './support/proof-lane.js';
 
 // The DOM + Component COEXISTENCE proof (Bead 9vl): DOM tool realizations
@@ -145,7 +148,23 @@ test('CI: the dispatch seam is INJECTED, not a hard-coded kind switch (sentinel 
 // the CHECKED-IN fixtures (the SAME bytes the Linux GTK realizer consumes).
 // This also covers the unavailable/unauthorized kinds, which had NO DOM-level
 // coverage before L2.
-test('CI: the browser realizer renders the checked-in SemanticUi fixtures (all six kinds)', {skip: !available && 'no Chrome available'}, async () => {
+// The two PROJECTOR lanes bind their case lists to the fixture directory; the DOM
+// realizer lane did not, which is exactly why a new green fixture could be added
+// and silently never rendered in a browser. This closes that hole: the render test
+// below must name every green fixture on disk.
+test('CI: every green fixture is rendered by the browser realizer test', async () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const onDisk = (await readdir(join(here, '..', 'fixtures', 'semantic-ui'), {withFileTypes: true}))
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
+    .map((entry) => entry.name)
+    // Not a SemanticUi document: the canonical cross-host INTENT bytes.
+    .filter((name) => name !== 'edit-field-intent.json');
+  const source = await readFile(fileURLToPath(import.meta.url), 'utf8');
+  const missing = onDisk.filter((name) => !source.includes(`../fixtures/semantic-ui/${name}`));
+  assert.deepEqual(missing, [], 'every green fixture must be rendered through the real DOM realizer');
+});
+
+test('CI: the browser realizer renders the checked-in SemanticUi fixtures (every green fixture)', {skip: !available && 'no Chrome available'}, async () => {
   await withProofPage(async ({page}) => {
     const result = await page.evaluate(async () => {
       const out = {};
@@ -201,6 +220,18 @@ test('CI: the browser realizer renders the checked-in SemanticUi fixtures (all s
       // intent here would mean E1 shipped an affordance it cannot route.
       out.nativeClassIntents = nativeClass.takeIntents();
       nativeClass.dispose();
+      // native-method (Images ADR 0087): the authorized METHOD description renders
+      // from the SAME fixture bytes the GTK realizer consumes. source/provenance
+      // rows are absent entirely, and Slice A ships no action here.
+      const nativeMethod = await window.__lagrangeProof.renderSemanticUiFixture('../fixtures/semantic-ui/native-method.json', 'native-method');
+      out.nativeMethod = {
+        heading: nativeMethod.heading,
+        fields: nativeMethod.fields,
+        fieldValues: nativeMethod.fieldValues,
+        controls: nativeMethod.controls,
+      };
+      out.nativeMethodIntents = nativeMethod.takeIntents();
+      nativeMethod.dispose();
       // unavailable + unauthorized: heading + an explicit reason line, no refs.
       const un = await window.__lagrangeProof.renderSemanticUiFixture('../fixtures/semantic-ui/unavailable.json', 'unavailable-reference');
       out.unavailable = {heading: un.heading, reason: un.reason, buttons: un.buttons};
@@ -270,6 +301,16 @@ test('CI: the browser realizer renders the checked-in SemanticUi fixtures (all s
     assert.deepEqual(result.nativeClass.controls, [], 'no operable control of ANY kind in a native-class pane');
     assert.deepEqual(result.nativeClass.fieldInputs, [], 'E1 is presentation/navigation only: nothing is editable');
     assert.deepEqual(result.nativeClassIntents, [], 'rendering a native class emits no intent');
+
+    // native-method: only what Images owns, and the absent rows really absent.
+    assert.equal(result.nativeMethod.heading, 'Method: childFirst');
+    assert.deepEqual(result.nativeMethod.fields, ['Selector', 'Side', 'Declaring class', 'Method']);
+    assert.ok(result.nativeMethod.fieldValues.includes('-> smalltalk/class/BrowseChild/method/Y2hpbGRGaXJzdA'),
+      'the Images-owned Block identity is displayed -- the point of the second authorization');
+    assert.equal(result.nativeMethod.fields.includes('Source'), false, 'a truthful absence is an omitted row');
+    assert.equal(result.nativeMethod.fields.includes('Provenance'), false);
+    assert.deepEqual(result.nativeMethod.controls, [], 'Slice A adds no operable control to a native method pane');
+    assert.deepEqual(result.nativeMethodIntents, []);
 
     // unavailable + unauthorized (the previously-uncovered kinds)
     assert.equal(result.unavailable.heading, 'unavailable-reference');

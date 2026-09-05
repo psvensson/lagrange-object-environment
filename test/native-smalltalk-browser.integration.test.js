@@ -13,8 +13,11 @@ import {
 import {
   LOCATOR_RELATION,
   NATIVE_CLASS_PRESENTATION_KIND,
+  NATIVE_METHOD_PRESENTATION_KIND,
   createNativeClassPresentationProvider,
   createNativeClassSubject,
+  createNativeMethodPresentationProvider,
+  createNativeMethodSubject,
   createNativeSmalltalkBrowser,
   resolveNativeClassLocator,
 } from '../src/native-smalltalk-browser.js';
@@ -55,7 +58,14 @@ try {
 
 const available = imagesApi !== null && typeof imagesApi.createRuntime === 'function'
   && typeof imagesApi.authorizedDescribeSmalltalkClass === 'function'
-  && typeof imagesApi.importCuisNativePackage === 'function';
+  && typeof imagesApi.authorizedDescribeSmalltalkMethod === 'function'
+  && typeof imagesApi.importCuisNativePackage === 'function'
+  // The only redefinition path reachable from source (defineMethods* refuse it),
+  // needed by the proof that the Block ref is Images' and not derived here.
+  && typeof imagesApi.reconcileMethodsFromSource === 'function'
+  // Called directly to learn the ref Images bound, so gate on it too: an Images
+  // export change must SKIP this lane, not error it.
+  && typeof imagesApi.methodBindings === 'function';
 
 // The integration lane skips silently without a sibling runtime, which would
 // make "all green" indistinguishable from "nothing ran" for the one file that
@@ -120,12 +130,14 @@ function adapterClients(runtime) {
     authorizedReadProject: imagesApi.authorizedReadProject,
     authorizedRenameProject: imagesApi.authorizedRenameProject,
     authorizedDescribeSmalltalkClass: imagesApi.authorizedDescribeSmalltalkClass,
+    authorizedDescribeSmalltalkMethod: imagesApi.authorizedDescribeSmalltalkMethod,
   };
 }
 
 function registryFor() {
   const registry = createPresentationRegistry();
   registry.register(createNativeClassPresentationProvider());
+  registry.register(createNativeMethodPresentationProvider());
   registry.register(createUnavailableRefProvider());
   registry.register(createUnauthorizedRefProvider());
   return registry;
@@ -142,7 +154,12 @@ function recordingAdapter(adapter) {
       seamCalls.push(args);
       return adapter.describeSmalltalkClass(args);
     },
+    describeSmalltalkMethod(args) {
+      seamCalls.push(args);
+      return adapter.describeSmalltalkMethod(args);
+    },
     classifySmalltalkClassReadError: (error) => adapter.classifySmalltalkClassReadError(error),
+    classifySmalltalkMethodReadError: (error) => adapter.classifySmalltalkMethodReadError(error),
   };
 }
 
@@ -408,11 +425,187 @@ test('class-read authority yields selector NAMES and no method: the Environment 
     assert.equal('method' in smalltalkClass, false);
     assert.equal('methods' in smalltalkClass, false);
 
-    // Structural, not behavioral: the adapter exposes NO method seam, so E1
-    // cannot obtain the Block behind a selector even by mistake. E2 adds it with
-    // its own independent Block authorization (Bead eij.2).
-    assert.equal(typeof t.realAdapter.describeSmalltalkMethod, 'undefined');
-    assert.equal(Object.keys(t.realAdapter).some((key) => /Method/.test(key)), false);
+    // E1 asserted this structurally — the adapter exposed no method seam at all,
+    // so the Block was unreachable by construction. E2 adds that seam, so the
+    // guarantee is now the one that actually matters and survives having a
+    // method reader in the codebase: browsing a CLASS reaches no method, and the
+    // method seam is a SEPARATE call that authorizes the Block independently
+    // (proven directly by 'class-read authority alone does not yield the Block').
+    assert.equal(typeof t.realAdapter.describeSmalltalkMethod, 'function',
+      'E2 adds the method seam; the protection is the second authorization, not absence');
+    // E1 bounded the adapter's ENTIRE method-shaped surface with a `some(/Method/)`
+    // fence. E2 must not weaken that into "the one member we added exists": the
+    // fence becomes an EXHAUSTIVE enumeration, so a later describeMethodDictionary,
+    // readMethodBlock or installMethod cannot appear silently.
+    assert.deepEqual(
+      Object.keys(t.realAdapter).filter((key) => /Method/.test(key)).sort(),
+      ['classifySmalltalkMethodReadError', 'describeSmalltalkMethod'],
+      'the adapter exposes exactly ONE method capability plus its error mapping',
+    );
+    // Browsing the class made exactly ONE seam call, and it was the CLASS one:
+    // presenting a class never reaches the method reader, by accident or design.
+    assert.equal(t.adapter.seamCalls.length, 1);
+    assert.deepEqual(Object.keys(t.adapter.seamCalls[0]).sort(), ['authority', 'classRef', 'imageId'],
+      'the class read carries no selector, so it cannot have resolved a method');
+    // And the Environment composes no method id anywhere: the Block ref is
+    // Images-owned and only the authorized method read discloses it.
+    assert.equal(JSON.stringify(presentation.context).includes('/method/'), false);
+  } finally {
+    await t.runtime.close();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// E2 SLICE A: the native METHOD read is a SECOND, independent authorization.
+// ---------------------------------------------------------------------------
+
+test('class-read authority alone does not yield the Block; the method grant does', {skip}, async () => {
+  const t = await setup();
+  try {
+    const classRef = t.importedClassRef;
+    const subject = createNativeMethodSubject({imageId: IMAGE, classRef, selector: 'baseValue'});
+
+    // (1) With ONLY the class grant — which already DISPLAYS the selector — the
+    // method read is refused. This is the whole point of the second seam.
+    const classOnly = await t.browser.browseMethod(subject, {authority: t.authorityFor(classRef.objectId)});
+    assert.equal(classOnly.kind, 'unauthorized-reference',
+      'class-read authority may show that baseValue exists; it must not reveal the Block behind it');
+    assert.equal(classOnly.context.reason, 'not authorized to read this native method');
+
+    // The Environment cannot even name the Block yet: nothing in the failure
+    // presentation carries a method id.
+    assert.equal(JSON.stringify(classOnly.context).includes('/method/'), false,
+      'a denied method read discloses no Block locator');
+
+    // (2) Images owns the Block ref. The test learns it from Images' OWN binding
+    // enumeration — never by composing an id — and only to assert equality.
+    const [binding] = await imagesApi.methodBindings({images: t.runtime.images, imageId: IMAGE, classRef});
+    assert.equal(binding.selector, 'baseValue');
+
+    const granted = await t.browser.browseMethod(subject, {
+      authority: t.authorityFor(classRef.objectId, binding.method.objectId),
+    });
+    assert.equal(granted.kind, NATIVE_METHOD_PRESENTATION_KIND);
+    const {smalltalkMethod} = granted.context;
+    assert.equal(smalltalkMethod.format, 'smalltalk-method-description/v1');
+    assert.equal(smalltalkMethod.selector, 'baseValue');
+    assert.equal(smalltalkMethod.side, 'instance');
+    assert.deepEqual(smalltalkMethod.class, classRef, 'the DECLARING class, not a receiver');
+    assert.deepEqual(smalltalkMethod.method, binding.method, 'the exact Block Images has bound');
+    // Truthful absences, preserved as null rather than invented or omitted from
+    // the record (the PROJECTION omits their rows; the record keeps the fact).
+    assert.equal(smalltalkMethod.source, null);
+    assert.equal(smalltalkMethod.provenance, null);
+
+    // The description is Images' object, by identity — not a copy.
+    const descriptor = t.browser.toPresentationDescriptor(granted);
+    assertDataRepresentable(descriptor, 'presentationDescriptor');
+    assert.equal(descriptor.parameters.smalltalkMethod, smalltalkMethod);
+
+    // Origin-blindness for the METHOD is asserted STRUCTURALLY, not by substring
+    // scan. A scan over `selector` and `side` would be theatre — both are pinned
+    // to exact values three lines above — and a scan over the Block id would be
+    // WORSE than useless: it is base64url over caller-chosen content, so a short
+    // token like 'oop' can appear there by chance (Bead bus). What actually
+    // carries origin-blindness is that every field is pinned by identity to what
+    // Images returned, and that the record has no field to smuggle origin in.
+    assert.deepEqual(Object.keys(smalltalkMethod).sort(),
+      ['class', 'format', 'method', 'provenance', 'selector', 'side', 'source'],
+      'no extra field smuggles origin or storage into the record');
+  } finally {
+    await t.runtime.close();
+  }
+});
+
+test('the Block ref comes from Images and is NOT derivable from the class ref and selector', {skip}, async () => {
+  const t = await setup();
+  try {
+    const classRef = t.importedClassRef;
+    // A FIRST definition's Block id is `<classId>/method/<b64url(selector)>` —
+    // derivable from exactly what the Environment holds. Asserting against that
+    // would be green even for an implementation that composed the id locally and
+    // never called the seam. REDEFINING the method is what makes the assertion
+    // discriminating: the bound ref then carries a `/revision/` segment over the
+    // compiled program, which {classRef, selector} cannot produce.
+    //
+    // reconcileMethodsFromSource is the only redefinition path reachable FROM
+    // SOURCE (defineMethods/defineMethodsFromSource set allowRedefinition:false
+    // and throw; reconcileMethods is its program-form sibling). It is IMAGES-owned
+    // test setup, not Environment method editing, which stays out of E2.
+    const [before] = await imagesApi.methodBindings({images: t.runtime.images, imageId: IMAGE, classRef});
+    await imagesApi.reconcileMethodsFromSource({
+      images: t.runtime.images, compilation: t.runtime.compilation, imageId: IMAGE, classRef,
+      methods: [{selector: 'baseValue', source: '[ ^7 ]'}],
+    });
+    const [after] = await imagesApi.methodBindings({images: t.runtime.images, imageId: IMAGE, classRef});
+    assert.notDeepEqual(after.method, before.method, 'the redefinition actually rebound the selector');
+    assert.ok(after.method.objectId.includes('/revision/'),
+      `a redefinition must produce a revision id, got ${after.method.objectId}`);
+
+    const presentation = await t.browser.browseMethod(
+      createNativeMethodSubject({imageId: IMAGE, classRef, selector: 'baseValue'}),
+      {authority: t.authorityFor(classRef.objectId, after.method.objectId)},
+    );
+    assert.deepEqual(presentation.context.smalltalkMethod.method, after.method,
+      'the description carries the ref Images has bound NOW, which no local derivation could have produced');
+
+    // The stale pre-redefinition Block grant no longer opens the method: authority
+    // names an object, and the object changed.
+    const stale = await t.browser.browseMethod(
+      createNativeMethodSubject({imageId: IMAGE, classRef, selector: 'baseValue'}),
+      {authority: t.authorityFor(classRef.objectId, before.method.objectId)},
+    );
+    assert.equal(stale.kind, 'unauthorized-reference');
+  } finally {
+    await t.runtime.close();
+  }
+});
+
+test('the method seam is no existence oracle, and its licensed distinction is honest', {skip}, async () => {
+  const t = await setup();
+  try {
+    const classRef = t.importedClassRef;
+    const nothing = t.runtime.authority.issue({principal: 'mallory', grants: []});
+    const classOnly = t.authorityFor(classRef.objectId);
+
+    // WITHOUT class authority: an implemented and an unimplemented selector are
+    // the IDENTICAL unauthorized outcome. Images authorizes the class before it
+    // resolves anything, so nothing about existence leaks.
+    const deniedImplemented = await t.browser.browseMethod(
+      createNativeMethodSubject({imageId: IMAGE, classRef, selector: 'baseValue'}), {authority: nothing});
+    const deniedMissing = await t.browser.browseMethod(
+      createNativeMethodSubject({imageId: IMAGE, classRef, selector: 'neverImplemented'}), {authority: nothing});
+    // Compare the WHOLE rendered documents. A hand-picked projection of
+    // {kind, reason, objectId} would reduce to `kind === kind`, because the
+    // reason is a constant selected BY kind and the objectId is the class's by
+    // construction — it would advertise coverage it does not have.
+    assert.deepEqual(
+      semanticUiForPresentation(t.browser.toPresentationDescriptor(deniedImplemented)),
+      semanticUiForPresentation(t.browser.toPresentationDescriptor(deniedMissing)),
+      'an implemented and an unimplemented selector are byte-identical without class authority',
+    );
+    assert.equal(deniedImplemented.kind, 'unauthorized-reference');
+
+    // WITH class authority the two DO differ — and that is licensed, not a leak:
+    // the class description already listed every selector the class implements,
+    // so "this class does not implement that selector" tells the caller nothing
+    // a class read did not. Recorded on Bead azj as a collapsed cause.
+    const missing = await t.browser.browseMethod(
+      createNativeMethodSubject({imageId: IMAGE, classRef, selector: 'neverImplemented'}), {authority: classOnly});
+    assert.equal(missing.kind, 'unavailable-reference',
+      'a selector the class does not implement is unavailable, not unauthorized');
+    const unreadableBlock = await t.browser.browseMethod(
+      createNativeMethodSubject({imageId: IMAGE, classRef, selector: 'baseValue'}), {authority: classOnly});
+    assert.equal(unreadableBlock.kind, 'unauthorized-reference',
+      'an implemented selector whose Block the caller may not read is unauthorized');
+
+    // Every failure reason is one of this module's own two constants — never an
+    // Images message, which is what could carry a storage id. Asserted by
+    // equality rather than by scanning for tokens the fixed strings obviously
+    // do not contain.
+    assert.equal(missing.context.reason, 'this native method could not be read');
+    assert.equal(unreadableBlock.context.reason, 'not authorized to read this native method');
+    assert.equal(deniedImplemented.context.reason, 'not authorized to read this native method');
   } finally {
     await t.runtime.close();
   }

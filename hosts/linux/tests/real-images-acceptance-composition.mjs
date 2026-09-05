@@ -43,6 +43,7 @@ import {
   authorizedReadProject,
   authorizedRenameProject,
   authorizedDescribeSmalltalkClass,
+  authorizedDescribeSmalltalkMethod,
   createProject,
   addProjectMember,
   projectObjectId,
@@ -83,6 +84,7 @@ async function setup({imageId, ids}) {
     authorizedReadProject,
     authorizedRenameProject,
     authorizedDescribeSmalltalkClass,
+    authorizedDescribeSmalltalkMethod,
   });
   await adapter.ensureSchema(imageId, ids);
 

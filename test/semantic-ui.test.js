@@ -34,6 +34,9 @@ const CASES = {
   // test/native-smalltalk-browser.test.js, because that distinction is the one
   // most easily collapsed by accident.
   'native-class': {kind: 'native-class', subject: {kind: 'native-class', imageId: 'img', classRef: ref('smalltalk/class/BrowseChild')}, parameters: {smalltalkClass: {format: 'smalltalk-class-description/v1', class: ref('smalltalk/class/BrowseChild'), name: 'BrowseChild', side: 'instance', superclass: ref('smalltalk/class/BrowseBase'), classSide: ref('smalltalk/metaclass/BrowseChild'), layout: {instanceVariables: ['baseValue', 'childFirst'], indexed: 'none'}, selectors: ['childFirst', 'childSecond'], provenance: null}, locators: [{relation: 'superclass', ref: ref('smalltalk/class/BrowseBase')}, {relation: 'class-side', ref: ref('smalltalk/metaclass/BrowseChild')}]}},
+  // The authorized native METHOD description (Images ADR 0087). source and
+  // provenance are null, so neither row is emitted at all.
+  'native-method': {kind: 'native-method', subject: {kind: 'native-method', imageId: 'img', classRef: ref('smalltalk/class/BrowseChild'), selector: 'childFirst'}, parameters: {smalltalkMethod: {format: 'smalltalk-method-description/v1', class: ref('smalltalk/class/BrowseChild'), side: 'instance', selector: 'childFirst', method: ref('smalltalk/class/BrowseChild/method/Y2hpbGRGaXJzdA'), source: null, provenance: null}}},
   unavailable: {kind: 'unavailable-reference', subject: ref('obj-gone'), parameters: {reason: 'not found'}},
   unauthorized: {kind: 'unauthorized-reference', subject: ref('obj-secret'), parameters: {reason: 'denied'}},
 };

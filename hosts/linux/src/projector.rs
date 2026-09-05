@@ -64,6 +64,10 @@ pub fn project(descriptor: &Value) -> Result<SemanticUi, String> {
         .get("smalltalkClass")
         .cloned()
         .unwrap_or(Value::Object(Map::new()));
+    let smalltalk_method = params
+        .get("smalltalkMethod")
+        .cloned()
+        .unwrap_or(Value::Object(Map::new()));
 
     let mut children: Vec<Value> = Vec::new();
 
@@ -78,6 +82,10 @@ pub fn project(descriptor: &Value) -> Result<SemanticUi, String> {
         "native-class" => format!(
             "Class: {}",
             smalltalk_class.get("name").and_then(|n| n.as_str()).unwrap_or("")
+        ),
+        "native-method" => format!(
+            "Method: {}",
+            smalltalk_method.get("selector").and_then(|s| s.as_str()).unwrap_or("")
         ),
         _ => kind.to_string(), // unavailable-reference | unauthorized-reference
     };
@@ -248,6 +256,31 @@ pub fn project(descriptor: &Value) -> Result<SemanticUi, String> {
         }
         // `provenance` is deliberately NOT rendered; Images owns no durable
         // native-class provenance today (Images jtz.1).
+    } else if kind == "native-method" {
+        // The authorized native Smalltalk METHOD description (Images ADR 0087).
+        // `source` and `provenance` are truthful ABSENCES and their rows are
+        // OMITTED, exactly as the JS projector omits them: an empty row would
+        // suggest a durable field exists.
+        children.push(json!({
+            "kind": "field",
+            "label": "Selector",
+            "text": smalltalk_method.get("selector").map(value_text).unwrap_or_default(),
+        }));
+        children.push(json!({
+            "kind": "field",
+            "label": "Side",
+            "text": smalltalk_method.get("side").map(value_text).unwrap_or_default(),
+        }));
+        children.push(json!({
+            "kind": "field",
+            "label": "Declaring class",
+            "text": smalltalk_method.get("class").map(value_text).unwrap_or_default(),
+        }));
+        children.push(json!({
+            "kind": "field",
+            "label": "Method",
+            "text": smalltalk_method.get("method").map(value_text).unwrap_or_default(),
+        }));
     } else if kind == "unavailable-reference" || kind == "unauthorized-reference" {
         let base = if kind == "unauthorized-reference" { "Not authorized" } else { "Unavailable" };
         let reason = match params.get("reason").and_then(|r| r.as_str()) {

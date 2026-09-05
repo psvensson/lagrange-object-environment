@@ -1,0 +1,35 @@
+{
+  "kind": "semantic-ui",
+  "version": 1,
+  "root": {
+    "kind": "group",
+    "title": "Method: childFirst",
+    "children": [
+      {
+        "kind": "text",
+        "role": "heading",
+        "text": "Method: childFirst"
+      },
+      {
+        "kind": "field",
+        "label": "Selector",
+        "text": "childFirst"
+      },
+      {
+        "kind": "field",
+        "label": "Side",
+        "text": "instance"
+      },
+      {
+        "kind": "field",
+        "label": "Declaring class",
+        "text": "-> smalltalk/class/BrowseChild"
+      },
+      {
+        "kind": "field",
+        "label": "Method",
+        "text": "-> smalltalk/class/BrowseChild/method/Y2hpbGRGaXJzdA"
+      }
+    ]
+  }
+}

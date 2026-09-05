@@ -27,12 +27,15 @@ import {UNAVAILABLE_REF_KIND, UNAUTHORIZED_REF_KIND} from './object-navigator.js
  * `browse()` under that object's OWN authority, which the caller threads per
  * call and which is never stored here.
  *
- * SELECTOR NAMES ARE NOT METHODS. The description exposes the class's own
- * canonical selector names and no method refs. Class-read authority may show
- * that `foo` exists; it must not reveal the Block that implements it. The
- * adapter exposes no method seam at all, so that is structurally true here
- * rather than merely untested. E2 adds method browsing with its own,
- * independent Block authorization.
+ * SELECTOR NAMES ARE NOT METHODS. A class description exposes the class's own
+ * canonical selector names and NO method refs. Class-read authority may show
+ * that `foo` exists; it must not reveal the Block that implements it. Browsing
+ * a method is therefore a SECOND, separately authorized read through its own
+ * seam (`browseMethod`), never a richer reading of the class description: the
+ * Images method seam re-resolves the selector against the class's CURRENT
+ * dictionary and authorizes the resolved Block before disclosing its locator.
+ * The Environment never derives, predicts or reconstructs that Block ref — it
+ * composes no object id at all.
  *
  * NOT OWNED HERE: discovery (`PresentationRegistry`), rendering, view admission
  * and lifecycle (`Compositor`), generic object navigation (`ObjectNavigator`),
@@ -45,7 +48,10 @@ import {UNAVAILABLE_REF_KIND, UNAUTHORIZED_REF_KIND} from './object-navigator.js
 
 const NATIVE_CLASS_SUBJECT_KIND = 'native-class';
 const NATIVE_CLASS_PRESENTATION_KIND = 'native-class';
+const NATIVE_METHOD_SUBJECT_KIND = 'native-method';
+const NATIVE_METHOD_PRESENTATION_KIND = 'native-method';
 const SMALLTALK_CLASS_DESCRIPTION_V1 = 'smalltalk-class-description/v1';
+const SMALLTALK_METHOD_DESCRIPTION_V1 = 'smalltalk-method-description/v1';
 
 // The relations a class description owns and that a browser may follow. Each is
 // a LOCATOR naming an independently authoritative object, never an inherited
@@ -64,6 +70,8 @@ const LOCATOR_RELATION = Object.freeze({
 // names the outcome. Bead azj records what the collapse costs.
 const UNAUTHORIZED_REASON = 'not authorized to read this native class';
 const UNAVAILABLE_REASON = 'this native class could not be read';
+const METHOD_UNAUTHORIZED_REASON = 'not authorized to read this native method';
+const METHOD_UNAVAILABLE_REASON = 'this native method could not be read';
 
 class NativeClassPresentationError extends Error {
   constructor(message, {failures = []} = {}) {
@@ -121,6 +129,91 @@ function nativeClassPresentationId(subject) {
   // JSON string encoding keeps the pair unambiguous when either opaque id
   // contains punctuation (native class ids routinely do).
   return `native-class:${JSON.stringify(subject.imageId)}:${JSON.stringify(subject.classRef.objectId)}`;
+}
+
+/**
+ * The native-method subject: a class ref plus ONE canonical selector.
+ *
+ * This is a BROWSE LOCATOR, not a manufactured method identity. The pair is
+ * something the Environment legitimately holds before any method authorization,
+ * because an authorized CLASS description discloses the class's own selector
+ * names — so naming {class, selector} reveals nothing that class read did not.
+ * The method's identity is the Block ref, which only Images owns and only the
+ * authorized method read discloses.
+ *
+ * It deliberately does NOT police that the selector came from a description:
+ * that is how the string legitimately arrives, not an invariant this API can
+ * enforce, and a guessed selector is harmless — Images re-resolves it against
+ * the CURRENT dictionary, so it either does not exist or yields the Block that
+ * is bound right now. A pinned-ref is rejected for E1's reason: a caller
+ * mistake must not come back looking like a missing method.
+ */
+function createNativeMethodSubject({imageId, classRef, selector} = {}) {
+  requiredText(imageId, 'native method subject imageId');
+  if (!classRef || typeof classRef !== 'object' || classRef.kind !== 'ref') {
+    throw new TypeError('native method subject requires an unpinned {kind: "ref"} classRef');
+  }
+  requiredText(classRef.objectId, 'native method subject classRef.objectId');
+  if (classRef.imageId !== imageId) {
+    throw new TypeError(
+      `native method subject classRef must name image ${imageId}, got ${classRef.imageId}`,
+    );
+  }
+  requiredText(selector, 'native method subject selector');
+  return Object.freeze({kind: NATIVE_METHOD_SUBJECT_KIND, imageId, classRef, selector});
+}
+
+function requireNativeMethodSubject(subject) {
+  if (!subject || subject.kind !== NATIVE_METHOD_SUBJECT_KIND) {
+    throw new TypeError('NativeSmalltalkBrowser requires a native-method subject');
+  }
+  return createNativeMethodSubject(subject);
+}
+
+function sameNativeMethodSubject(a, b) {
+  return Boolean(a && b
+    && a.kind === NATIVE_METHOD_SUBJECT_KIND && b.kind === NATIVE_METHOD_SUBJECT_KIND
+    && a.imageId === b.imageId
+    && a.classRef?.objectId === b.classRef?.objectId
+    && a.selector === b.selector);
+}
+
+function nativeMethodPresentationId(subject) {
+  return `native-method:${JSON.stringify(subject.imageId)}:${JSON.stringify(subject.classRef.objectId)}:${JSON.stringify(subject.selector)}`;
+}
+
+/**
+ * The native-method presentation provider. Presents the Images description of
+ * ONE method, preserved by identity, for the subject that was browsed.
+ */
+function createNativeMethodPresentationProvider() {
+  return Object.freeze({
+    id: 'native-smalltalk-method',
+    present(subject, context = {}) {
+      if (!subject || subject.kind !== NATIVE_METHOD_SUBJECT_KIND) return null;
+      const smalltalkMethod = context.smalltalkMethod;
+      if (!smalltalkMethod || typeof smalltalkMethod !== 'object'
+          || smalltalkMethod.format !== SMALLTALK_METHOD_DESCRIPTION_V1) {
+        throw new TypeError(
+          `native method presentation requires the canonical ${SMALLTALK_METHOD_DESCRIPTION_V1} description`,
+        );
+      }
+      if (smalltalkMethod.selector !== subject.selector
+          || smalltalkMethod.class?.objectId !== subject.classRef.objectId
+          || smalltalkMethod.class?.imageId !== subject.imageId) {
+        throw new TypeError('native method presentation requires the description of ITS OWN subject');
+      }
+      return new Presentation({
+        id: nativeMethodPresentationId(subject),
+        subject,
+        kind: NATIVE_METHOD_PRESENTATION_KIND,
+        // Images' record by IDENTITY. `method` is the Block ref Images bound —
+        // the method's identity, disclosed only after its own authorization.
+        context: {smalltalkMethod},
+        state: {},
+      });
+    },
+  });
 }
 
 /**
@@ -234,6 +327,12 @@ function createNativeSmalltalkBrowser({adapter, presentationRegistry} = {}) {
   if (!adapter || typeof adapter.describeSmalltalkClass !== 'function') {
     throw new TypeError('createNativeSmalltalkBrowser requires an adapter with describeSmalltalkClass');
   }
+  if (typeof adapter.describeSmalltalkMethod !== 'function') {
+    throw new TypeError('createNativeSmalltalkBrowser requires an adapter with describeSmalltalkMethod');
+  }
+  if (typeof adapter.classifySmalltalkMethodReadError !== 'function') {
+    throw new TypeError('createNativeSmalltalkBrowser requires adapter.classifySmalltalkMethodReadError');
+  }
   if (typeof adapter.classifySmalltalkClassReadError !== 'function') {
     // Loud: without the interaction owner's mapping this module would have to
     // classify Images errors itself, which is precisely the second decider the
@@ -315,17 +414,91 @@ function createNativeSmalltalkBrowser({adapter, presentationRegistry} = {}) {
     return exactNativeClassPresentation({subject: required, presentations, failures});
   }
 
-  return Object.freeze({browse, toPresentationDescriptor});
+  // A failed METHOD read materializes through the same generic subjects, with
+  // this module's own fixed reasons and the adapter's classification.
+  function methodReadFailureSubject(subject, error) {
+    const unauthorized = adapter.classifySmalltalkMethodReadError(error) === 'unauthorized';
+    return Object.freeze({
+      kind: unauthorized ? UNAUTHORIZED_REF_KIND : UNAVAILABLE_REF_KIND,
+      imageId: subject.imageId,
+      // The CLASS object is the thing the caller named and may already read; the
+      // Block's id is deliberately not used, because a denied caller must not
+      // learn it from a failure presentation.
+      objectId: subject.classRef.objectId,
+      reason: unauthorized ? METHOD_UNAUTHORIZED_REASON : METHOD_UNAVAILABLE_REASON,
+    });
+  }
+
+  /**
+   * browseMethod(subject, {authority}) -> Promise<Presentation>
+   *
+   * ONE authorized read of ONE method. This is a SECOND authorization, never a
+   * richer reading of a class description: Images checks the class, resolves the
+   * selector against that class's CURRENT dictionary, then checks the resolved
+   * Block independently before disclosing its locator. Holding class-read
+   * authority is therefore not enough, which is the point.
+   */
+  async function browseMethod(subject, {authority = null} = {}) {
+    const required = requireNativeMethodSubject(subject);
+    let smalltalkMethod = null;
+    try {
+      smalltalkMethod = await adapter.describeSmalltalkMethod({
+        imageId: required.imageId,
+        classRef: required.classRef,
+        selector: required.selector,
+        authority,
+      });
+    } catch (error) {
+      const failed = methodReadFailureSubject(required, error);
+      const {presentations, failures} = presentationRegistry.discover(failed);
+      if (presentations.length !== 1) {
+        throw new NativeClassPresentationError(
+          presentations.length === 0
+            ? `no presentation was discovered for a ${failed.kind} native method read of ${failed.imageId}/${failed.objectId}`
+            : `ambiguous presentations for a ${failed.kind} native method read of ${failed.imageId}/${failed.objectId}: ${presentations.length}`,
+          {failures},
+        );
+      }
+      return presentations[0];
+    }
+    const {presentations, failures} = presentationRegistry.discover(required, {smalltalkMethod});
+    const candidates = presentations.filter((presentation) => (
+      sameNativeMethodSubject(presentation.subject, required)
+    ));
+    const where = `${required.imageId}/${required.classRef.objectId}>>${required.selector}`;
+    if (candidates.length !== 1) {
+      throw new NativeClassPresentationError(
+        candidates.length === 0
+          ? `no native method presentation was discovered for ${where}`
+          : `ambiguous native method presentations for ${where}: ${candidates.length}`,
+        {failures},
+      );
+    }
+    if (candidates[0].kind !== NATIVE_METHOD_PRESENTATION_KIND) {
+      throw new NativeClassPresentationError(
+        `the presentation discovered for ${where} is ${candidates[0].kind}, not ${NATIVE_METHOD_PRESENTATION_KIND}`,
+        {failures},
+      );
+    }
+    return candidates[0];
+  }
+
+  return Object.freeze({browse, browseMethod, toPresentationDescriptor});
 }
 
 export {
   LOCATOR_RELATION,
   NATIVE_CLASS_PRESENTATION_KIND,
   NATIVE_CLASS_SUBJECT_KIND,
+  NATIVE_METHOD_PRESENTATION_KIND,
+  NATIVE_METHOD_SUBJECT_KIND,
   NativeClassPresentationError,
   SMALLTALK_CLASS_DESCRIPTION_V1,
+  SMALLTALK_METHOD_DESCRIPTION_V1,
   createNativeClassPresentationProvider,
   createNativeClassSubject,
+  createNativeMethodPresentationProvider,
+  createNativeMethodSubject,
   createNativeSmalltalkBrowser,
   // nativeClassLocators is deliberately NOT exported: the ordered locator list
   // has ONE locus (browse), and an importable deriver would quietly reopen the

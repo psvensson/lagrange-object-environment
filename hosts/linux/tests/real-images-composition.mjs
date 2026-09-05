@@ -35,6 +35,7 @@ import {
   authorizedReadProject,
   authorizedRenameProject,
   authorizedDescribeSmalltalkClass,
+  authorizedDescribeSmalltalkMethod,
   createProject,
   addProjectMember,
   projectObjectId,
@@ -75,6 +76,7 @@ async function setup({imageId, ids}) {
     authorizedReadProject,
     authorizedRenameProject,
     authorizedDescribeSmalltalkClass,
+    authorizedDescribeSmalltalkMethod,
     // Part 2's ObjectNavigator consumes this same public binding. Passing it
     // here keeps the composition surface identical without claiming Navigator
     // behavior in this headless adapter-only slice.
