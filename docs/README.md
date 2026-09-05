@@ -3,6 +3,7 @@
 The documents here define the object-environment boundary before they define a visual style or toolkit.
 
 - [Architecture](architecture.md) — layers and ownership
+- [One semantic browser across language personalities](architecture/semantic-browser.md) — one browser model/interaction loop for all languages; personalities contribute only genuinely language-specific semantic facets and Commands
 - [Portable client host boundary](architecture/portable-client-host.md) — "no browser required" plus the WASM/WIT-centered client execution direction (ADRs 0013/0014); native per-language embeddings are bounded fallbacks, not the language-support architecture
 - [RendererAdapter contract](contracts/renderer-adapter.md) — the host-portability boundary between the environment and a host's renderer
 - [Core concepts](concepts.md) — Image, Project, Presentation, Command, Perspective and Session
