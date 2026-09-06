@@ -58,13 +58,30 @@ function createCommandRouter({compositor, commandRegistry, dispatch, authorityPr
     }
 
     // Applicability ONLY: discover candidate commands for this subject. This is
-    // never authorization. Selection among applicable commands is the router's
-    // UI-invocation policy: an explicit context.commandId wins; otherwise the
-    // minimal default is the first applicable command.
+    // never authorization.
     const {commands} = commandRegistry.discover(subject, context);
-    const command = commands.find((c) => c.id === context.commandId) ?? commands[0] ?? null;
+
+    // SELECTION POLICY. An explicit `context.commandId` is a STATEMENT OF INTENT,
+    // not a hint: it dispatches exactly that Command, or NOTHING.
+    //
+    // This used to read `commands.find(...) ?? commands[0] ?? null`, which meant a
+    // caller could ask for X and, if X was absent or inapplicable, silently get Y
+    // executed against its subject. That is wrong on its own terms, and it forced
+    // a workaround on every caller forever: ownership row 65 already required each
+    // edit binding to declare its own commandId precisely so the router "could not
+    // fall back to an arbitrary applicable Command". The rule belongs here, in the
+    // owner, not in a discipline imposed on consumers.
+    //
+    // With NO commandId supplied the previous default is unchanged: the first
+    // applicable Command. That path was never the defect.
+    const requested = context.commandId;
+    const command = requested === undefined || requested === null
+      ? (commands[0] ?? null)
+      : (commands.find((c) => c.id === requested) ?? null);
     if (!command) {
-      return null; // no applicable command
+      // Either nothing applies, or the caller named a Command that is absent or
+      // inapplicable for this subject. Both are "not routed"; neither dispatches.
+      return null;
     }
 
     // Authorization happens AT DISPATCH: a fresh authority context from the
