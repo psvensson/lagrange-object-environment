@@ -77,12 +77,22 @@ function isAuthorityError(error) {
 //
 // `SmalltalkMethodReplacementContentionError` is DELIBERATELY ABSENT and must stay
 // absent. Images is explicit that it is TRANSIENT and NOT staleness: the observed
-// position did not move and was not advanced, and the honest response is to retry
-// from a fresh authorized read. Mapping it here would turn a retryable contention
-// into a false "someone else changed this" report -- a lie about what happened to
-// the user's work. It stays a CommandExecutionError until a consumer exists that
-// would actually act on a transient/retry outcome; inventing that outcome now
-// would be an unfalsifiable taxonomy.
+// position did not move and was not advanced. Mapping it here would turn a
+// retryable contention into a false "someone else changed this" report -- a lie
+// about what happened to the user's work. It stays a CommandExecutionError until a
+// consumer exists that would actually act on a transient/retry outcome; inventing
+// that outcome now would be an unfalsifiable taxonomy.
+//
+// WHAT A CONSUMER DOES WITH IT, stated to match the policy E3 actually implements
+// rather than the one an earlier draft of this comment described. That draft said
+// "the honest response is to retry from a fresh authorized read", which reads as
+// an automatic reread and contradicts NativeSmalltalkBrowser: because the observed
+// position did NOT move, the descriptor on screen is still exactly what Images
+// would answer, so the display is LEFT ALONE and the failure is reported as an
+// ordinary execution failure. Retrying is then the user's decision, taken against
+// a display that is already current -- not a reread this owner or the browser
+// performs on their behalf. Only a CONFLICT, where the position did move, earns an
+// authoritative reread.
 function isConflictError(error) {
   return Boolean(
     error &&

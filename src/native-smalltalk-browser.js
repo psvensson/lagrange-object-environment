@@ -879,20 +879,47 @@ function createNativeSmalltalkBrowser({adapter, presentationRegistry, compositor
         return rereadDisplayedMethod();
       },
       onInputError: async (error) => {
-        await onReplacementError(error);
+        // REPORTING MUST NOT VETO RECOVERY. The composition owns failure
+        // presentation, and it is told first -- but a reporter that THROWS must not
+        // leave the view showing a method position that has moved. An earlier
+        // version awaited the reporter directly, so its failure skipped the reread
+        // entirely and the stale display survived; a review caught it and the
+        // falsifier for it now lives beside the others.
+        let reportFailure = null;
+        try {
+          await onReplacementError(error);
+        } catch (failure) {
+          reportFailure = failure;
+        }
+
         // The Environment's OWN conflict outcome (CommandDispatcher's taxonomy),
         // not an Images error class: a lost update means the position moved, so
         // the display is stale and must be replaced by authoritative truth.
-        // Images' transient contention deliberately does NOT arrive as one.
-        if (error?.name !== 'CommandConflictError') return null;
-        try {
-          return await rereadDisplayedMethod();
-        } catch (rereadError) {
-          // Reported ONCE, and never followed by another reread: a reporting loop
-          // would be worse than the failure it is reporting.
-          await onReplacementError(rereadError);
-          return null;
+        // Images' transient contention deliberately does NOT arrive as one, and a
+        // still-current display is left exactly as it is.
+        if (error?.name === 'CommandConflictError') {
+          try {
+            await rereadDisplayedMethod();
+          } catch (rereadError) {
+            // Reported at most ONCE, and never followed by another reread: a
+            // reporting loop would be worse than the failure it reports. A reporter
+            // that is already known to throw is not asked again.
+            if (reportFailure === null) {
+              try {
+                await onReplacementError(rereadError);
+              } catch (secondFailure) {
+                reportFailure = secondFailure;
+              }
+            }
+          }
         }
+
+        // Surfaced only AFTER recovery, and contained by the shell's own
+        // report path (`reportInputError` swallows a failing reporter so it cannot
+        // start a second reporting loop). Rethrowing keeps a broken reporter from
+        // being invisible without letting it block the repair.
+        if (reportFailure !== null) throw reportFailure;
+        return null;
       },
     });
   }

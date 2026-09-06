@@ -342,6 +342,33 @@ test('a reread that itself FAILS is reported once, and never starts a reporting 
   assert.equal(h.reads.length, 1, 'the failed reread reached no seam, and no second reread was attempted');
 });
 
+test('a THROWING reporter does not veto the conflict reread: the stale view is still repaired', async () => {
+  // The defect this rejects, found by review: reporting and recovery were
+  // sequential awaits, so `await onReplacementError(conflict)` throwing meant the
+  // authoritative reread never ran and the view kept showing a method position
+  // that had MOVED. A broken error channel is a bad day; a silently stale display
+  // after a lost update is a wrong answer.
+  const h = harness();
+  const reporterDied = new Error('the composition cannot present failures');
+  const binding = h.browser.replacementInputBinding({
+    authorityFor: () => 'A',
+    onReplacementError: () => { throw reporterDied; },
+  });
+  const before = await openMethod(h);
+  assert.equal(h.reads.length, 1);
+
+  const conflict = Object.assign(new Error('conflicted'), {name: 'CommandConflictError'});
+  const thrown = await binding.onInputError(conflict).then(() => null, (e) => e);
+
+  assert.equal(h.reads.length, 2, 'the reread happened even though reporting failed');
+  const after = h.compositor.liveView(NATIVE_SMALLTALK_VIEW_ID).presentationDescriptor;
+  assert.notEqual(after, before, 'the stale display was repaired');
+  // The reporter's own failure is surfaced AFTER the repair, not swallowed: the
+  // shell contains it (a failing reporter must not start a second reporting loop),
+  // so rethrowing keeps a broken channel visible without blocking recovery.
+  assert.equal(thrown, reporterDied);
+});
+
 test('the binding refuses a composition that cannot report or cannot authorize', () => {
   const h = harness();
   assert.throws(() => h.browser.replacementInputBinding({onReplacementError: () => {}}), /authorityFor/);

@@ -1029,9 +1029,10 @@ test('E2 acceptance: a re-opened view keeps its binding under a NEW handle; the 
   }
 });
 
+
 // ---------------------------------------------------------------------------
 // E3 (Bead eij.3): REPLACE one imported native method through the ORDINARY
-// authorized Command lane, and show a fresh authoritative reread.
+// authorized Command lane.
 //
 // The vertical under proof, end to end and with nothing stubbed in the middle:
 //
@@ -1040,20 +1041,29 @@ test('E2 acceptance: a re-opened view keeps its binding under a NEW handle; the 
 //   ->  CommandRouter (explicit commandId)  ->  authorityProvider (fresh)
 //   ->  CommandDispatcher  ->  replace-native-method Command
 //   ->  ImageClientAdapter.replaceSmalltalkMethod
-//   ->  Images' authorizedReplaceSmalltalkMethod (the ONE authorized write)
-//   ->  fresh authorized reread  ->  re-presented into the SAME logical view.
+//   ->  Images' authorizedReplaceSmalltalkMethod (the ONE authorized write).
 //
-// WHY THE SETUP MOVES THE BINDING TWICE FIRST. The composition must hold
-// `object/read` on the Block the reread will land on, and Images' authority
-// service has no wildcards -- a grant names one object id. A method revision id
-// is CONTENT-ADDRESSED (Images composes it over the compiled program), so the id
-// the user's replacement will produce can be learned by performing that exact
-// replacement once, up front, and then moving the binding back. The test then
-// ASSERTS that the id it pre-granted is the one the reread actually lands on, so
-// the assumption is a checked property rather than a hidden dependency: if Images
-// ever stopped content-addressing revisions, this goes red rather than quietly
-// passing on a broader grant.
-const SOURCE_B = '[ ^11 ]';
+// THE CONSUMER'S AUTHORITY IS FIXED BEFORE THE OPERATION, and this is the whole
+// discipline of this fixture. A first draft of it staged the future replacements
+// up front, learned their Block ids through Images-private helpers, moved the
+// binding back, and PRE-GRANTED `object/read` on every id the user flow would
+// later land on. That staged data legitimately -- and then handed the acceptance
+// FUTURE AUTHORITY INFORMATION the production Environment can neither derive nor
+// obtain. It made "the fresh reread works" true only because the fixture knew
+// every future Block id, which is exactly the wrong implementation these proofs
+// must reject. An adversarial review caught it; the pre-staging is gone.
+//
+// What a composition may legitimately hold before a replacement:
+//   * `object/read` on the declaring Class -- from browsing it;
+//   * `object/read` on the Block CURRENTLY bound -- the one the authorized method
+//     read it is displaying already disclosed;
+//   * `object/write` on the declaring Class -- what the replacement demands.
+// Nothing may name a Block that does not exist yet, because nothing could.
+//
+// (The first grant of the pair is staged here, as a deployment's policy would
+// already have issued it for the method being browsed. That pre-existing E2-era
+// circularity -- a method read needs the Block grant that only a method read
+// discloses -- is not what these proofs are about; the FUTURE id is.)
 const SOURCE_C = '[ ^22 ]';
 const SOURCE_D = '[ ^33 ]';
 
@@ -1066,14 +1076,20 @@ async function e3Setup() {
     grants: [{operation: imagesApi.OBJECT_WRITE_OPERATION, resource: imagesApi.objectResource(IMAGE, classRef.objectId)}],
   });
 
+  // THE TEST'S OWN OBSERVATION, never the consumer's. An observer standing
+  // outside the Environment may look at Images however it likes; what it must not
+  // do is feed that knowledge into the composition's authority, and it does not.
   const boundNow = async () => (
     await imagesApi.methodBindings({images: t.runtime.images, imageId: IMAGE, classRef})
   ).find((b) => b.selector === selector).method;
+  const observeMethod = async () => t.realAdapter.describeSmalltalkMethod({
+    imageId: IMAGE, classRef, selector,
+    authority: t.authorityFor(classRef.objectId, (await boundNow()).objectId),
+  });
 
   // A replacement performed OUTSIDE the Environment's interaction path, through
-  // the same public seams: used to stage state and to play "someone else" in the
-  // conflict proof. It reads for update and replaces, exactly as a second client
-  // would.
+  // the same public seams: this is "someone else", the second client whose write
+  // makes the user's observation stale.
   const replaceOutside = async (source) => {
     const current = await boundNow();
     const read = await t.realAdapter.readSmalltalkMethodForUpdate({
@@ -1085,21 +1101,12 @@ async function e3Setup() {
     return boundNow();
   };
 
-  const idC = await replaceOutside(SOURCE_C);
-  const idD = await replaceOutside(SOURCE_D);
-  const idB = await replaceOutside(SOURCE_B);
-  assert.ok(idC.objectId.includes('/revision/'), 'a replaced binding is a fresh immutable revision');
-  assert.notDeepEqual(idB, idC);
-  assert.notDeepEqual(idB, idD);
+  // The ONE Block the composition may read: the one bound right now, which is
+  // what it is about to display. No future id appears anywhere in this grant.
+  const displayed = await boundNow();
+  t.boundBlockFor = (target) => (target.selector === selector ? displayed.objectId : null);
 
-  // The composition's READ authority: the class plus every revision this test can
-  // legitimately land on. It is issued per action inside openNativeVertical.
-  t.boundBlockFor = () => null;
-  const readIds = [idB.objectId, idC.objectId, idD.objectId];
-  const baseAuthorityFor = t.authorityFor;
-  t.authorityFor = (...ids) => baseAuthorityFor(...ids, ...readIds);
-
-  return {t, classRef, selector, writeAuthority, boundNow, replaceOutside, idB, idC, idD};
+  return {t, classRef, selector, writeAuthority, boundNow, observeMethod, replaceOutside, displayed};
 }
 
 // Open the method view the way a user reaches it: browse the class, press the
@@ -1121,7 +1128,7 @@ async function openMethodView(e3) {
   return {v, handle};
 }
 
-test('E3 acceptance: a realized input replaces the method through the ordinary Command lane, and the view shows a FRESH authorized reread', {skip}, async () => {
+test('E3: a realized input replaces the method through the ordinary Command lane -- and the MANDATED FRESH REREAD IS UNOBTAINABLE (Images #218, eij.3 BLOCKED)', {skip}, async () => {
   const e3 = await e3Setup();
   const {t, classRef, selector} = e3;
   try {
@@ -1136,19 +1143,17 @@ test('E3 acceptance: a realized input replaces the method through the ordinary C
     assert.equal(JSON.stringify(inputs).includes('native-method-source'), false,
       'the semantic ROLE stays with the Environment: the renderer never learns what an input MEANS');
     const before = v.compositor.liveView(v.browser.viewId).presentationDescriptor;
-    assert.deepEqual(before.parameters.smalltalkMethod.method, e3.idB, 'the view shows the CURRENT revision');
+    assert.deepEqual(before.parameters.smalltalkMethod.method, e3.displayed, 'the view shows the CURRENT revision');
     assert.equal(before.parameters.smalltalkMethod.source, null, 'Images keeps no source, before');
 
     // (2) THE USER SUBMITS. The host emits the key it realized plus the text; it
     // names no Command, no subject, no token and no method.
     const intent = v.rendererAdapter.submitInput(handle, 0, SOURCE_C);
     assert.deepEqual(intent, {kind: 'submit-input', key: 0, text: SOURCE_C});
-
     await settleUntil(
       () => v.compositor.liveView(v.browser.viewId).presentationDescriptor !== before,
       'the replacement to complete and the view to be re-presented',
     );
-    assert.deepEqual(v.replacementErrors, [], 'the replacement must not have failed');
 
     // (3) EXACTLY ONE AUTHORIZED INVOCATION, named by the Command that ran. The
     // router builds the demand from the SELECTED command id, so it can never name
@@ -1162,83 +1167,102 @@ test('E3 acceptance: a realized input replaces the method through the ordinary C
     assert.equal(JSON.stringify(v.writeDemands[0]).includes(SOURCE_C), false,
       'the supplied source must not travel inside an authority demand');
 
-    // (4) IMAGES ACTUALLY MOVED. The method's semantic identity is unchanged --
-    // same class, same selector -- and its revision is new.
-    const bound = await e3.boundNow();
-    assert.deepEqual(bound, e3.idC, 'the binding is the revision this source compiles to');
-    assert.notDeepEqual(bound, e3.idB);
+    // (4) THE WRITE LANDED. Observed from OUTSIDE the Environment: the method's
+    // semantic identity is unchanged -- same class, same selector -- and its
+    // revision is new. Everything up to and including the authorized write works.
+    const replaced = await e3.boundNow();
+    assert.notDeepEqual(replaced, e3.displayed, 'Images rebound the selector to a fresh revision');
+    assert.equal((await e3.observeMethod()).source, null, 'and still keeps no source afterwards');
 
-    // (5) THE VIEW SHOWS A FRESH AUTHORIZED READ, not a patch and not the receipt.
+    // (5) THE BLOCKER. #218 point 4 makes a FRESH AUTHORIZED READ the displayed
+    // truth, and the Environment cannot perform one. Images' method read demands
+    // `object/read` on the CURRENT Block; that Block did not exist when any
+    // authority could have been issued, its id is deliberately not disclosed by
+    // the `{replaced:true}` receipt, and the AuthorityService accepts only exact
+    // `{operation, resource}` grants -- no wildcard, no inheritance, no resource
+    // tree. So the reread is DENIED and the view falls back to the ordinary
+    // unauthorized route.
+    //
+    // This is the honest current outcome, asserted rather than engineered away.
+    // When Images repairs the lower contract, THIS assertion is what changes: the
+    // live descriptor becomes the authoritative new method, reached without
+    // predicting its Block identity.
     const after = v.compositor.liveView(v.browser.viewId).presentationDescriptor;
-    assert.equal(after.kind, NATIVE_METHOD_PRESENTATION_KIND);
-    assert.deepEqual(after.subject, before.subject, 'the SAME method subject: replacement is not navigation');
-    assert.deepEqual(after.parameters.smalltalkMethod.method, e3.idC);
-    assert.equal(after.parameters.smalltalkMethod.source, null, 'and Images still keeps no source, after');
-    assert.equal(JSON.stringify(after).includes(SOURCE_C), false,
-      'the supplied source never becomes displayed state: E3 is replacement, not a source editor');
+    assert.equal(after.kind, 'unauthorized-reference',
+      'the mandated fresh reread is unobtainable: it needs read authority for a Block id that could not exist yet');
+    assert.equal(after.parameters.reason, 'not authorized to read this native method');
+    assert.equal(after.subject.objectId, classRef.objectId,
+      'and the failure names the CLASS the caller already reads, never the Block it may not');
 
-    // (6) E2's READ-ONLY SEAM AGREES. Two independent Images seams answering the
-    // same revision is what makes "the displayed truth is authoritative" more than
-    // a claim about the one call the browser happens to make.
-    const described = await t.realAdapter.describeSmalltalkMethod({
-      imageId: IMAGE, classRef, selector, authority: t.authorityFor(classRef.objectId, e3.idC.objectId),
-    });
-    assert.deepEqual(described, after.parameters.smalltalkMethod);
+    // AND IT IS SILENT. The reread failure is a PRESENTED failure, not a rejection,
+    // so no error reaches the composition's channel: a user who pressed Replace
+    // sees the method they were editing turn into "not authorized" with nothing
+    // said. That silence is part of the defect, and part of what the repair must
+    // remove.
+    assert.deepEqual(v.replacementErrors, []);
 
-    // (7) THE AFFORDANCE SURVIVES AND IS RE-PAIRED: the user can replace again,
-    // against the revision now displayed rather than the one they first opened.
-    assert.deepEqual(v.rendererAdapter.realizedInputs(handle), inputs);
+    // NOT A WORKAROUND, asserted as a rule rather than left to review: the
+    // Environment must not reach the new revision by predicting it. The supplied
+    // source never becomes displayed state, and no Block id is composed here.
+    assert.equal(JSON.stringify(after).includes(SOURCE_C), false);
+    assert.equal(JSON.stringify(after).includes(replaced.objectId), false,
+      'the new Block id is not disclosed to the Environment anywhere');
   } finally {
     await t.runtime.close();
   }
 });
 
-test('E3 acceptance: an overtaken observation is a CONFLICT -- refused, surfaced, and authoritatively reread', {skip}, async () => {
+test('E3: an overtaken observation is a CONFLICT -- refused and surfaced -- and its authoritative reread is UNOBTAINABLE too (eij.3 BLOCKED)', {skip}, async () => {
   const e3 = await e3Setup();
   const {t} = e3;
   try {
     const {v, handle} = await openMethodView(e3);
     const shown = v.compositor.liveView(v.browser.viewId).presentationDescriptor;
-    assert.deepEqual(shown.parameters.smalltalkMethod.method, e3.idB);
+    assert.deepEqual(shown.parameters.smalltalkMethod.method, e3.displayed);
 
     // SOMEONE ELSE WINS while this view is open. The token paired with the
     // displayed descriptor now names a binding that is no longer current.
     const winner = await e3.replaceOutside(SOURCE_D);
-    assert.deepEqual(winner, e3.idD);
+    assert.notDeepEqual(winner, e3.displayed);
 
     v.rendererAdapter.submitInput(handle, 0, SOURCE_C);
     await settleUntil(() => v.replacementErrors.length > 0, 'the stale replacement to be refused');
 
     // The Environment's OWN conflict outcome: Images' SmalltalkStaleMethodPositionError
-    // is a LOST UPDATE, so CommandDispatcher classifies it as one.
-    assert.equal(v.replacementErrors.length, 1);
+    // is a LOST UPDATE, so CommandDispatcher classifies it as one. This half works.
     assert.equal(v.replacementErrors[0].name, 'CommandConflictError');
+    assert.deepEqual(await e3.boundNow(), winner, "the loser's source never became the binding");
 
-    // NOTHING of the caller's attempt landed: the winner is still current.
-    assert.deepEqual(await e3.boundNow(), e3.idD, "the loser's source never became the binding");
-
-    // AND the display is repaired authoritatively rather than left showing a
-    // revision that has moved.
+    // The OTHER half does not. "Surfaced, then authoritatively reread" needs read
+    // authority for the WINNER's Block -- another id the consumer could not have
+    // been granted, for exactly the same reason. The repair is the same repair.
     await settleUntil(
       () => v.compositor.liveView(v.browser.viewId).presentationDescriptor !== shown,
-      'the conflict to be followed by an authoritative reread',
+      'the conflict to be followed by a reread attempt',
     );
     const after = v.compositor.liveView(v.browser.viewId).presentationDescriptor;
-    assert.deepEqual(after.parameters.smalltalkMethod.method, e3.idD, "the view shows the WINNER's revision");
-    assert.deepEqual(after.subject, shown.subject);
+    assert.equal(after.kind, 'unauthorized-reference',
+      'after a lost update the winner cannot be displayed either');
+    assert.equal(JSON.stringify(after).includes(winner.objectId), false,
+      "and the winner's Block id is not disclosed by the refusal");
   } finally {
     await t.runtime.close();
   }
 });
 
-test('E3 acceptance: a caller who may READ the method but not WRITE the class changes nothing', {skip}, async () => {
+test('E3: a caller who may READ the method but not WRITE the class changes nothing, and its display is left alone', {skip}, async () => {
   const e3 = await e3Setup();
-  const {t, classRef} = e3;
+  const {t} = e3;
   try {
     // The composition mints an authority carrying the FULL read authority that
     // minted the token -- and no write. Holding a valid, current token confers
     // nothing: a token is an assumption about state, never a capability.
-    t.writeAuthorityFor = (subject) => t.authorityFor(subject.classRef.objectId);
+    //
+    // This leg is UNAFFECTED by the reread blocker, and that is the point of
+    // keeping it: a denial does not move the position, so no reread is owed, no
+    // unknowable Block id is involved, and it proves the whole path on authority
+    // the consumer legitimately holds.
+    t.writeAuthorityFor = (subject) => t.authorityFor(subject.classRef.objectId, e3.displayed.objectId);
     const {v, handle} = await openMethodView(e3);
     const shown = v.compositor.liveView(v.browser.viewId).presentationDescriptor;
 
@@ -1246,13 +1270,13 @@ test('E3 acceptance: a caller who may READ the method but not WRITE the class ch
     await settleUntil(() => v.replacementErrors.length > 0, 'the unauthorized replacement to be refused');
 
     assert.equal(v.replacementErrors[0].name, 'CommandAuthorizationError');
-    assert.deepEqual(await e3.boundNow(), e3.idB, 'a denied write changes nothing');
+    assert.deepEqual(await e3.boundNow(), e3.displayed, 'a denied write changes nothing');
     await drain();
     // A denial is NOT a conflict: the observed position did not move, so the
     // descriptor on screen is still exactly what Images would answer, and
     // rereading would throw the user's attempt off the screen for no reason.
     assert.equal(v.compositor.liveView(v.browser.viewId).presentationDescriptor, shown,
-      'the view is left alone; only a conflict triggers an authoritative reread');
+      'the view is left alone; only a conflict earns an authoritative reread');
     assert.equal(v.replacementErrors.length, 1);
   } finally {
     await t.runtime.close();

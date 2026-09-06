@@ -268,9 +268,16 @@ function createImageClientAdapter(client) {
     // and therefore the whole Environment -- unconstructible on the native host.
     // The narrow consequence is recorded rather than papered over: a composition
     // without it constructs and browses, and its FIRST replacement fails loudly
-    // below, naming the missing service. A native composition cannot reach that
-    // path anyway, because the same portable root exports no way to install a
-    // method there is anything to replace (Bead aov). The asymmetry itself is
+    // below, naming the missing service.
+    //
+    // STATED PRECISELY, because the comfortable version is not true: this is
+    // explicit replacement UNAVAILABILITY on that host, NOT logical
+    // unreachability. Bead aov says the portable TEST HARNESS cannot install a
+    // method to replace -- it says nothing about a real persistent image, which
+    // may already contain plenty of methods a user would reach exactly this way.
+    // So a portable host is a host where native method browsing works and native
+    // method replacement is unavailable, and a consumer is entitled to be told
+    // that rather than to discover it at the first Replace. The asymmetry is
     // Images pressure, recorded on Bead dcx rather than worked around here.
     compilation = null,
     // Helpers consumed from the public exports (createRuntime's module barrels).
