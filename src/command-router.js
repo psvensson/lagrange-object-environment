@@ -21,6 +21,39 @@
  * not an unguarded write.
  */
 
+/**
+ * An EXPLICITLY requested Command could not be selected for this subject
+ * (Bead z9b).
+ *
+ * It carries ONLY the requested id. It deliberately does NOT say whether the
+ * Command is unregistered or merely inapplicable here, and does not disclose the
+ * registry's contents, any other Command's id, or anything about authority:
+ *
+ *   * the DISTINCTION is not needed to solve the consumer's problem, which is
+ *     "the thing I asked for did not happen and I need to say so";
+ *   * discovery legitimately depends on the caller's own context -- `discover`
+ *     forwards it to `applies(subject, context)`, so `commandId` itself may
+ *     influence applicability -- which makes "unregistered" and "inapplicable"
+ *     not cleanly separable from here anyway;
+ *   * and answering it would need a registry seam this owner has no business
+ *     acquiring: `CommandRegistry` owns discovery and applicability, not lookup.
+ *
+ * WHY LOUD RATHER THAN NULL. `consumeIntent` already answers null for three
+ * unrelated reasons (the view is gone, it has no subject, nothing applies), and
+ * a fourth would be the only one hiding a PROGRAMMER error -- a binding wired to
+ * an id nothing answers would be permanently and silently inert. A consumer with
+ * an error channel (an input binding's `onInputError`, an edit binding's
+ * `onEditError`) can then show a failure instead of nothing happening, and does
+ * not have to infer which of four causes produced a null.
+ */
+class RequestedCommandUnavailableError extends Error {
+  constructor(commandId) {
+    super(`the requested command ${JSON.stringify(commandId)} is not available for this subject`);
+    this.name = 'RequestedCommandUnavailableError';
+    this.commandId = commandId;
+  }
+}
+
 function createCommandRouter({compositor, commandRegistry, dispatch, authorityProvider} = {}) {
   if (!compositor || typeof compositor.viewForSurfaceHandle !== 'function') {
     throw new TypeError('createCommandRouter requires a compositor with viewForSurfaceHandle(handle)');
@@ -86,28 +119,39 @@ function createCommandRouter({compositor, commandRegistry, dispatch, authorityPr
     // See the bead; making that case loud needs a registry seam this owner does
     // not have.
     const requested = context.commandId;
-    const command = requested === undefined || requested === null
-      ? (commands[0] ?? null)
-      : (commands.find((c) => c.id === requested) ?? null);
-    if (!command) {
-      // Either nothing applies, or the caller named a Command that is absent or
-      // inapplicable for this subject. Both are "not routed"; neither dispatches.
-      return null;
+    if (requested === undefined || requested === null) {
+      const fallback = commands[0] ?? null;
+      if (!fallback) return null; // nothing applies: an ordinary, quiet no-op
+      return dispatchSelected(fallback);
     }
 
-    // Authorization happens AT DISPATCH: a fresh authority context from the
-    // provider (the Session connection-locus seam), never minted/stored here.
-    const authority = await authorityProvider({
-      kind: 'semantic-interaction',
-      intent: intentDescriptor,
-      subject,
-      commandId: command.id,
-    });
+    // An explicitly requested Command that cannot be selected is LOUD (Bead z9b),
+    // not a silent null. Discovery has ALREADY run above, with the caller's full
+    // context unchanged -- selection happens strictly afterwards, so this never
+    // becomes a "look X up first, discover second" model and never strips
+    // `commandId` out of the context a Command's `applies` may legitimately read.
+    const command = commands.find((c) => c.id === requested) ?? null;
+    if (!command) throw new RequestedCommandUnavailableError(requested);
+    return dispatchSelected(command);
 
-    return dispatch(command, subject, {authority, context});
+    async function dispatchSelected(selected) {
+
+      // Authorization happens AT DISPATCH: a fresh authority context from the
+      // provider (the Session connection-locus seam), never minted/stored here.
+      // Reached ONLY for a Command that was actually selected, so a refused
+      // request never mints authority.
+      const authority = await authorityProvider({
+        kind: 'semantic-interaction',
+        intent: intentDescriptor,
+        subject,
+        commandId: selected.id,
+      });
+
+      return dispatch(selected, subject, {authority, context});
+    }
   }
 
   return Object.freeze({consumeIntent});
 }
 
-export {createCommandRouter};
+export {createCommandRouter, RequestedCommandUnavailableError};
