@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {inspect} from 'node:util';
 import {createCommandRouter, RequestedCommandUnavailableError} from '../src/command-router.js';
 
 // Bead z9b. `4c4` established the SAFETY rule: an explicit commandId never falls
@@ -7,9 +8,17 @@ import {createCommandRouter, RequestedCommandUnavailableError} from '../src/comm
 // that could not be selected returned a silent `null`, indistinguishable from
 // "the view is gone" / "no subject" / "nothing applies".
 //
-// These are two orthogonal defects with two orthogonal falsifiers:
-//   restoring `find(...) ?? commands[0]`  -> the 4c4 proof goes red
-//   returning null on an explicit miss    -> the proof below goes red
+// Two defects, and the falsifiers are NOT cleanly disjoint -- stated accurately
+// because an earlier version of this comment claimed they were:
+//   returning null on an explicit miss    -> the loudness proofs go red; the
+//                                            SAFETY assertion still holds, since
+//                                            nothing wrong dispatches.
+//   restoring `find(...) ?? commands[0]`  -> the 4c4 dispatch proof goes red AND
+//                                            the loudness proofs go red, because
+//                                            the fallback breaks both properties
+//                                            at once. It is strictly worse than
+//                                            the silent null, not an independent
+//                                            axis.
 //
 // The error deliberately does NOT say whether the cause was "unregistered" or
 // "inapplicable here". That distinction is not needed to solve the consumer's
@@ -56,8 +65,19 @@ test('an explicit commandId that cannot be selected is LOUD, and mints no author
 test('the error discloses only the requested id', async () => {
   const h = harness({commandIds: ['alpha', 'beta']});
   const error = await submit(h.router, {commandId: 'gamma'}).catch((e) => e);
-  const text = `${error.message} ${JSON.stringify({...error, message: error.message, name: error.name})}`;
-  // No other Command's id, no registry status, no authority information.
+
+  // The OWN PROPERTY SET, exactly. An earlier version of this test spread the
+  // error (`{...error}`), which copies only ENUMERABLE own properties -- so it
+  // was blind to `cause`, the standard and most idiomatic place an Error carries
+  // exactly this kind of payload (`new Error(msg, {cause})` sets it
+  // non-enumerable), and blind to `stack`. A review demonstrated both blind
+  // spots by perturbation. Pinning the property set catches any channel.
+  assert.deepEqual(Object.getOwnPropertyNames(error).sort(), ['commandId', 'message', 'name', 'stack']);
+  assert.equal(error.cause, undefined, 'a cause would carry a payload this error must not have');
+
+  // ...and the CONTENT of every channel, including the non-enumerable ones,
+  // through a deep inspection rather than a spread.
+  const text = inspect(error, {showHidden: true, depth: null});
   assert.ok(!text.includes('alpha') && !text.includes('beta'), 'the error leaked the registry contents');
   assert.ok(!/registered|unregistered|applicab/i.test(text), 'the error claims a CAUSE it cannot know');
   assert.ok(!/authority|authoriz/i.test(text), 'the error mentions authority');

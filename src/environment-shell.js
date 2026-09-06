@@ -578,10 +578,28 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
       // inspector's subject while taking none of the inspector's edit barrier.
       throw new TypeError('the inspector view may not be bound through inputBindings');
     }
-    for (const hook of ['onSubmitted', 'onInputError']) {
-      if (binding[hook] !== undefined && binding[hook] !== null && typeof binding[hook] !== 'function') {
-        throw new TypeError(`an input binding ${hook} must be a function when present`);
-      }
+    if (binding.onSubmitted !== undefined && binding.onSubmitted !== null
+        && typeof binding.onSubmitted !== 'function') {
+      throw new TypeError('an input binding onSubmitted must be a function when present');
+    }
+    // REQUIRED, unlike the edit table's optional twin (Bead z9b). Since
+    // CommandRouter refuses an unavailable requested Command by THROWING, a
+    // renderer-path binding without an error channel would observe NOTHING at
+    // all -- the rejection dies in bindIntents' fire-and-forget catch, and even
+    // the `onSubmitted(null)` it used to get no longer fires. A user would press
+    // the control and nothing whatsoever would happen, which is precisely the
+    // dead-affordance failure z9b exists to make visible.
+    //
+    // It is required HERE and not on edit bindings because this table is new and
+    // has no production consumer yet, so the stricter contract costs nothing;
+    // the edit table has existing consumers and its obligation is recorded in
+    // ownership row 65 instead.
+    if (typeof binding.onInputError !== 'function') {
+      throw new TypeError(
+        'each input binding must declare onInputError: a submit-input can be REFUSED by the '
+        + 'CommandRouter (RequestedCommandUnavailableError), and a binding with no error channel '
+        + 'would show the user nothing at all',
+      );
     }
     if (typeof binding.commandId !== 'string' || binding.commandId.length === 0) {
       throw new TypeError('each input binding must declare its commandId (a non-empty string)');
@@ -591,7 +609,7 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
       resolveInput: binding.resolveInput,
       commandId: binding.commandId,
       onSubmitted: binding.onSubmitted ?? null,
-      onInputError: binding.onInputError ?? null,
+      onInputError: binding.onInputError,
     });
   }
 

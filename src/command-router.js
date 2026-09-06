@@ -31,12 +31,21 @@
  *
  *   * the DISTINCTION is not needed to solve the consumer's problem, which is
  *     "the thing I asked for did not happen and I need to say so";
- *   * discovery legitimately depends on the caller's own context -- `discover`
+ *   * "unregistered" and "inapplicable here" are not separable from this owner:
+ *     discovery legitimately depends on the caller's own context -- `discover`
  *     forwards it to `applies(subject, context)`, so `commandId` itself may
- *     influence applicability -- which makes "unregistered" and "inapplicable"
- *     not cleanly separable from here anyway;
- *   * and answering it would need a registry seam this owner has no business
- *     acquiring: `CommandRegistry` owns discovery and applicability, not lookup.
+ *     influence applicability -- and answering it would need a lookup seam
+ *     `CommandRegistry` does not have and should not grow, since it owns
+ *     discovery and applicability, not lookup.
+ *
+ * NARROWLY: that inseparability covers ONLY that pair. A THIRD case is genuinely
+ * diagnosable and is currently discarded -- `discover` also returns `failures`,
+ * naming each Command whose own `applies` THREW. A requested Command that
+ * crashed while deciding applicability is a real programmer error this owner is
+ * already handed and does not report. An earlier version of this comment claimed
+ * the cause was simply "not cleanly separable", which overstated it into an
+ * impossibility. Bead recorded; deliberately not widened here, because the
+ * error's contents are a decided contract.
  *
  * WHY LOUD RATHER THAN NULL. `consumeIntent` already answers null for three
  * unrelated reasons (the view is gone, it has no subject, nothing applies), and
@@ -79,6 +88,11 @@ function createCommandRouter({compositor, commandRegistry, dispatch, authorityPr
    *   context: extra dispatch context (plain data, e.g. {title, commandId}).
    * Returns the dispatch result, or null when the handle no longer resolves to
    * a live view / the view has no subject / no command applies.
+   *
+   * REJECTS with `RequestedCommandUnavailableError` when the caller named an
+   * explicit `context.commandId` that is not among the applicable commands
+   * (Bead z9b). A caller on a fire-and-forget renderer path must therefore have
+   * an error channel, or the refusal is invisible to it.
    */
   async function consumeIntent(intentDescriptor, {surfaceHandle, context = {}} = {}) {
     const view = compositor.viewForSurfaceHandle(surfaceHandle);
@@ -110,14 +124,6 @@ function createCommandRouter({compositor, commandRegistry, dispatch, authorityPr
     // never the defect, and preserving it is why ownership row 65's requirement
     // (every edit binding declares its own commandId) is NOT retired by this
     // change -- EnvironmentShell still enforces it, and must.
-    //
-    // KNOWN LIMIT: an id naming a Command absent from the REGISTRY -- a wiring or
-    // typo bug -- is indistinguishable here from one merely inapplicable to this
-    // subject, because `discover` answers only the applicable set. Both return a
-    // silent null, a FOURTH meaning of this method's null. A binding wired to a
-    // Command id that does not exist is therefore permanently and silently inert.
-    // See the bead; making that case loud needs a registry seam this owner does
-    // not have.
     const requested = context.commandId;
     if (requested === undefined || requested === null) {
       const fallback = commands[0] ?? null;
