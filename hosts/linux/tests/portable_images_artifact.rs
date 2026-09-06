@@ -18,9 +18,9 @@ use sha2::{Digest, Sha256};
 fn embedded_portable_runtime_artifact_is_the_pinned_canonical_material() {
     assert_eq!(
         PORTABLE_RUNTIME_SOURCE_REVISION,
-        "9af24da93eba17357b05168ad5fc657be51bce94"
+        "15fcb8118c054a4b55d85ec3446987dbf537498a"
     );
-    assert_eq!(PORTABLE_RUNTIME_ARTIFACT_BYTES.len(), 1_180_089);
+    assert_eq!(PORTABLE_RUNTIME_ARTIFACT_BYTES.len(), 1_259_511);
     assert_eq!(PORTABLE_RUNTIME_ARTIFACT_BYTES.last(), Some(&b'}'));
 
     let digest = Sha256::digest(PORTABLE_RUNTIME_ARTIFACT_BYTES);
@@ -33,7 +33,7 @@ fn embedded_portable_runtime_artifact_is_the_pinned_canonical_material() {
         serde_json::from_slice(PORTABLE_RUNTIME_ARTIFACT_BYTES).expect("pinned artifact is JSON");
     assert_eq!(artifact["format"], PORTABLE_RUNTIME_ARTIFACT_FORMAT);
     assert_eq!(artifact["entry"], PORTABLE_RUNTIME_ARTIFACT_ENTRY);
-    assert_eq!(artifact["modules"].as_array().map(Vec::len), Some(112));
+    assert_eq!(artifact["modules"].as_array().map(Vec::len), Some(115));
     assert!(
         artifact.get("provenance").is_none(),
         "canonical material must not contain the external source provenance"
@@ -181,6 +181,16 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
                 // REQUIREMENT by Object Environment E2: createImageClientAdapter now refuses
                 // to construct without it, so both native compositions genuinely need it.
                 'authorizedDescribeSmalltalkMethod',
+                // Images #218's E3 pair. NOTE THE TENSE: at THIS commit no product code
+                // calls either -- this admission slice deliberately carries no E3 behavior --
+                // so unlike every entry above, the justification is a FORWARD commitment, not
+                // a present-tense fact. They are required here on purpose: the point of an
+                // admission slice is that a revision which cannot supply the seams the next
+                // slice needs is refused BEFORE that slice starts, not halfway through it.
+                // Requiring the read without the replacement would admit a revision that can
+                // show an editable method and never edit it.
+                'authorizedReadSmalltalkMethodForUpdate',
+                'authorizedReplaceSmalltalkMethod',
               ];
               // The authorized native Smalltalk browsing seams the Environment consumes
               // (Images ADR 0087). E1 required only the class seam and said the method seam
@@ -194,6 +204,36 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
               const consumedNativeBrowseSeams = [
                 'authorizedDescribeSmalltalkClass',
                 'authorizedDescribeSmalltalkMethod',
+                // E3's writer-facing read. Same owner as the two describe seams, so it belongs
+                // to this group and its owner identity is proven by the same comparison.
+                'authorizedReadSmalltalkMethodForUpdate',
+              ];
+              // E3's REPLACEMENT seam has a DIFFERENT owner module, so it cannot ride on the
+              // browse group's identity check: comparing it against smalltalk-browse.js would
+              // compare `undefined === undefined` and pass vacuously at any revision. It gets
+              // its own group named after its own owner.
+              const consumedNativeReplacementSeams = ['authorizedReplaceSmalltalkMethod'];
+              // Owners E3's adapter is forbidden to use: it must not mint or parse a position
+              // token, nor call reconciliation directly.
+              //
+              // WHAT THIS ACTUALLY PROVES, stated narrowly because the obvious stronger reading
+              // is FALSE: the portable-runtime BARREL does not re-export them. It does NOT make
+              // them unreachable. All four modules are inside the artifact closure, and the
+              // loader resolves any bare `src/...` specifier from any base -- the owner-identity
+              // checks above rely on exactly that to import their owner modules -- so one deep
+              // import still reaches every one of them. Verified by probe, not assumed.
+              //
+              // So this is a REGRESSION DETECTOR, not an enforcement mechanism: it fails loudly
+              // if a later revision promotes one of these to the public barrel, which is the
+              // moment to re-decide rather than quietly start depending on it. The rule that
+              // E3's adapter does not import them is enforced by review and by a fence over the
+              // Environment's OWN source, which belongs with the E3 slice that adds the adapter
+              // -- not here. Bead recorded.
+              const forbiddenPrivateOwners = [
+                'smalltalkMethodPositionToken',
+                'parseSmalltalkMethodPositionToken',
+                'reconcileMethodsFromSource',
+                'reconcileMethods',
               ];
               return {
                 sameModule: exact.setDefaultCryptoProvider === alias.setDefaultCryptoProvider,
@@ -232,6 +272,29 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
                     (name) => typeof owner[name] === 'function' && owner[name] === alias[name],
                   );
                 })(),
+                consumedNativeReplacementSeamNames: consumedNativeReplacementSeams,
+                uncallableNativeReplacementSeams: consumedNativeReplacementSeams.filter(
+                  (name) => typeof alias[name] !== 'function',
+                ),
+                unrequiredNativeReplacementSeams: consumedNativeReplacementSeams.filter(
+                  (name) => !requiredEnvironmentExports.includes(name),
+                ),
+                // Same owner-identity rule as the browse group, against the replacement seam's
+                // OWN owner module.
+                replacementSeamsAreOwnerFunctions: await (async () => {
+                  let owner = null;
+                  try {
+                    owner = await import('src/language/smalltalk-authorized-method-replacement.js');
+                  } catch {
+                    return false;
+                  }
+                  return consumedNativeReplacementSeams.every(
+                    (name) => typeof owner[name] === 'function' && owner[name] === alias[name],
+                  );
+                })(),
+                exposedPrivateOwners: forbiddenPrivateOwners.filter(
+                  (name) => alias[name] !== undefined,
+                ),
               };
             })()"#,
         )
@@ -243,16 +306,23 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
     assert_eq!(report["exportedCreate"], "function");
     // A NON-VACUITY / closure check only: it catches the requirement list silently
     // shrinking. The semantic contract is the by-name assertions below.
-    assert_eq!(report["requiredEnvironmentExportCount"], 24);
+    assert_eq!(report["requiredEnvironmentExportCount"], 26);
     assert_eq!(
         report["missingEnvironmentExports"],
         serde_json::json!([]),
         "every B3 composition helper must be callable through the sole public portable-runtime alias"
     );
-    // The semantic contract, asserted BY NAME rather than inferred from the count.
+    // The consumed-seam list itself, pinned against silent shrinkage. This pair of
+    // literals is artifact-INDEPENDENT and cannot fail for any Images revision -- it has
+    // the same non-vacuity role as the count above, and is not itself the semantic
+    // contract. The contract is the three assertions after it, which do read the artifact.
     assert_eq!(
         report["consumedNativeBrowseSeamNames"],
-        serde_json::json!(["authorizedDescribeSmalltalkClass", "authorizedDescribeSmalltalkMethod"])
+        serde_json::json!([
+            "authorizedDescribeSmalltalkClass",
+            "authorizedDescribeSmalltalkMethod",
+            "authorizedReadSmalltalkMethodForUpdate"
+        ])
     );
     assert_eq!(
         report["uncallableNativeBrowseSeams"],
@@ -266,7 +336,34 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
     );
     assert_eq!(
         report["browseSeamsAreOwnerFunctions"], true,
-        "the alias must expose both seams as the exact functions src/language/smalltalk-browse.js defines"
+        "the alias must expose each browse seam as the exact function src/language/smalltalk-browse.js defines"
+    );
+    // E3's replacement seam: a separate owner, so a separate identity proof.
+    assert_eq!(
+        report["consumedNativeReplacementSeamNames"],
+        serde_json::json!(["authorizedReplaceSmalltalkMethod"])
+    );
+    assert_eq!(
+        report["uncallableNativeReplacementSeams"],
+        serde_json::json!([]),
+        "the pinned revision must LINK and expose the E3 replacement seam through the public alias"
+    );
+    assert_eq!(
+        report["unrequiredNativeReplacementSeams"],
+        serde_json::json!([]),
+        "the Environment's requirement list must NAME the replacement seam it consumes"
+    );
+    assert_eq!(
+        report["replacementSeamsAreOwnerFunctions"], true,
+        "the alias must expose the replacement seam as the exact function \
+         src/language/smalltalk-authorized-method-replacement.js defines"
+    );
+    assert_eq!(
+        report["exposedPrivateOwners"],
+        serde_json::json!([]),
+        "the portable surface must not offer the token mint/parser or the reconciliation owners: \
+         E3's adapter is forbidden to use them, and an artifact that cannot supply them enforces \
+         that structurally instead of by review"
     );
 
     actor.shutdown().await;
