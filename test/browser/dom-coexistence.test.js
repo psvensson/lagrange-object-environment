@@ -157,8 +157,9 @@ test('CI: every green fixture is rendered by the browser realizer test', async (
   const onDisk = (await readdir(join(here, '..', 'fixtures', 'semantic-ui'), {withFileTypes: true}))
     .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
     .map((entry) => entry.name)
-    // Not a SemanticUi document: the canonical cross-host INTENT bytes.
-    .filter((name) => name !== 'edit-field-intent.json');
+    // No by-name exclusion: INTENT fixtures are a separate contract domain and
+    // live in fixtures/semantic-ui/intents/, which this file-only walk never sees.
+    ;
   const source = await readFile(fileURLToPath(import.meta.url), 'utf8');
   const missing = onDisk.filter((name) => !source.includes(`../fixtures/semantic-ui/${name}`));
   assert.deepEqual(missing, [], 'every green fixture must be rendered through the real DOM realizer');
@@ -187,7 +188,31 @@ test('CI: the browser realizer renders the checked-in SemanticUi fixtures (every
       insp.dispose();
       // The canonical cross-host intent fixture (the SAME bytes the GTK test
       // asserts its serialized intent against).
-      out.canonicalEditIntent = await (await fetch('../fixtures/semantic-ui/edit-field-intent.json')).json();
+      out.canonicalEditIntent = await (await fetch('../fixtures/semantic-ui/intents/edit-field.json')).json();
+      // SemanticUi/v2: the transient input. Realized as a genuinely multiline
+      // <textarea> plus an EXPLICIT submit button — never the single-line
+      // editable-field <input>, which would silently make a multiline value
+      // impossible and would look like the field affordance it must not be.
+      const v2 = await window.__lagrangeProof.renderSemanticUiFixture('../fixtures/semantic-ui/v2-input.json', 'object');
+      out.v2Input = {
+        textareas: v2.inputTextareas,
+        submitLabels: v2.inputSubmitLabels,
+        fieldInputs: v2.fieldInputs,
+      };
+      // The canonical RAW multiline value: leading/trailing spaces, a tab, and a
+      // TRAILING NEWLINE, each of which a trimming host would destroy.
+      out.canonicalSubmitIntent = await (await fetch('../fixtures/semantic-ui/intents/submit-input-multiline.json')).json();
+      out.canonicalSubmitEmpty = await (await fetch('../fixtures/semantic-ui/intents/submit-input-empty.json')).json();
+      const reorder = await window.__lagrangeProof.renderSemanticUiFixture('../fixtures/semantic-ui/v2-input-reorder.json', 'object');
+      out.v2Reorder = {labels: reorder.inputLabels, keys: reorder.inputTextareas.map((t) => t.key)};
+      reorder.submitInput(2, out.canonicalSubmitIntent.text);
+      out.v2ReorderIntent = reorder.takeIntents();
+      reorder.dispose();
+      const v2empty = await window.__lagrangeProof.renderSemanticUiFixture('../fixtures/semantic-ui/v2-input.json', 'object');
+      v2empty.submitInput(0, '');
+      out.v2EmptyIntent = v2empty.takeIntents();
+      v2empty.dispose();
+      v2.dispose();
       // project: canonical Project fields + stable member identity/role/target
       // display, with only a descriptor-local integer in the emitted intent.
       const project = await window.__lagrangeProof.renderSemanticUiFixture('../fixtures/semantic-ui/project.json', 'project');
@@ -265,7 +290,37 @@ test('CI: the browser realizer renders the checked-in SemanticUi fixtures (every
     // canonical fixture the GTK test asserts its serialized intent against — one
     // source of truth for the intent shape/kind-string/key across both hosts.
     assert.deepEqual(result.inspEditIntent[0], result.canonicalEditIntent,
-      'the DOM edit-field intent matches the canonical cross-host bytes (edit-field-intent.json)');
+      'the DOM edit-field intent matches the canonical cross-host bytes (intents/edit-field.json)');
+    // --- SemanticUi/v2: the transient input -------------------------------
+    // A genuinely MULTILINE control. A regression to the single-line
+    // editable-field <input> would fail here AND would silently truncate the
+    // newline case below.
+    assert.deepEqual(result.v2Input.textareas.map((t) => t.tag), ['textarea'],
+      'a v2 input must realize as a multiline textarea, never the single-line field input');
+    assert.deepEqual(result.v2Input.submitLabels, ['Replace'],
+      'a v2 input carries an EXPLICIT submit control (Enter stays newline insertion)');
+    assert.deepEqual(result.v2Input.textareas.map((t) => t.value), [''],
+      'the input starts EMPTY: the document carries no value, and none may be invented');
+    assert.deepEqual(result.v2Input.fieldInputs, [],
+      'a v2 input must not also render an editable field');
+
+    // CROSS-HOST INTENT BYTES: the DOM submit-input deep-equals the SAME
+    // canonical fixture the native test asserts its serialized intent against.
+    // The value carries leading/trailing spaces, a tab and a trailing newline —
+    // RAW means no trimming, no parsing, no normalization.
+    assert.deepEqual(result.v2ReorderIntent, [result.canonicalSubmitIntent],
+      'the DOM submit-input intent matches the canonical cross-host bytes (intents/submit-input-multiline.json)');
+    // An EMPTY submission still carries its text field: absent text is not an
+    // empty value, it is a malformed intent.
+    assert.deepEqual(result.v2EmptyIntent, [result.canonicalSubmitEmpty],
+      'an empty submission must still carry text:"" (intents/submit-input-empty.json)');
+
+    // KEY DERIVATION across the DOM boundary: the reorder fixture lists Gamma
+    // first, so Gamma holds key 0. Submitting the THIRD control emitted key 2.
+    assert.deepEqual(result.v2Reorder.labels, ['Gamma', 'Beta', 'Alpha']);
+    assert.deepEqual(result.v2Reorder.keys, ['0', '1', '2'],
+      'input keys follow ARRAY POSITION, never the entry content');
+
     // Project
     assert.equal(result.project.heading, 'Project: Alpha');
     assert.deepEqual(result.project.fields, ['Name', 'Project ID', 'Namespace']);

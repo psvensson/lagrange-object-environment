@@ -335,9 +335,33 @@ pub fn project(descriptor: &Value) -> Result<SemanticUi, String> {
         }
     }
 
+    // TRANSIENT COMMAND INPUTS (SemanticUi/v2). Replicates the JS projector's rule
+    // EXACTLY: a GENERIC ordered `parameters.inputs` array, enumerated ONCE, with
+    // the ARRAY INDEX as the key. The port reads POSITION and never re-derives a
+    // key from an entry's content -- reversing the array must reverse the keys.
+    //
+    // Only key, the display labels and valueKind cross into the document; an
+    // entry's semantic `role` stays with the Environment owner and must not
+    // appear here.
+    let empty_inputs: Vec<Value> = Vec::new();
+    let inputs = params
+        .get("inputs")
+        .and_then(|i| i.as_array())
+        .unwrap_or(&empty_inputs);
+    for (key, entry) in inputs.iter().enumerate() {
+        children.push(json!({
+            "kind": "input",
+            "key": key,
+            "label": value_text(entry.get("label").unwrap_or(&Value::Null)),
+            "valueKind": "text",
+            "submitLabel": value_text(entry.get("submitLabel").unwrap_or(&Value::Null)),
+        }));
+    }
+
+    // v2 ONLY when a v2 capability is actually used; everything else stays v1.
     let doc = json!({
         "kind": "semantic-ui",
-        "version": 1,
+        "version": if inputs.is_empty() { 1 } else { 2 },
         "root": {"kind": "group", "title": heading, "children": children},
     });
     validate_and_parse(&doc)

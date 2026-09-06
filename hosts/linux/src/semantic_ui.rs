@@ -59,9 +59,53 @@ pub enum Node {
         key: i64,
         label: String,
     },
+    /// SemanticUi/v2 ONLY. A TRANSIENT text argument to an interaction -- never a
+    /// display of current state. It deliberately has no `text`/`value` field at
+    /// all: the type cannot express "the current value is empty", which is the
+    /// whole reason this kind exists rather than reusing an editable `field`.
+    ///
+    /// NOTE the tagged-enum hazard this variant creates: `serde(tag = "kind")`
+    /// would accept an `input` node in a version:1 document, because the typed
+    /// parse knows nothing about versions. That is why `validate_node_value`
+    /// takes the version and runs BEFORE `from_value` -- the raw gate is the only
+    /// thing standing between this variant and silently legalizing v2 nodes in a
+    /// v1 document.
+    Input {
+        key: i64,
+        label: String,
+        #[serde(rename = "valueKind")]
+        value_kind: String,
+        #[serde(rename = "submitLabel")]
+        submit_label: String,
+    },
 }
 
+/// The versions this host understands. A host declares a SET; each version has
+/// its own CLOSED kind table. A v1-only host MUST reject a v2 document -- that is
+/// the point of a version, not a superset violation.
 pub const SUPPORTED_VERSION: u32 = 1;
+pub const SUPPORTED_VERSION_V2: u32 = 2;
+pub const SUPPORTED_VERSIONS: &[u32] = &[SUPPORTED_VERSION, SUPPORTED_VERSION_V2];
+
+// Node kinds legal in each version. Mirrors NODE_KINDS / NODE_KINDS_V2 in
+// src/semantic-ui.js.
+const NODE_KINDS_V1: &[&str] = &["group", "text", "field", "collection", "action"];
+const NODE_KINDS_V2: &[&str] = &["group", "text", "field", "collection", "action", "input"];
+
+fn node_kinds_for(version: u32) -> Option<&'static [&'static str]> {
+    match version {
+        SUPPORTED_VERSION => Some(NODE_KINDS_V1),
+        SUPPORTED_VERSION_V2 => Some(NODE_KINDS_V2),
+        _ => None,
+    }
+}
+
+// Properties an `input` may never carry: each would make it claim to display
+// current state. Mirrors INPUT_FORBIDDEN_KEYS in src/semantic-ui.js. They cannot
+// join FORBIDDEN_KEYS because `text` is required on text/field nodes and
+// `editable` on an editable field -- so this is a PER-KIND denylist, a deliberate
+// qualification of the CONFORMANCE NOTE's blanket tolerance.
+const INPUT_FORBIDDEN_KEYS: &[&str] = &["text", "value", "currentValue", "editable"];
 
 // Host-specific fields that must not appear (DOM, GTK, or geometry). Mirrors
 // FORBIDDEN_KEYS in src/semantic-ui.js.
@@ -133,21 +177,23 @@ pub fn validate_and_parse(raw: &serde_json::Value) -> Result<SemanticUi, String>
         .get("version")
         .and_then(integral_number)
         .ok_or_else(|| "document.version must be an integer".to_string())?;
-    if version != SUPPORTED_VERSION as u64 {
+    if !SUPPORTED_VERSIONS.iter().any(|v| *v as u64 == version) {
         return Err(format!(
-            "unsupported version {version} (this host understands {SUPPORTED_VERSION})"
+            "unsupported version {version} (this host understands {SUPPORTED_VERSIONS:?})"
         ));
     }
     let root = obj
         .get("root")
         .ok_or_else(|| "document.root is required".to_string())?;
-    validate_node_value(root, "root")?;
+    // The version gate lives HERE, before the typed parse below, so the tagged enum
+    // cannot legalize a v2 node inside a v1 document.
+    validate_node_value(root, "root", version as u32)?;
 
     // Now that the raw shape is validated, normalize integral-valued floats to
     // integers (so `version:1.0` / `key:1.0` deserialize to u32/i64, matching
     // the JS number model) and deserialize to the typed document.
     let normalized = normalize_numbers(raw.clone());
-    serde_json::from_value(normalized).map_err(|e| format!("SemanticUi/v1 deserialize: {e}"))
+    serde_json::from_value(normalized).map_err(|e| format!("SemanticUi deserialize: {e}"))
 }
 
 // Recursively rewrite integral-valued floats to integers so the typed
@@ -177,7 +223,11 @@ fn normalize_numbers(v: serde_json::Value) -> serde_json::Value {
 // Recursively validate the RAW JSON of a node: known shape, no host fields,
 // no refs, action keys are non-negative integers. Unknown extra keys are
 // tolerated (not recursed); children/items are recursed.
-fn validate_node_value(node: &serde_json::Value, path: &str) -> Result<(), String> {
+fn validate_node_value(
+    node: &serde_json::Value,
+    path: &str,
+    version: u32,
+) -> Result<(), String> {
     let obj = node
         .as_object()
         .ok_or_else(|| format!("{path}: a node must be a plain object"))?;
@@ -185,6 +235,14 @@ fn validate_node_value(node: &serde_json::Value, path: &str) -> Result<(), Strin
         .get("kind")
         .and_then(|k| k.as_str())
         .ok_or_else(|| format!("{path}: node.kind must be a string"))?;
+    let kinds = node_kinds_for(version)
+        .ok_or_else(|| format!("{path}: no kind table for version {version}"))?;
+    if !kinds.contains(&kind) {
+        return Err(format!(
+            "{path}: unknown node kind {kind:?} in SemanticUi/v{version} (want one of {})",
+            kinds.join("/")
+        ));
+    }
 
     for (key, value) in obj {
         if FORBIDDEN_KEYS.contains(&key.as_str()) {
@@ -206,7 +264,7 @@ fn validate_node_value(node: &serde_json::Value, path: &str) -> Result<(), Strin
                 .and_then(|c| c.as_array())
                 .ok_or_else(|| format!("{path}.group.children must be an array"))?;
             for (i, child) in children.iter().enumerate() {
-                validate_node_value(child, &format!("{path}.children[{i}]"))?;
+                validate_node_value(child, &format!("{path}.children[{i}]"), version)?;
             }
         }
         "text" => {
@@ -251,7 +309,7 @@ fn validate_node_value(node: &serde_json::Value, path: &str) -> Result<(), Strin
                 .and_then(|c| c.as_array())
                 .ok_or_else(|| format!("{path}.collection.items must be an array"))?;
             for (i, item) in items.iter().enumerate() {
-                validate_node_value(item, &format!("{path}.items[{i}]"))?;
+                validate_node_value(item, &format!("{path}.items[{i}]"), version)?;
             }
         }
         "action" => {
@@ -268,9 +326,44 @@ fn validate_node_value(node: &serde_json::Value, path: &str) -> Result<(), Strin
                 }
             }
         }
+        "input" => {
+            // Load-bearing ABSENCES, rejected explicitly rather than left to
+            // convention: each would let the node be read as a display of
+            // current state ("the current source is empty").
+            for forbidden in INPUT_FORBIDDEN_KEYS {
+                if obj.contains_key(*forbidden) {
+                    return Err(format!(
+                        "{path}.input.{forbidden} is not allowed: an input is a transient argument, \
+                         never a display of current state (use a field for state that exists)"
+                    ));
+                }
+            }
+            if obj.get("label").and_then(|v| v.as_str()).is_none() {
+                return Err(format!("{path}.input.label must be a string"));
+            }
+            if obj.get("submitLabel").and_then(|v| v.as_str()).is_none() {
+                return Err(format!("{path}.input.submitLabel must be a string"));
+            }
+            if obj.get("valueKind").and_then(|v| v.as_str()) != Some("text") {
+                return Err(format!(
+                    "{path}.input.valueKind must be 'text' (the only input scalar in this slice)"
+                ));
+            }
+            match obj.get("key").and_then(integral_number) {
+                Some(_) => {}
+                None => {
+                    return Err(format!(
+                        "{path}.input.key must be a non-negative integer (a descriptor-local input key)"
+                    ))
+                }
+            }
+        }
         other => {
+            // Unreachable in practice: the version's closed kind table above has
+            // already rejected any kind not in it. Kept as a total match so that
+            // adding a kind to a table without adding an arm here fails loudly.
             return Err(format!(
-                "{path}: unknown node kind {other:?} (want group/text/field/collection/action)"
+                "{path}: unhandled node kind {other:?} in SemanticUi/v{version}"
             ))
         }
     }
@@ -293,7 +386,7 @@ pub fn action_keys(doc: &SemanticUi) -> BTreeSet<i64> {
             Node::Action { key, .. } => {
                 out.insert(*key);
             }
-            Node::Text { .. } | Node::Field { .. } => {}
+            Node::Text { .. } | Node::Field { .. } | Node::Input { .. } => {}
         }
     }
     let mut out = BTreeSet::new();

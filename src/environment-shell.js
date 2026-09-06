@@ -545,6 +545,112 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
     return null;
   }
 
+  /**
+   * INPUT BINDINGS (SemanticUi/v2, Bead ngh) — a THIRD, genuinely separate table
+   * beside activation and edit bindings.
+   *
+   * WHY NOT A GENERALIZED "interaction binding". `field` and `input` have
+   * deliberately different MEANINGS: an edit-field mutates a REPRESENTED FIELD of
+   * a record, a submit-input supplies a TRANSIENT ARGUMENT to an interaction.
+   * Collapsing them into one vaguely-named structure to share code would erase
+   * exactly the distinction SemanticUi/v2 exists to make, and the resolver
+   * results would end up in one bag that no consumer could tell apart. The
+   * MECHANICS are near-identical and that is fine; the SEMANTICS are not shared.
+   *
+   * NO VERSION TOKEN. This binding takes none. Optimistic concurrency belongs to
+   * a Command that actually consumes a token, and none exists yet; a `tokenFor`
+   * here would be an unpaired supplier with nothing to conflict against, which is
+   * unfalsifiable by construction. E3 adds it together with its Command.
+   */
+  function normalizeInputBinding(binding) {
+    rejectHandleKey(binding, 'input');
+    if (!binding || typeof binding !== 'object'
+        || typeof binding.viewId !== 'string' || binding.viewId.length === 0
+        || typeof binding.resolveInput !== 'function') {
+      throw new TypeError('each input binding requires viewId and resolveInput');
+    }
+    if (binding.viewId === INSPECTOR_VIEW_ID) {
+      // The SAME structural fence edit bindings carry, for the same reason and
+      // then some: an input binding IS handed a resolver and DOES dispatch
+      // through the CommandRouter, so it is structurally an edit binding, not an
+      // activation one — it cannot borrow the activation table's justification
+      // for having no fence. A foreign binding here would dispatch against the
+      // inspector's subject while taking none of the inspector's edit barrier.
+      throw new TypeError('the inspector view may not be bound through inputBindings');
+    }
+    for (const hook of ['onSubmitted', 'onInputError']) {
+      if (binding[hook] !== undefined && binding[hook] !== null && typeof binding[hook] !== 'function') {
+        throw new TypeError(`an input binding ${hook} must be a function when present`);
+      }
+    }
+    if (typeof binding.commandId !== 'string' || binding.commandId.length === 0) {
+      throw new TypeError('each input binding must declare its commandId (a non-empty string)');
+    }
+    return Object.freeze({
+      viewId: binding.viewId,
+      resolveInput: binding.resolveInput,
+      commandId: binding.commandId,
+      onSubmitted: binding.onSubmitted ?? null,
+      onInputError: binding.onInputError ?? null,
+    });
+  }
+
+  async function reportInputError(binding, error) {
+    if (!binding.onInputError) throw error;
+    try {
+      await binding.onInputError(error);
+    } catch {
+      // A reporter that itself fails must not start a second reporting loop.
+    }
+    return null;
+  }
+
+  /**
+   * The ONE submit-input handler, on an already-resolved LIVE view.
+   *
+   * The resolver result is nested under `input` — NEVER `field`. A consumer must
+   * be able to tell "the user supplied an argument" from "the user edited a
+   * field" by looking at the context alone.
+   */
+  async function handleInputIntent({binding, view, surfaceHandle, key, text, commandRouter}) {
+    if (!commandRouter || typeof commandRouter.consumeIntent !== 'function') {
+      throw new TypeError('submit-input routing requires a CommandRouter (consumeIntent)');
+    }
+    const descriptor = view.presentationDescriptor ?? null;
+    let inputContext;
+    try {
+      // PURE, consumer-owned, over the SAME live snapshot the binding was
+      // selected by. null = stale/unknown key = explicit no-op, never a wrong
+      // input; a malformed result is loud and dispatches nothing.
+      inputContext = validateInputContext(binding.resolveInput(descriptor, key));
+    } catch (error) {
+      return reportInputError(binding, error);
+    }
+    if (inputContext === null) return null;
+    try {
+      const result = await commandRouter.consumeIntent(
+        {kind: 'submit-input', key},
+        {surfaceHandle, context: {commandId: binding.commandId, text, input: inputContext}},
+      );
+      if (binding.onSubmitted) await binding.onSubmitted(result);
+      return result;
+    } catch (error) {
+      return reportInputError(binding, error);
+    }
+  }
+
+  // The same plainness rule the edit path applies to a field context, applied to
+  // an input context — one shared MECHANIC, two distinct semantic contexts.
+  function validateInputContext(resolved) {
+    if (resolved === null) return null;
+    const proto = resolved === undefined ? undefined : Object.getPrototypeOf(resolved);
+    if (resolved === undefined || typeof resolved !== 'object' || Array.isArray(resolved)
+        || (proto !== Object.prototype && proto !== null)) {
+      throw new TypeError('an input binding resolveInput must return a plain data object or null');
+    }
+    return assertDataRepresentable(resolved, 'input context');
+  }
+
   // The ONE edit-field handler for every edit binding (inspector included), on
   // an already-resolved LIVE view. `surfaceHandle` is the EMITTED handle: it is
   // passed to CommandRouter.consumeIntent unchanged, which resolves the semantic
@@ -685,6 +791,7 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
     inspector: bindInspector = false,
     activationBindings = [],
     editBindings = [],
+    inputBindings = [],
     commandRouter = null,
     commandId = 'set-title',
     authority = null,
@@ -707,6 +814,7 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
     }
     if (!Array.isArray(activationBindings)) throw new TypeError('activationBindings must be an array');
     if (!Array.isArray(editBindings)) throw new TypeError('editBindings must be an array');
+    if (!Array.isArray(inputBindings)) throw new TypeError('inputBindings must be an array');
     const activations = new Map();
     const addActivation = (binding) => {
       if (activations.has(binding.viewId)) {
@@ -732,9 +840,23 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
       }
       edits.set(normalized.viewId, normalized);
     }
+    // A SEPARATE table: uniqueness is per viewId WITHIN this kind, exactly as for
+    // the other two. A view may legitimately carry an edit binding AND an input
+    // binding — they mean different things.
+    const submits = new Map();
+    if (inputBindings.length > 0 && (!commandRouter || typeof commandRouter.consumeIntent !== 'function')) {
+      throw new TypeError('bindIntents: submit-input routing (inputBindings) requires a CommandRouter (consumeIntent)');
+    }
+    for (const binding of inputBindings) {
+      const normalized = normalizeInputBinding(binding);
+      if (submits.has(normalized.viewId)) {
+        throw new TypeError(`input bindings must be unique per viewId (${normalized.viewId})`);
+      }
+      submits.set(normalized.viewId, normalized);
+    }
     return adapter.onIntent((intent, surfaceHandle) => {
       const kind = intent?.kind;
-      if (kind !== 'activate-item' && kind !== 'edit-field') return;
+      if (kind !== 'activate-item' && kind !== 'edit-field' && kind !== 'submit-input') return;
       // The Compositor is the sole authority for the emitted handle -> live view.
       const view = compositor.viewForSurfaceHandle(surfaceHandle);
       if (!view) return; // stale/dead handle: ignored before any binding is consulted
@@ -754,6 +876,18 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
             // A reporter that itself fails must not re-enter this path.
           }
         });
+        return;
+      }
+      if (kind === 'submit-input') {
+        // NO INPUT BINDING FOR THIS LIVE VIEW = an explicit, silent no-op. The
+        // resolver is never called and the CommandRouter is never reached — which
+        // is what lets the v2 input CAPABILITY exist before any production
+        // affordance consumes it, rather than dispatching somewhere by accident.
+        const submitBinding = submits.get(view.viewId);
+        if (!submitBinding) return;
+        handleInputIntent({
+          binding: submitBinding, view, surfaceHandle, key: intent.key, text: intent.text, commandRouter,
+        }).catch(() => {});
         return;
       }
       const binding = edits.get(view.viewId);

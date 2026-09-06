@@ -44,9 +44,37 @@
  * Rust validator's tolerance identical to this.
  */
 
+// The version a document is STAMPED with when this projector builds one. A
+// document gets v2 only when it actually uses a v2 capability; everything else
+// stays v1, so existing consumers are untouched (Bead ngh).
 const VERSION = 1;
+const VERSION_V2 = 2;
+
+// A host declares a SET of supported versions, and validates each document under
+// ITS OWN version's CLOSED kind table. This is deliberately NOT "v2 is a superset
+// a v1 validator also accepts": a v1-only host MUST reject a v2 document loudly,
+// which is the entire point of having a version at all. What IS a superset is the
+// VOCABULARY: kinds(v2) = kinds(v1) + {input}.
+const SUPPORTED_VERSIONS = Object.freeze([VERSION, VERSION_V2]);
 
 const NODE_KINDS = Object.freeze(['group', 'text', 'field', 'collection', 'action']);
+const NODE_KINDS_V2 = Object.freeze([...NODE_KINDS, 'input']);
+const NODE_KINDS_BY_VERSION = Object.freeze({
+  [VERSION]: NODE_KINDS,
+  [VERSION_V2]: NODE_KINDS_V2,
+});
+
+// Properties an `input` node may NEVER carry, because each of them would make the
+// node claim to display CURRENT STATE. An input is a transient argument to an
+// interaction; it has no value to show, and a node that appeared to show one
+// would be exactly the "the current source is empty" lie this kind exists to
+// prevent (ownership row 67 / Images jtz.1).
+//
+// These cannot live in FORBIDDEN_KEYS: `text` is REQUIRED on text and field
+// nodes, and `editable` on an editable field. So this is a PER-KIND denylist,
+// which is a deliberate qualification of the CONFORMANCE NOTE's blanket
+// tolerance of unknown properties -- see that note.
+const INPUT_FORBIDDEN_KEYS = Object.freeze(['text', 'value', 'currentValue', 'editable']);
 
 // Fields that would make a node host-specific (DOM, GTK, or geometry). Their
 // presence anywhere in a node is a contract violation.
@@ -69,18 +97,24 @@ function isRefLike(value) {
   );
 }
 
+// Version-agnostic: this owner validates more than one version, so naming v1 in
+// every message would be a lie for a v2 document.
 function fail(message) {
-  throw new TypeError(`SemanticUi/v1 contract violation: ${message}`);
+  throw new TypeError(`SemanticUi contract violation: ${message}`);
 }
 
 // Validate one node recursively. `path` is for error messages.
-function validateNode(node, path) {
+function validateNode(node, path, version) {
   if (node == null || typeof node !== 'object' || Array.isArray(node)) {
     fail(`${path}: a node must be a plain object`);
   }
+  const kinds = NODE_KINDS_BY_VERSION[version];
+  if (!kinds) fail(`${path}: no kind table for version ${JSON.stringify(version)}`);
   const kind = node.kind;
-  if (!NODE_KINDS.includes(kind)) {
-    fail(`${path}: unknown node kind ${JSON.stringify(kind)} (want one of ${NODE_KINDS.join('/')})`);
+  // The version's OWN closed table -- an `input` inside a version:1 document is
+  // rejected here, before any kind-specific handling can make it legal.
+  if (!kinds.includes(kind)) {
+    fail(`${path}: unknown node kind ${JSON.stringify(kind)} in SemanticUi/v${version} (want one of ${kinds.join('/')})`);
   }
   for (const key of Object.keys(node)) {
     if (FORBIDDEN_KEYS.includes(key)) {
@@ -94,7 +128,7 @@ function validateNode(node, path) {
     case 'group': {
       if (node.title != null && typeof node.title !== 'string') fail(`${path}.group.title must be a string`);
       if (!Array.isArray(node.children)) fail(`${path}.group.children must be an array`);
-      node.children.forEach((child, i) => validateNode(child, `${path}.children[${i}]`));
+      node.children.forEach((child, i) => validateNode(child, `${path}.children[${i}]`, version));
       break;
     }
     case 'text': {
@@ -130,7 +164,7 @@ function validateNode(node, path) {
     case 'collection': {
       if (node.label != null && typeof node.label !== 'string') fail(`${path}.collection.label must be a string`);
       if (!Array.isArray(node.items)) fail(`${path}.collection.items must be an array`);
-      node.items.forEach((item, i) => validateNode(item, `${path}.items[${i}]`));
+      node.items.forEach((item, i) => validateNode(item, `${path}.items[${i}]`, version));
       break;
     }
     case 'action': {
@@ -138,6 +172,32 @@ function validateNode(node, path) {
       // Safe-integer cap (same cross-host identity rule as field.key).
       if (!Number.isSafeInteger(node.key) || node.key < 0) {
         fail(`${path}.action.key must be a non-negative safe integer (a descriptor-local item key)`);
+      }
+      break;
+    }
+    case 'input': {
+      // A TRANSIENT text argument to an interaction. It says "this view accepts
+      // text here" and deliberately CANNOT say anything about current state.
+      for (const forbidden of INPUT_FORBIDDEN_KEYS) {
+        if (Object.hasOwn(node, forbidden)) {
+          fail(
+            `${path}.input.${forbidden} is not allowed: an input is a transient argument, `
+            + 'never a display of current state (use a field for state that exists)',
+          );
+        }
+      }
+      if (typeof node.label !== 'string') fail(`${path}.input.label must be a string`);
+      if (typeof node.submitLabel !== 'string') fail(`${path}.input.submitLabel must be a string`);
+      // REQUIRED rather than optional-with-default: a host default would have to
+      // be pinned identically in both realizers or the cross-host equivalence
+      // would be accidental, and the tolerance rule means a misspelled
+      // `submitLable` is silently dropped and the host silently falls back.
+      if (node.valueKind !== 'text') {
+        fail(`${path}.input.valueKind must be 'text' (the only input scalar in this slice), got ${JSON.stringify(node.valueKind)}`);
+      }
+      // Same cross-host identity rule as field.key/action.key.
+      if (!Number.isSafeInteger(node.key) || node.key < 0) {
+        fail(`${path}.input.key must be a non-negative safe integer (a descriptor-local input key)`);
       }
       break;
     }
@@ -154,7 +214,9 @@ function validateNode(node, path) {
 function validateSemanticUi(doc) {
   if (doc == null || typeof doc !== 'object' || Array.isArray(doc)) fail('the document must be a plain object');
   if (doc.kind !== 'semantic-ui') fail(`document.kind must be 'semantic-ui', got ${JSON.stringify(doc.kind)}`);
-  if (doc.version !== VERSION) fail(`unsupported version ${JSON.stringify(doc.version)} (this host understands ${VERSION})`);
+  if (!SUPPORTED_VERSIONS.includes(doc.version)) {
+    fail(`unsupported version ${JSON.stringify(doc.version)} (this host understands ${SUPPORTED_VERSIONS.join('/')})`);
+  }
   if (doc.root == null) fail('document.root is required');
   // The document object itself is data too: no host-specific fields or
   // smuggled refs at the top level (only kind/version/root are expected).
@@ -166,7 +228,7 @@ function validateSemanticUi(doc) {
       fail(`document.${key}: a ref/subject may not appear in a SemanticUi document`);
     }
   }
-  validateNode(doc.root, 'root');
+  validateNode(doc.root, 'root', doc.version);
   return Object.freeze(doc);
 }
 
@@ -362,15 +424,43 @@ function semanticUiForPresentation(presentationDescriptor) {
     }
   }
 
+  // TRANSIENT COMMAND INPUTS (SemanticUi/v2, Bead ngh). A GENERIC capability, not
+  // a native-Smalltalk one: any descriptor may carry an ordered
+  // `parameters.inputs` array and gets one `input` node per entry. The ARRAY
+  // INDEX IS THE KEY, enumerated ONCE here -- the consumer's own resolver indexes
+  // the SAME array, so neither side derives a key independently (E2's lesson:
+  // two co-wrong derivations agree with each other and prove nothing).
+  //
+  // Only `key`, the display labels and `valueKind` cross into the document. Any
+  // other property an entry carries -- notably the semantic `role` -- stays with
+  // the Environment owner: the renderer must not learn what an input MEANS.
+  const inputs = Array.isArray(params.inputs) ? params.inputs : [];
+  for (const [key, entry] of inputs.entries()) {
+    children.push({
+      kind: 'input',
+      key,
+      label: valueText(entry?.label),
+      valueKind: 'text',
+      submitLabel: valueText(entry?.submitLabel),
+    });
+  }
+
+  // A document is stamped v2 ONLY when it actually uses a v2 capability. Every
+  // other document stays v1, so no existing consumer or fixture migrates merely
+  // because v2 exists.
   return validateSemanticUi({
     kind: 'semantic-ui',
-    version: VERSION,
+    version: inputs.length > 0 ? VERSION_V2 : VERSION,
     root: {kind: 'group', title: heading, children},
   });
 }
 
 export {
   VERSION as SEMANTIC_UI_VERSION,
+  VERSION_V2 as SEMANTIC_UI_VERSION_V2,
+  SUPPORTED_VERSIONS as SEMANTIC_UI_SUPPORTED_VERSIONS,
+  NODE_KINDS_V2 as SEMANTIC_UI_NODE_KINDS_V2,
+  INPUT_FORBIDDEN_KEYS as SEMANTIC_UI_INPUT_FORBIDDEN_KEYS,
   NODE_KINDS as SEMANTIC_UI_NODE_KINDS,
   validateSemanticUi,
   semanticUiForPresentation,

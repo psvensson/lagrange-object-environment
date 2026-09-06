@@ -50,13 +50,19 @@ fn accepts_green_fixtures() {
         }
         let name = entry.file_name().to_string_lossy().to_string();
         // Not a SemanticUi document: the canonical cross-host INTENT bytes.
-        if !name.ends_with(".json") || name == "edit-field-intent.json" {
+        // No by-name exclusion: INTENT fixtures are a separate contract domain and
+        // live in intents/, which this file-only walk never sees.
+        if !name.ends_with(".json") {
             continue;
         }
         let json = read_fixture(&name);
         let doc = parse_semantic_ui(&json).unwrap_or_else(|e| panic!("green fixture {name} must validate: {e}"));
         assert_eq!(doc.kind, "semantic-ui");
-        assert_eq!(doc.version, 1);
+        assert!(
+            lagrange_host_linux::semantic_ui::SUPPORTED_VERSIONS.contains(&doc.version),
+            "a green fixture must carry a version this host supports, got {}",
+            doc.version
+        );
         seen += 1;
     }
     assert!(seen >= 8, "expected the green conformance corpus (>= 8 fixtures), found {seen}");
@@ -105,9 +111,15 @@ fn integral_float_conformance_with_js() {
         let json = format!(r#"{{"kind":"semantic-ui","version":1,"root":{{"kind":"group","children":[{{"kind":"collection","items":[{{"kind":"action","key":{bad},"label":"a"}}]}}]}}}}"#);
         assert!(parse_semantic_ui(&json).is_err(), "non-integral/negative key {bad} must be rejected");
     }
-    // version with float syntax (integral) is accepted; non-1 is rejected.
+    // Version with float syntax (integral) is accepted for every SUPPORTED
+    // version; an UNSUPPORTED one is rejected. 3, not 2: version 2 is now a
+    // supported contract, and the invariant under test is "a version this host
+    // does not understand is loud", never "the integer 2 is forever invalid" --
+    // letting an old negative assertion reserve a version number would let a
+    // test dictate the public contract.
     assert!(parse_semantic_ui(r#"{"kind":"semantic-ui","version":1.0,"root":{"kind":"group","children":[]}}"#).is_ok());
-    assert!(parse_semantic_ui(r#"{"kind":"semantic-ui","version":2.0,"root":{"kind":"group","children":[]}}"#).is_err());
+    assert!(parse_semantic_ui(r#"{"kind":"semantic-ui","version":2.0,"root":{"kind":"group","children":[]}}"#).is_ok());
+    assert!(parse_semantic_ui(r#"{"kind":"semantic-ui","version":3.0,"root":{"kind":"group","children":[]}}"#).is_err());
 }
 
 /// Cross-host identity: the GTK realizer builds real controls from the SAME
@@ -163,10 +175,10 @@ fn fixtures_drive_real_gtk_controls_and_identical_intents() {
     let intent = insp.intents.borrow().last().cloned().expect("an edit intent was recorded");
     let intent_json = serde_json::to_value(&intent).expect("the intent serializes");
     let canonical: serde_json::Value =
-        serde_json::from_str(&read_fixture("edit-field-intent.json")).expect("the canonical intent fixture parses");
+        serde_json::from_str(&read_fixture("intents/edit-field.json")).expect("the canonical intent fixture parses");
     assert_eq!(
         intent_json, canonical,
-        "the GTK edit-field intent serializes to the SAME bytes the DOM emits (edit-field-intent.json)"
+        "the GTK edit-field intent serializes to the SAME bytes the DOM emits (intents/edit-field.json)"
     );
 
     // --- Project: name + identity fields + stable member key/role/cross-Image

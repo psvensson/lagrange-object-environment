@@ -1,0 +1,1 @@
+{"kind": "semantic-ui", "version": 1, "root": {"kind": "group", "children": [{"kind": "input", "key": 0, "label": "L", "valueKind": "text", "submitLabel": "S"}]}}
