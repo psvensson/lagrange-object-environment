@@ -18,5 +18,7 @@ The documents here define the object-environment boundary before they define a v
 - [Proposals](proposals/) — downward proposals to Lagrange Images for missing image-level contracts (per ADR 0002)
   - [Authorized object-creation lane](proposals/authorized-object-creation-lane.md) — delivered as substrate ADR 0062
   - [Indexed-part lanes for ordered collections](proposals/indexed-part-lanes-for-ordered-collections.md) — Perspective persistence
+  - [Version-aware Project read and authorized rename](proposals/authorized-project-rename-lane.md) — answered as substrate ADR 0080
+  - [Provisioning seam for Environment-owned well-known objects](proposals/environment-provisioning-seam.md) — OPEN; blocks the object-native Theme lane
 
 Agents should start at the repository-root [`AGENTS.md`](../AGENTS.md), then use the ownership registry and Beads state to locate the authoritative context for a task.
