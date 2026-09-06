@@ -58,13 +58,41 @@ function createCommandRouter({compositor, commandRegistry, dispatch, authorityPr
     }
 
     // Applicability ONLY: discover candidate commands for this subject. This is
-    // never authorization. Selection among applicable commands is the router's
-    // UI-invocation policy: an explicit context.commandId wins; otherwise the
-    // minimal default is the first applicable command.
+    // never authorization.
     const {commands} = commandRegistry.discover(subject, context);
-    const command = commands.find((c) => c.id === context.commandId) ?? commands[0] ?? null;
+
+    // SELECTION POLICY. An explicit `context.commandId` is a STATEMENT OF INTENT,
+    // not a hint: it dispatches exactly that Command, or NOTHING.
+    //
+    // This used to read `commands.find(...) ?? commands[0] ?? null`, which meant a
+    // caller could ask for X and, if X was absent or inapplicable, silently get Y
+    // executed against its subject.
+    //
+    // That is the whole defect and it is sufficient on its own. There was NO
+    // authority divergence: the demand below is built from the SELECTED
+    // `command.id`, so it always named the Command that actually ran.
+    //
+    // `undefined` AND `null` both count as ABSENT, and for an absent id the
+    // previous default is unchanged: the first applicable Command. That path was
+    // never the defect, and preserving it is why ownership row 65's requirement
+    // (every edit binding declares its own commandId) is NOT retired by this
+    // change -- EnvironmentShell still enforces it, and must.
+    //
+    // KNOWN LIMIT: an id naming a Command absent from the REGISTRY -- a wiring or
+    // typo bug -- is indistinguishable here from one merely inapplicable to this
+    // subject, because `discover` answers only the applicable set. Both return a
+    // silent null, a FOURTH meaning of this method's null. A binding wired to a
+    // Command id that does not exist is therefore permanently and silently inert.
+    // See the bead; making that case loud needs a registry seam this owner does
+    // not have.
+    const requested = context.commandId;
+    const command = requested === undefined || requested === null
+      ? (commands[0] ?? null)
+      : (commands.find((c) => c.id === requested) ?? null);
     if (!command) {
-      return null; // no applicable command
+      // Either nothing applies, or the caller named a Command that is absent or
+      // inapplicable for this subject. Both are "not routed"; neither dispatches.
+      return null;
     }
 
     // Authorization happens AT DISPATCH: a fresh authority context from the
