@@ -167,6 +167,47 @@ test('a REFUSED command reaches the consumer: onInputError fires, exactly once',
   assert.ok(!events.some(([kind]) => kind === 'onSubmitted'), 'a refusal was reported as a submission');
 });
 
+test('a bound Command that CRASHES deciding applicability reaches onInputError as ITSELF', async () => {
+  // Bead 1yb, end to end, with NO shell change: CommandRouter rethrows the
+  // registry's own applicability error unchanged, and it travels the ORDINARY
+  // binding channel -- router rejection -> handleInputIntent catch ->
+  // onInputError. The shell must NOT special-case it (nor
+  // RequestedCommandUnavailableError); the consumer receives the SAME object the
+  // Command's own `applies` threw, with its stack intact, which is the whole
+  // point of not wrapping it.
+  const {createCommandRouter} = await import('../src/command-router.js');
+  const boom = new TypeError('applies() read a field of undefined');
+  let onIntent = null;
+  const events = [];
+  const adapter = {onIntent(h) { onIntent = h; return () => {}; }};
+  const compositor = {
+    viewForSurfaceHandle: (h) => (h === HANDLE ? {viewId: VIEW, presentationDescriptor: DESCRIPTOR} : null),
+    openView: async () => {}, presentOn: async () => {}, liveView: () => null,
+  };
+  const commandRouter = createCommandRouter({
+    compositor,
+    commandRegistry: {discover: () => ({commands: [], failures: [{commandId: 'crashes', error: boom}]})},
+    authorityProvider: async () => { throw new Error('a refused request must not mint authority'); },
+    dispatch: async () => { throw new Error('nothing may dispatch'); },
+  });
+  const shell = createEnvironmentShell({
+    navigator: {navigate: async () => null}, selectionModel: {select: () => {}},
+    compositor, adapter, presentationRegistry: {discover: () => ({presentations: [], failures: []})},
+  });
+  shell.bindIntents({adapter, commandRouter, inputBindings: [{
+    viewId: VIEW, commandId: 'crashes',
+    resolveInput: (d, k) => ({role: d.parameters.inputs[k].role}),
+    onSubmitted: (r) => events.push(['onSubmitted', r]),
+    onInputError: (e) => events.push(['onInputError', e]),
+  }]});
+  onIntent({kind: 'submit-input', key: 0, text: 'x'}, HANDLE);
+  await new Promise((r) => setTimeout(r, 20));
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0][0], 'onInputError');
+  assert.equal(events[0][1], boom, 'the consumer receives the Command\'s OWN error object');
+});
+
 test('an input binding without an error channel is REJECTED at bind time', async () => {
   assert.throws(
     () => harness({inputBindings: [{viewId: VIEW, commandId: 'c', resolveInput: () => ({})}]}),
