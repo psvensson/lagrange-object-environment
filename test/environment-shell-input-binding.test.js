@@ -65,7 +65,7 @@ test('an EDIT binding does not answer a submit-input', async () => {
 test('WITH an input binding: resolved context arrives under `input`, never `field`', async () => {
   let seen = null;
   const h = harness({inputBindings: [{
-    viewId: VIEW, commandId: 'replace-demo',
+    viewId: VIEW, commandId: 'replace-demo', onInputError: () => {},
     resolveInput: (descriptor, key) => { seen = {descriptor, key}; return {role: descriptor.parameters.inputs[key].role}; },
   }]});
   h.emit({kind: 'submit-input', key: 0, text: 'line one\nline two'});
@@ -81,7 +81,7 @@ test('WITH an input binding: resolved context arrives under `input`, never `fiel
 });
 
 test('a null resolver result is an explicit no-op, not a dispatch', async () => {
-  const h = harness({inputBindings: [{viewId: VIEW, commandId: 'c', resolveInput: () => null}]});
+  const h = harness({inputBindings: [{viewId: VIEW, commandId: 'c', resolveInput: () => null, onInputError: () => {}}]});
   h.emit({kind: 'submit-input', key: 99, text: 'x'});
   await new Promise((r) => setImmediate(r));
   assert.equal(h.calls.consumeIntent, 0);
@@ -100,12 +100,12 @@ test('a malformed resolver result dispatches nothing and reports once', async ()
 });
 
 test('the inspector view may not be bound through inputBindings', async () => {
-  assert.throws(() => harness({inputBindings: [{viewId: 'inspector-view', commandId: 'c', resolveInput: () => ({})}]}),
+  assert.throws(() => harness({inputBindings: [{viewId: 'inspector-view', commandId: 'c', resolveInput: () => ({}), onInputError: () => {}}]}),
     /inspector view may not be bound through inputBindings/);
 });
 
 test('an input binding must declare its own commandId', async () => {
-  assert.throws(() => harness({inputBindings: [{viewId: VIEW, resolveInput: () => ({})}]}),
+  assert.throws(() => harness({inputBindings: [{viewId: VIEW, resolveInput: () => ({}), onInputError: () => {}}]}),
     /must declare its commandId/);
 });
 
@@ -117,10 +117,59 @@ test('a stale handle is ignored before any binding is consulted', async () => {
   let consumed = 0;
   const shell = createEnvironmentShell({navigator: {navigate: async () => null}, selectionModel: {select: () => {}}, compositor, adapter, presentationRegistry: {discover: () => ({presentations: [], failures: []})}});
   shell.bindIntents({adapter, commandRouter: {async consumeIntent() { consumed += 1; return null; }},
-    inputBindings: [{viewId: VIEW, commandId: 'c', resolveInput: () => { resolved += 1; return {}; }}]});
+    inputBindings: [{viewId: VIEW, commandId: 'c', onInputError: () => {}, resolveInput: () => { resolved += 1; return {}; }}]});
   onIntent({kind: 'submit-input', key: 0, text: 'x'}, 'dead-handle');
   await new Promise((r) => setImmediate(r));
   assert.equal(resolved, 0);
   assert.equal(consumed, 0);
 });
 
+
+test('a REFUSED command reaches the consumer: onInputError fires, exactly once', async () => {
+  // The regression this guards, found by review: CommandRouter now REFUSES an
+  // unavailable requested Command by throwing (Bead z9b). On the renderer's
+  // fire-and-forget path a binding without an error channel observed NOTHING at
+  // all -- not even the `onSubmitted(null)` it used to get -- so a user pressed
+  // the control and nothing whatsoever happened. That is the dead-affordance
+  // failure z9b exists to make visible, reintroduced by z9b itself.
+  //
+  // onInputError is now REQUIRED on this table, so the channel always exists.
+  const {createCommandRouter} = await import('../src/command-router.js');
+  let onIntent = null;
+  const events = [];
+  const adapter = {onIntent(h) { onIntent = h; return () => {}; }};
+  const compositor = {
+    viewForSurfaceHandle: (h) => (h === HANDLE ? {viewId: VIEW, presentationDescriptor: DESCRIPTOR} : null),
+    openView: async () => {}, presentOn: async () => {}, liveView: () => null,
+  };
+  const commandRouter = createCommandRouter({
+    compositor,
+    // Nothing applicable answers the id the binding names.
+    commandRegistry: {discover: () => ({commands: [{id: 'something-else'}], failures: []})},
+    authorityProvider: async () => ({}),
+    dispatch: async (c) => ({ran: c.id}),
+  });
+  const shell = createEnvironmentShell({
+    navigator: {navigate: async () => null}, selectionModel: {select: () => {}},
+    compositor, adapter, presentationRegistry: {discover: () => ({presentations: [], failures: []})},
+  });
+  shell.bindIntents({adapter, commandRouter, inputBindings: [{
+    viewId: VIEW, commandId: 'not-wired-yet',
+    resolveInput: (d, k) => ({role: d.parameters.inputs[k].role}),
+    onSubmitted: (r) => events.push(['onSubmitted', r]),
+    onInputError: (e) => events.push(['onInputError', e.name, e.commandId]),
+  }]});
+  onIntent({kind: 'submit-input', key: 0, text: 'x'}, HANDLE);
+  await new Promise((r) => setTimeout(r, 20));
+
+  assert.deepEqual(events, [['onInputError', 'RequestedCommandUnavailableError', 'not-wired-yet']]);
+  // and NOT reported as a success with a null result
+  assert.ok(!events.some(([kind]) => kind === 'onSubmitted'), 'a refusal was reported as a submission');
+});
+
+test('an input binding without an error channel is REJECTED at bind time', async () => {
+  assert.throws(
+    () => harness({inputBindings: [{viewId: VIEW, commandId: 'c', resolveInput: () => ({})}]}),
+    /must declare onInputError/,
+  );
+});

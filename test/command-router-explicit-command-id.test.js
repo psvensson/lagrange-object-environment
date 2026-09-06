@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createCommandRouter} from '../src/command-router.js';
+import {createCommandRouter, RequestedCommandUnavailableError} from '../src/command-router.js';
 
 // An explicit `context.commandId` is a STATEMENT OF INTENT: it dispatches exactly
 // that Command, or nothing. It must never degrade to another applicable Command.
@@ -37,11 +37,18 @@ function harness(commandIds) {
 }
 
 test('an explicit commandId that is absent dispatches NOTHING', async () => {
+  // THE invariant of bead 4c4, and the only test here that discriminates it.
+  // Bead z9b later changed the FAILURE MODE from a silent null to a loud
+  // RequestedCommandUnavailableError; the invariant this test protects -- that
+  // nothing else runs against the subject -- is unchanged, and is asserted on the
+  // dispatch counter either way.
   const {router, dispatched} = harness(['alpha', 'beta']);
-  const result = await router.consumeIntent({kind: 'activate'}, {
-    surfaceHandle: HANDLE, context: {commandId: 'gamma-does-not-exist'},
-  });
-  assert.equal(result, null);
+  await assert.rejects(
+    () => router.consumeIntent({kind: 'activate'}, {
+      surfaceHandle: HANDLE, context: {commandId: 'gamma-does-not-exist'},
+    }),
+    RequestedCommandUnavailableError,
+  );
   assert.deepEqual(dispatched, [],
     'a caller asked for an absent Command and another one RAN against its subject');
 });
@@ -80,11 +87,15 @@ test('an explicit commandId is honoured even when it is the ONLY applicable Comm
 });
 
 test('an explicit commandId against an EMPTY applicable set dispatches nothing', async () => {
+  // Also loud after z9b: the caller named something and it did not happen, which
+  // is the same unanswerable REQUEST regardless of why the applicable set was
+  // empty. (An absent id against an empty set stays a quiet null -- that is an
+  // ordinary situation, not a programmer error. Proven in the z9b file.)
   const {router, dispatched} = harness([]);
-  const result = await router.consumeIntent({kind: 'activate'}, {
-    surfaceHandle: HANDLE, context: {commandId: 'alpha'},
-  });
-  assert.equal(result, null);
+  await assert.rejects(
+    () => router.consumeIntent({kind: 'activate'}, {surfaceHandle: HANDLE, context: {commandId: 'alpha'}}),
+    RequestedCommandUnavailableError,
+  );
   assert.deepEqual(dispatched, []);
 });
 
