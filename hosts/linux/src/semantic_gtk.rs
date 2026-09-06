@@ -23,34 +23,68 @@ use std::rc::Rc;
 use crate::semantic_ui::{Node, SemanticUi};
 
 /// A plain-data intent emitted by a control — identical shape to the browser's
-/// `{kind:'activate-item', key}` or `{kind:'edit-field', key, text}`. Serialized
-/// to the EXACT same JSON the DOM emits (text omitted when absent), so a test
-/// can assert cross-host intent BYTES, not just parallel per-host literals.
+/// `{kind:'activate-item', key}`, `{kind:'edit-field', key, text}` or
+/// `{kind:'submit-input', key, text}`. Serialized to the EXACT same JSON the DOM
+/// emits, so a test can assert cross-host intent BYTES, not just parallel
+/// per-host literals.
+///
+/// WHY AN ENUM AND NOT A STRUCT WITH `text: Option<String>` (which is what this
+/// was): with an Option plus `skip_serializing_if`, a `submit-input` built with
+/// `None` would silently serialize as `{"kind":"submit-input","key":0}` — and
+/// would compare EQUAL to a fixture that also lacked the field, so the omission
+/// could never be caught by a byte comparison. Here the variant REQUIRES its
+/// text, so a submit-input without one is not constructible and not
+/// serializable. An EMPTY STRING remains a perfectly legal submitted value; it
+/// is ABSENCE that is now impossible.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub struct Intent {
-    pub kind: String,
-    pub key: i64,
-    /// The RAW-STRING payload of an edit-field intent (None for activate-item).
-    /// Never a parsed value: text is the only editable scalar in this slice, and
-    /// raw text has one host-neutral interpretation (the canonical text value).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum Intent {
+    ActivateItem {
+        key: i64,
+    },
+    /// Mutate a REPRESENTED FIELD. Raw string, never a parsed value.
+    EditField {
+        key: i64,
+        text: String,
+    },
+    /// Supply a TRANSIENT ARGUMENT to an interaction (SemanticUi/v2). A
+    /// deliberately distinct meaning from EditField, kept distinct all the way
+    /// through the routing boundary.
+    SubmitInput {
+        key: i64,
+        text: String,
+    },
 }
 
 impl Intent {
     pub fn activate_item(key: i64) -> Self {
-        Self {
-            kind: "activate-item".to_string(),
-            key,
-            text: None,
-        }
+        Self::ActivateItem { key }
     }
 
     pub fn edit_field(key: i64, text: String) -> Self {
-        Self {
-            kind: "edit-field".to_string(),
-            key,
-            text: Some(text),
+        Self::EditField { key, text }
+    }
+
+    pub fn submit_input(key: i64, text: String) -> Self {
+        Self::SubmitInput { key, text }
+    }
+
+    /// The wire `kind` string, so a consumer can assert on it without matching
+    /// every variant. Kept in step with the serde rename by construction.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::ActivateItem { .. } => "activate-item",
+            Self::EditField { .. } => "edit-field",
+            Self::SubmitInput { .. } => "submit-input",
+        }
+    }
+
+    /// The descriptor-local key every intent carries.
+    pub fn key(&self) -> i64 {
+        match self {
+            Self::ActivateItem { key }
+            | Self::EditField { key, .. }
+            | Self::SubmitInput { key, .. } => *key,
         }
     }
 }
@@ -65,6 +99,9 @@ pub struct GtkRealization {
     buttons: Rc<RefCell<Vec<(i64, gtk4::Button)>>>,
     /// One entry per editable `field(key)` node, in document order.
     entries: Rc<RefCell<Vec<(i64, gtk4::Entry)>>>,
+    /// One TextView per `input(key)` node (SemanticUi/v2), in document order.
+    /// A TextView, not an Entry: an input is multiline by contract.
+    inputs: Rc<RefCell<Vec<(i64, gtk4::TextView, gtk4::Button)>>>,
 }
 
 impl GtkRealization {
@@ -76,6 +113,45 @@ impl GtkRealization {
         let (_, button) = buttons.iter().find(|(k, _)| *k == key)?;
         button.emit_clicked();
         self.intents.borrow().last().cloned()
+    }
+
+    /// Programmatically type TEXT into the input with the given
+    /// descriptor-local key and press its submit control — the native analogue
+    /// of typing into a textarea and clicking the submit button. Returns the
+    /// intent it emitted, or None if no such input exists.
+    ///
+    /// The text goes through the real TextBuffer, so a newline that a
+    /// single-line widget would drop cannot survive this round trip: if the
+    /// realization ever regressed to a GtkEntry, the emitted intent would differ
+    /// from the canonical fixture and the cross-host proof would go red.
+    pub fn submit_input(&self, key: i64, text: &str) -> Option<Intent> {
+        let inputs = self.inputs.borrow();
+        let (_, view, submit) = inputs.iter().find(|(k, _, _)| *k == key)?;
+        view.buffer().set_text(text);
+        submit.emit_clicked();
+        self.intents.borrow().last().cloned()
+    }
+
+    /// The GTK type name of each realized input control, in document order. A
+    /// TextView here is the contract; an Entry would be a silent regression to a
+    /// single-line control that cannot hold a newline.
+    pub fn input_widget_kinds(&self) -> Vec<String> {
+        use gtk4::prelude::ObjectExt;
+        self.inputs
+            .borrow()
+            .iter()
+            .map(|(_, view, _)| view.type_().name().to_string())
+            .collect()
+    }
+
+    /// The label of each input's explicit submit control, in document order.
+    pub fn input_submit_labels(&self) -> Vec<String> {
+        use gtk4::prelude::ButtonExt;
+        self.inputs
+            .borrow()
+            .iter()
+            .map(|(_, _, b)| b.label().map(|l| l.to_string()).unwrap_or_default())
+            .collect()
     }
 
     /// The labels of all action buttons, in document order.
@@ -153,17 +229,19 @@ pub fn realize(doc: &SemanticUi) -> GtkRealization {
     let intents = Rc::new(RefCell::new(Vec::new()));
     let buttons = Rc::new(RefCell::new(Vec::new()));
     let entries = Rc::new(RefCell::new(Vec::new()));
+    let inputs = Rc::new(RefCell::new(Vec::new()));
     let root = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
     root.set_widget_name("lagrange-tool");
     if let Some(title) = group_title(&doc.root) {
         root.set_tooltip_text(Some(&title));
     }
-    render_children(&doc.root, &root, &intents, &buttons, &entries);
+    render_children(&doc.root, &root, &intents, &buttons, &entries, &inputs);
     GtkRealization {
         root,
         intents,
         buttons,
         entries,
+        inputs,
     }
 }
 
@@ -180,10 +258,11 @@ fn render_children(
     intents: &Rc<RefCell<Vec<Intent>>>,
     buttons: &Rc<RefCell<Vec<(i64, gtk4::Button)>>>,
     entries: &Rc<RefCell<Vec<(i64, gtk4::Entry)>>>,
+    inputs: &Rc<RefCell<Vec<(i64, gtk4::TextView, gtk4::Button)>>>,
 ) {
     if let Node::Group { children, .. } = node {
         for child in children {
-            render_node(child, container, intents, buttons, entries);
+            render_node(child, container, intents, buttons, entries, inputs);
         }
     }
 }
@@ -194,6 +273,7 @@ fn render_node(
     intents: &Rc<RefCell<Vec<Intent>>>,
     buttons: &Rc<RefCell<Vec<(i64, gtk4::Button)>>>,
     entries: &Rc<RefCell<Vec<(i64, gtk4::Entry)>>>,
+    inputs: &Rc<RefCell<Vec<(i64, gtk4::TextView, gtk4::Button)>>>,
 ) {
     match node {
         Node::Text { role, text } => {
@@ -235,6 +315,48 @@ fn render_node(
             }
             container.append(&row);
         }
+        Node::Input { key, label, value_kind: _, submit_label } => {
+            // A TRANSIENT text argument. Deliberately NOT the editable-field
+            // widget: a GtkEntry is single-line by construction, which would
+            // silently make a multiline replacement source impossible, and would
+            // also make this look like the field affordance it must not be.
+            //
+            // A TextView has no `activate` signal, so submission is an EXPLICIT
+            // button rather than Enter. That is the point, not a workaround:
+            // Enter must stay unambiguously "insert a newline" in a control whose
+            // whole purpose is multiline text.
+            let row = gtk4::Box::new(gtk4::Orientation::Vertical, 6);
+            row.set_widget_name("lagrange-tool-input");
+            let key_label = gtk4::Label::new(Some(label));
+            key_label.set_halign(gtk4::Align::Start);
+            row.append(&key_label);
+
+            let view = gtk4::TextView::new();
+            view.set_widget_name("lagrange-tool-input-text");
+            view.set_accepts_tab(false);
+            // No initial content is taken from the document, because the document
+            // CARRIES none: an input has no `text` property at all.
+            row.append(&view);
+
+            let submit = gtk4::Button::with_label(submit_label);
+            submit.set_widget_name("lagrange-tool-input-submit");
+            let input_key = *key;
+            let intents_for_submit = Rc::clone(intents);
+            let view_for_submit = view.clone();
+            submit.connect_clicked(move |_| {
+                let buffer = view_for_submit.buffer();
+                let (start, end) = buffer.bounds();
+                // include_hidden_chars = true: the full raw string, newlines kept.
+                let text = buffer.text(&start, &end, true).to_string();
+                intents_for_submit
+                    .borrow_mut()
+                    .push(Intent::submit_input(input_key, text));
+            });
+            row.append(&submit);
+
+            inputs.borrow_mut().push((input_key, view.clone(), submit.clone()));
+            container.append(&row);
+        }
         Node::Collection { items, .. } => {
             let list = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
             list.set_widget_name("lagrange-tool-references");
@@ -257,7 +379,7 @@ fn render_node(
                         buttons.borrow_mut().push((key, button.clone()));
                         list.append(&button);
                     }
-                    other => render_node(other, &list, intents, buttons, entries),
+                    other => render_node(other, &list, intents, buttons, entries, inputs),
                 }
             }
             container.append(&list);
@@ -265,7 +387,7 @@ fn render_node(
         Node::Group { children, .. } => {
             let nested = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
             for child in children {
-                render_node(child, &nested, intents, buttons, entries);
+                render_node(child, &nested, intents, buttons, entries, inputs);
             }
             container.append(&nested);
         }

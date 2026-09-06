@@ -51,7 +51,7 @@ function isToolKind(kind) {
 
 // Render a SemanticUi NODE to a DOM element/fragment. Pure description ->
 // element; no presentation-parameter interpretation here.
-function renderNode(node, listen, onAction, onEdit) {
+function renderNode(node, listen, onAction, onEdit, onSubmitInput) {
   switch (node.kind) {
     case 'text': {
       const el = document.createElement(node.role === 'heading' ? 'h3' : 'p');
@@ -83,6 +83,39 @@ function renderNode(node, listen, onAction, onEdit) {
       fragment.append(dt, dd);
       return fragment;
     }
+    case 'input': {
+      // SemanticUi/v2: a TRANSIENT text argument. Deliberately NOT the editable
+      // <input type=text> the `field` affordance uses -- a single-line control
+      // would silently make multiline text impossible and would look like the
+      // field affordance this kind exists to be distinguishable from.
+      //
+      // A <textarea> plus an EXPLICIT submit button, matching GTK's
+      // TextView+Button exactly: Enter stays unambiguously "insert a newline",
+      // and submission is a separate deliberate act. No blur commit.
+      //
+      // The textarea starts EMPTY because the document carries no value at all;
+      // the in-progress text belongs to this realization until submission, and
+      // never travels back into the descriptor.
+      // A SELF-CONTAINED element, not a dt/dd pair: an input is not a row of the
+      // field list and must not depend on being inside one (the GTK port builds
+      // a standalone Box for the same reason).
+      const wrap = document.createElement('div');
+      wrap.className = 'lagrange-tool-input';
+      const caption = document.createElement('label');
+      caption.className = 'lagrange-tool-input-label';
+      caption.textContent = node.label;
+      const area = document.createElement('textarea');
+      area.className = 'lagrange-tool-input-text';
+      area.dataset.inputKey = String(node.key); // descriptor-local key
+      const submit = document.createElement('button');
+      submit.type = 'button';
+      submit.className = 'lagrange-tool-input-submit';
+      submit.textContent = node.submitLabel;
+      submit.dataset.inputKey = String(node.key);
+      listen(submit, 'click', () => onSubmitInput(node.key, area.value));
+      wrap.append(caption, area, submit);
+      return wrap;
+    }
     case 'collection': {
       const ul = document.createElement('ul');
       ul.className = 'lagrange-tool-references';
@@ -109,7 +142,7 @@ function renderNode(node, listen, onAction, onEdit) {
           listen(button, 'click', () => onAction(item.key));
           li.appendChild(button);
         } else {
-          li.appendChild(renderNode(item, listen, onAction, onEdit));
+          li.appendChild(renderNode(item, listen, onAction, onEdit, onSubmitInput));
         }
         ul.appendChild(li);
       }
@@ -124,7 +157,7 @@ function renderNode(node, listen, onAction, onEdit) {
 // descriptor-projection so a host/test can drive the SAME rendering path from
 // a checked-in fixture — the cross-host identity mechanism: the browser
 // consumes exactly the bytes the GTK realizer consumes.
-function renderSemanticUiToDom({doc, kind, surfaceHandle, listen, onAction, onEdit}) {
+function renderSemanticUiToDom({doc, kind, surfaceHandle, listen, onAction, onEdit, onSubmitInput}) {
   const root = document.createElement('section');
   root.className = `lagrange-tool lagrange-tool-${kind}`;
   root.dataset.surfaceHandle = surfaceHandle;
@@ -145,10 +178,10 @@ function renderSemanticUiToDom({doc, kind, surfaceHandle, listen, onAction, onEd
   for (const child of doc.root.children) {
     if (child.kind === 'field') {
       if (!fieldsList) fieldsList = document.createDocumentFragment();
-      fieldsList.appendChild(renderNode(child, listen, onAction, onEdit));
+      fieldsList.appendChild(renderNode(child, listen, onAction, onEdit, onSubmitInput));
     } else {
       flushFields();
-      root.appendChild(renderNode(child, listen, onAction, onEdit));
+      root.appendChild(renderNode(child, listen, onAction, onEdit, onSubmitInput));
     }
   }
   flushFields();
@@ -181,8 +214,17 @@ function createDomRealizer({mountPoint, emitIntent}) {
     const onEdit = (key, text) => {
       emitIntent(surfaceHandle, Object.freeze({kind: 'edit-field', key, text}));
     };
+    // RAW-STRING submit intent: {kind:'submit-input', key, text}. A DIFFERENT
+    // meaning from edit-field and kept distinct all the way through routing:
+    // edit-field mutates a represented field, submit-input supplies a transient
+    // argument to an interaction. `text` is ALWAYS present, including when it is
+    // the empty string -- an omitted text would be a different intent, not an
+    // empty one.
+    const onSubmitInput = (key, text) => {
+      emitIntent(surfaceHandle, Object.freeze({kind: 'submit-input', key, text}));
+    };
 
-    const root = renderSemanticUiToDom({doc, kind, surfaceHandle, listen, onAction, onEdit});
+    const root = renderSemanticUiToDom({doc, kind, surfaceHandle, listen, onAction, onEdit, onSubmitInput});
 
     let mounted = false;
     return {

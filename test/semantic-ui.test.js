@@ -41,6 +41,21 @@ const CASES = {
   // The authorized native METHOD description (Images ADR 0087). source and
   // provenance are null, so neither row is emitted at all.
   'native-method': {kind: 'native-method', subject: {kind: 'native-method', imageId: 'img', classRef: ref('smalltalk/class/BrowseChild'), selector: 'childFirst'}, parameters: {smalltalkMethod: {format: 'smalltalk-method-description/v1', class: ref('smalltalk/class/BrowseChild'), side: 'instance', selector: 'childFirst', method: ref('smalltalk/class/BrowseChild/method/Y2hpbGRGaXJzdA'), source: null, provenance: null}}},
+  // SemanticUi/v2 (Bead ngh): the TRANSIENT text input. A generic capability --
+  // note the ordinary `object` kind: nothing about `inputs` is native-Smalltalk,
+  // and no production descriptor carries one in this slice.
+  'v2-input': {kind: 'object', subject: ref('obj-b'), parameters: {fields: {}, inputs: [
+    {role: 'replacement-source', label: 'Replacement source', submitLabel: 'Replace'},
+  ]}},
+  // THREE inputs in REVERSED semantic order. This is the portability-interesting
+  // fixture: keys follow ARRAY POSITION, so Gamma holds key 0 here. A port that
+  // re-derived a key from an entry's content could not reproduce this document,
+  // and a one-element fixture could not tell the two implementations apart.
+  'v2-input-reorder': {kind: 'object', subject: ref('obj-b'), parameters: {fields: {}, inputs: [
+    {role: 'gamma', label: 'Gamma', submitLabel: 'SC'},
+    {role: 'beta', label: 'Beta', submitLabel: 'SB'},
+    {role: 'alpha', label: 'Alpha', submitLabel: 'SA'},
+  ]}},
   unavailable: {kind: 'unavailable-reference', subject: ref('obj-gone'), parameters: {reason: 'not found'}},
   unauthorized: {kind: 'unauthorized-reference', subject: ref('obj-secret'), parameters: {reason: 'denied'}},
 };
@@ -78,7 +93,13 @@ test('every green fixture has a projector case, and every case has a fixture', a
     .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
     .map((entry) => entry.name.replace(/\.json$/, ''))
     // Not a SemanticUi document: the canonical cross-host INTENT bytes.
-    .filter((name) => name !== 'edit-field-intent');
+    // No by-name exclusion: host-originated INTENT fixtures live in their own
+    // corpus (fixtures/semantic-ui/intents/) because they are a DIFFERENT
+    // contract domain -- documents are validator/projector-owned data, intents
+    // are emitted by a host. A shared directory once forced four separate
+    // by-name filters to keep them apart, and any new intent fixture silently
+    // became a malformed 'document'.
+    ;
   assert.deepEqual(onDisk.sort(), Object.keys(CASES).sort());
 });
 
@@ -92,7 +113,9 @@ test('the validator LOUDLY rejects every red conformance fixture', async () => {
     const doc = await readJson(join(FIXTURES, 'red', file));
     assert.throws(
       () => validateSemanticUi(doc),
-      /SemanticUi\/v1 contract violation/,
+      // Version-agnostic: this owner now validates v1 AND v2, so the prefix names
+      // neither. A v1-only prefix would be a lie in every v2 document's error.
+      /SemanticUi contract violation/,
       `red fixture ${file} must be rejected`,
     );
   }
@@ -105,7 +128,11 @@ test('specific violations are rejected with clear reasons', () => {
   // ref in an action
   assert.throws(() => validateSemanticUi({...base, root: {kind: 'group', children: [{kind: 'collection', items: [{kind: 'action', key: 0, label: 'a', subject: ref('o')}]}]}}), /ref\/subject/);
   // unknown version
-  assert.throws(() => validateSemanticUi({...base, version: 2}), /unsupported version/);
+  // 3, not 2: version 2 is now a SUPPORTED contract. The invariant under test is
+  // "a version this host does not understand is rejected loudly", never "the integer
+  // 2 is forever invalid" -- letting an old negative fixture reserve a version number
+  // would let a test dictate the public contract.
+  assert.throws(() => validateSemanticUi({...base, version: 3}), /unsupported version/);
   // unknown node kind
   assert.throws(() => validateSemanticUi({...base, root: {kind: 'window', children: []}}), /unknown node kind/);
   // non-integer action key
@@ -128,7 +155,7 @@ test('integral-valued numbers are accepted (JSON number model), matching the Rus
   }
   // version as an integral number (incl. float syntax) is accepted; non-1 rejected.
   assert.ok(validateSemanticUi({kind: 'semantic-ui', version: 1.0, root: {kind: 'group', children: []}}));
-  assert.throws(() => validateSemanticUi({kind: 'semantic-ui', version: 2.0, root: {kind: 'group', children: []}}), /unsupported version/);
+  assert.throws(() => validateSemanticUi({kind: 'semantic-ui', version: 3.0, root: {kind: 'group', children: []}}), /unsupported version/);
 });
 
 test('action keys stay descriptor-local integers (the PR #33 security property)', () => {

@@ -217,8 +217,8 @@ fn l3_coexistence() {
         .activate_gtk_action(&navigator_handle, 0)
         .expect("activate")
         .expect("navigator key 0 emits an intent");
-    assert_eq!(activate.kind, "activate-item");
-    assert_eq!(activate.key, 0);
+    assert_eq!(activate.kind(), "activate-item");
+    assert_eq!(activate.key(), 0);
 
     // Resolve key->ref via descriptor_references (the shell's resolution path).
     let nav_descriptor = adapter
@@ -227,7 +227,7 @@ fn l3_coexistence() {
         .expect("navigator is GTK");
     let references = descriptor_references(&nav_descriptor);
     let selected_ref = references
-        .get(activate.key as usize)
+        .get(activate.key() as usize)
         .expect("key 0 in range")
         .clone();
     assert_eq!(

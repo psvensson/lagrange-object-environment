@@ -27,6 +27,16 @@ fn rust_projector_matches_the_checked_in_fixtures() {
         ("project-editable.json", json!({"kind":"project","subject":{"kind":"project","imageId":"image-a","projectId":"project-alpha"},"parameters":{"project":{"format":"lagrange-project/v1","projectId":"project-alpha","name":"Alpha","namespace":{"kind":"ref","imageId":"image-a","objectId":"workspace"},"members":[{"key":"member/a","role":"source","target":{"kind":"ref","imageId":"image-a","objectId":"obj-a"}},{"key":"member/b","role":"dependency","target":{"kind":"ref","imageId":"image-b","objectId":"obj-b"}}]},"writable":["name"]}})),
         ("native-class.json", json!({"kind":"native-class","subject":{"kind":"native-class","imageId":"img","classRef":ref_("smalltalk/class/BrowseChild")},"parameters":{"smalltalkClass":{"format":"smalltalk-class-description/v1","class":ref_("smalltalk/class/BrowseChild"),"name":"BrowseChild","side":"instance","superclass":ref_("smalltalk/class/BrowseBase"),"classSide":ref_("smalltalk/metaclass/BrowseChild"),"layout":{"instanceVariables":["baseValue","childFirst"],"indexed":"none"},"selectors":["childFirst","childSecond"],"provenance":null},"targets":[{"target":{"kind":"native-method","imageId":"img","classRef":ref_("smalltalk/class/BrowseChild"),"selector":"childFirst"},"group":"selector","label":"childFirst"},{"target":{"kind":"native-method","imageId":"img","classRef":ref_("smalltalk/class/BrowseChild"),"selector":"childSecond"},"group":"selector","label":"childSecond"},{"target":{"kind":"native-class","imageId":"img","classRef":ref_("smalltalk/class/BrowseBase")},"group":"relation","label":"superclass -> img/smalltalk/class/BrowseBase"},{"target":{"kind":"native-class","imageId":"img","classRef":ref_("smalltalk/metaclass/BrowseChild")},"group":"relation","label":"class-side -> img/smalltalk/metaclass/BrowseChild"}]}})),
         ("native-method.json", json!({"kind":"native-method","subject":{"kind":"native-method","imageId":"img","classRef":ref_("smalltalk/class/BrowseChild"),"selector":"childFirst"},"parameters":{"smalltalkMethod":{"format":"smalltalk-method-description/v1","class":ref_("smalltalk/class/BrowseChild"),"side":"instance","selector":"childFirst","method":ref_("smalltalk/class/BrowseChild/method/Y2hpbGRGaXJzdA"),"source":null,"provenance":null}}})),
+        // SemanticUi/v2 (Bead ngh): the transient input, projected from the SAME
+        // descriptor the JS case map uses. An ordinary `object` kind -- nothing
+        // about `inputs` is native-Smalltalk, and no production descriptor
+        // carries one in this slice.
+        ("v2-input.json", json!({"kind":"object","subject":ref_("obj-b"),"parameters":{"fields":{},"inputs":[{"role":"replacement-source","label":"Replacement source","submitLabel":"Replace"}]}})),
+        // The portability-interesting case: keys follow ARRAY POSITION, so Gamma
+        // holds key 0. A port that re-derived a key from an entry's content
+        // cannot reproduce this fixture, and a one-input fixture could not tell
+        // the two implementations apart.
+        ("v2-input-reorder.json", json!({"kind":"object","subject":ref_("obj-b"),"parameters":{"fields":{},"inputs":[{"role":"gamma","label":"Gamma","submitLabel":"SC"},{"role":"beta","label":"Beta","submitLabel":"SB"},{"role":"alpha","label":"Alpha","submitLabel":"SA"}]}})),
         ("unavailable.json", json!({"kind":"unavailable-reference","subject":ref_("obj-gone"),"parameters":{"reason":"not found"}})),
         ("unauthorized.json", json!({"kind":"unauthorized-reference","subject":ref_("obj-secret"),"parameters":{"reason":"denied"}})),
     ];
@@ -43,7 +53,7 @@ fn rust_projector_matches_the_checked_in_fixtures() {
     .map(|entry| entry.file_name().to_string_lossy().to_string())
     .filter(|name| name.ends_with(".json"))
     // Not a SemanticUi document: the canonical cross-host INTENT bytes.
-    .filter(|name| name != "edit-field-intent.json")
+    // INTENT fixtures live in their own corpus (intents/); this walk is documents only.
     .collect();
     covered.sort();
     on_disk.sort();

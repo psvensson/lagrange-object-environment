@@ -389,6 +389,7 @@ window.__lagrangeProof = {
       doc, kind, surfaceHandle: 'fixture-surface',
       listen, onAction: (key) => intents.push({kind: 'activate-item', key}),
       onEdit: (key, text) => intents.push({kind: 'edit-field', key, text}),
+      onSubmitInput: (key, text) => intents.push({kind: 'submit-input', key, text}),
     });
     mount.appendChild(root);
     return {
@@ -416,6 +417,23 @@ window.__lagrangeProof = {
         if (!input) return;
         input.value = text;
         input.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
+      },
+      // The v2 transient inputs: the <textarea> values, and the labels of their
+      // EXPLICIT submit controls.
+      inputTextareas: Array.from(root.querySelectorAll('.lagrange-tool-input-text')).map((t) => ({
+        tag: t.tagName.toLowerCase(), value: t.value, key: t.dataset.inputKey,
+      })),
+      inputSubmitLabels: Array.from(root.querySelectorAll('.lagrange-tool-input-submit')).map((b) => b.textContent),
+      inputLabels: Array.from(root.querySelectorAll('.lagrange-tool-input-label')).map((l) => l.textContent),
+      // Type RAW text into the i-th input and press its submit BUTTON. Not
+      // Enter: in a multiline control Enter must insert a newline, so submission
+      // is a separate deliberate act -- the same rule the GTK TextView follows.
+      submitInput: (i, text) => {
+        const area = root.querySelectorAll('.lagrange-tool-input-text')[i];
+        const button = root.querySelectorAll('.lagrange-tool-input-submit')[i];
+        if (!area || !button) return;
+        area.value = text;
+        button.click();
       },
       takeIntents: () => intents.splice(0, intents.length),
       dispose: () => { for (const [el, t, f] of listeners) el.removeEventListener(t, f); root.remove(); },

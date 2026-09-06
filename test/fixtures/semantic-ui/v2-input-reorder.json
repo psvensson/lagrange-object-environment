@@ -1,0 +1,36 @@
+{
+ "kind": "semantic-ui",
+ "version": 2,
+ "root": {
+  "kind": "group",
+  "title": "object",
+  "children": [
+   {
+    "kind": "text",
+    "role": "heading",
+    "text": "object"
+   },
+   {
+    "kind": "input",
+    "key": 0,
+    "label": "Gamma",
+    "valueKind": "text",
+    "submitLabel": "SC"
+   },
+   {
+    "kind": "input",
+    "key": 1,
+    "label": "Beta",
+    "valueKind": "text",
+    "submitLabel": "SB"
+   },
+   {
+    "kind": "input",
+    "key": 2,
+    "label": "Alpha",
+    "valueKind": "text",
+    "submitLabel": "SA"
+   }
+  ]
+ }
+}

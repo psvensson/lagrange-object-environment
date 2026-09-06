@@ -32,7 +32,7 @@ The deeper potential lock-in is **JavaScript**, not the DOM: the environment cor
    - **Graphics-Component realizer** (existing): a Presentation Component → `wasi:webgpu` → host GPU/surface. For 3D, simulation, visualization, CAD, image tools.
    - **Semantic-UI realizer** (new generalization of the DOM lane): a Presentation → a small **semantic UI description** → a **host-native** realization. The current DOM realizer is reinterpreted as *the browser realization of this contract*; a Linux host realizes it as GTK, Android as Compose/native controls.
 
-4. **The semantic-UI description is semantic, not a widget toolkit.** Its vocabulary is `text / action / choice / field / collection / group` — *what the user can do*, never pixel layout or a `LagrangeButton`-style cross-platform widget set. An `action` becomes a `<button>` in the browser, a Compose `Button` on Android, a GTK button on Linux. We are not writing another GUI toolkit; the host owns appearance and platform conventions (text shaping, IME, clipboard, screen-reader, focus visuals).
+4. **The semantic-UI description is semantic, not a widget toolkit.** Its vocabulary is `text / action / choice / field / collection / group` (and, from SemanticUi/v2, `input` — see §4a) — *what the user can do*, never pixel layout or a `LagrangeButton`-style cross-platform widget set. An `action` becomes a `<button>` in the browser, a Compose `Button` on Android, a GTK button on Linux. We are not writing another GUI toolkit; the host owns appearance and platform conventions (text shaping, IME, clipboard, screen-reader, focus visuals).
 
 5. **Historical runtime choice — superseded by ADR 0014.** This ADR originally kept three environment-core hosting options open: (A) embed JS in native hosts, (B) port the core to Rust/native, or (C) make the environment core itself a WASM Component. ADR 0014 now makes **WASM Components + WIT the preferred portable client execution boundary**, with a native embedded-JS runtime only as a bounded fallback when current JS Component tooling cannot yet satisfy the real async acceptance path.
 
@@ -53,3 +53,48 @@ The deeper potential lock-in is **JavaScript**, not the DOM: the environment cor
 - **A `LagrangeButton`-style cross-platform widget toolkit** — becomes another GUI toolkit; keep the boundary semantic.
 - **Jump straight to Android** — prove Linux first.
 - **Permanent per-language native embedding** — superseded/rejected by ADR 0014; source-language support should converge on WASM/WIT where viable.
+
+## 4a. Amendment (Bead ngh): `input`, and why it is not a `field`
+
+**SemanticUi/v2** adds exactly one node kind, `input`, and changes nothing else. The vocabulary
+relation is `kinds(v2) = kinds(v1) + {input}`; every v1 document is a valid v2 document.
+
+Versioning is a **set of supported versions with a closed kind table each**, not a superset a v1
+validator also accepts. A v1-only host MUST reject a v2 document loudly — that is the point of
+having a version. A document is stamped v2 only when it actually uses a v2 capability, so no
+existing presentation migrates merely because v2 exists.
+
+**The distinction this kind exists to draw:**
+
+| | means |
+|---|---|
+| `field` | **semantic state that is being displayed.** Its `text` is a current value; when editable, it names a writable field of the record. |
+| `input` | **a transient argument an interaction accepts.** It makes no claim about current state whatsoever. |
+
+An `input` therefore carries no `text`, `value`, `currentValue` or `editable`, and the validator
+rejects all four explicitly rather than leaving it to convention. This is a deliberate per-kind
+qualification of the blanket tolerance of unknown properties.
+
+**Why this was forced rather than chosen.** Images truthfully answers `source: null` for a native
+Smalltalk method, and the projector already omits Source and Provenance rows rather than rendering
+them empty, because an empty row would imply a durable field exists. Expressing "replace this method
+with newly supplied source" as an editable empty `field` labelled Source would assert precisely the
+opposite: that Images has an authoritative writable `source` whose current value is empty. There was
+no truthful way to say it in v1.
+
+**Draft state belongs to the host, not to SemanticUi.** This is the subtle part and it is
+load-bearing. SemanticUi describes *that an interaction accepts transient text*; it does not own,
+carry, or describe the text the user has typed so far. The in-progress content lives in the host
+realization until submission, travels outward only in the submission intent, and never returns into
+a descriptor. A future "restore the user's draft" or "editor state" feature must not be met by
+putting draft text into the document — that would make the descriptor a mutable editor buffer and
+would reintroduce, in a new place, exactly the "this is the current value" claim `input` exists to
+avoid.
+
+**Submission** is `{kind:'submit-input', key, text}`, deliberately distinct from `edit-field` all the
+way through the routing boundary: `edit-field` mutates a represented field, `submit-input` supplies a
+transient argument. `text` is a raw string — never trimmed, parsed or normalized — and is always
+present, including when empty; an *absent* text is not an empty submission but a malformed intent.
+Because the text is naturally multiline, both hosts realize an `input` with a genuinely multiline
+control plus an **explicit** submit affordance, so Enter stays unambiguously "insert a newline"
+rather than doubling as commit.
