@@ -114,3 +114,29 @@ fn an_input_carrying_descriptor_projects_as_v2_and_leaks_no_role() {
     let raw = serde_json::to_string(&input_pairs(&doc)).unwrap();
     assert!(!raw.contains("replacement-source"), "the semantic role leaked into the document");
 }
+
+#[test]
+fn every_v1_node_kind_is_still_legal_under_v2() {
+    // `kinds(v2) = kinds(v1) + {input}` asserted DIRECTLY, not inferred from a
+    // corpus. A review shrank the v2 table to ["group","text","input"] and the
+    // entire native suite stayed green, because no checked-in v2 fixture contains
+    // a field, collection or action node -- so a v2 document valid in JS would
+    // have been rejected here, the exact cross-host divergence the shared corpus
+    // exists to prevent.
+    for kind in ["group", "text", "field", "collection", "action"] {
+        let node = match kind {
+            "group" => r#"{"kind":"group","children":[]}"#.to_string(),
+            "text" => r#"{"kind":"text","text":"t"}"#.to_string(),
+            "field" => r#"{"kind":"field","label":"L","text":"v"}"#.to_string(),
+            "collection" => r#"{"kind":"collection","items":[]}"#.to_string(),
+            _ => r#"{"kind":"action","key":0,"label":"a"}"#.to_string(),
+        };
+        for version in [1, 2] {
+            let doc = format!(
+                r#"{{"kind":"semantic-ui","version":{version},"root":{{"kind":"group","children":[{node}]}}}}"#
+            );
+            parse_semantic_ui(&doc)
+                .unwrap_or_else(|e| panic!("a {kind} node must be legal under v{version}: {e}"));
+        }
+    }
+}

@@ -90,12 +90,27 @@ pub const SUPPORTED_VERSIONS: &[u32] = &[SUPPORTED_VERSION, SUPPORTED_VERSION_V2
 // Node kinds legal in each version. Mirrors NODE_KINDS / NODE_KINDS_V2 in
 // src/semantic-ui.js.
 const NODE_KINDS_V1: &[&str] = &["group", "text", "field", "collection", "action"];
-const NODE_KINDS_V2: &[&str] = &["group", "text", "field", "collection", "action", "input"];
+// DERIVED, not a second hand-written literal: `kinds(v2) = kinds(v1) + {input}` is
+// the contract, and an independent list would let the two versions drift silently.
+// A review found exactly that hazard here -- shrinking this literal to
+// ["group","text","input"] left the whole native suite green, because no checked-in
+// v2 fixture contains a field, collection or action node. The JS owner gets the
+// relation structurally (`[...NODE_KINDS, 'input']`); so does this one now.
+const NODE_KINDS_V2: [&str; NODE_KINDS_V1.len() + 1] = {
+    let mut out = [""; NODE_KINDS_V1.len() + 1];
+    let mut i = 0;
+    while i < NODE_KINDS_V1.len() {
+        out[i] = NODE_KINDS_V1[i];
+        i += 1;
+    }
+    out[NODE_KINDS_V1.len()] = "input";
+    out
+};
 
 fn node_kinds_for(version: u32) -> Option<&'static [&'static str]> {
     match version {
         SUPPORTED_VERSION => Some(NODE_KINDS_V1),
-        SUPPORTED_VERSION_V2 => Some(NODE_KINDS_V2),
+        SUPPORTED_VERSION_V2 => Some(&NODE_KINDS_V2),
         _ => None,
     }
 }

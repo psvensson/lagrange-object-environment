@@ -281,4 +281,98 @@ fn fixtures_drive_real_gtk_controls_and_identical_intents() {
         "the GTK controls reflect the mutated fixture bytes: {:?}",
         mpane.action_labels()
     );
+
+    // --- SemanticUi/v2: the transient input, driven through the REAL realizer ---
+    //
+    // This block exists because the input arm previously had NO coverage at all.
+    // An adversarial review perturbed the click handler to
+    // `Intent::submit_input(999, text.trim())` -- a hard-coded wrong key AND a
+    // trimming host, the two exact failure modes this node kind exists to prevent
+    // -- and the ENTIRE native suite stayed green. The helper's own doc comment
+    // claimed a regression to a single-line `Entry` "would differ from the
+    // canonical fixture and the cross-host proof would go red". There was no such
+    // proof. There is now.
+    //
+    // It lives inside this test rather than its own because GTK4 binds widget
+    // creation to the thread that first initialized it, so exactly one test in
+    // this file may build widgets.
+    // The single-input fixture too, so the corpus guard below has a realization
+    // for every green document -- and so the minimal shape is exercised, not only
+    // the multi-input reorder case.
+    let single = realize(&parse_semantic_ui(&read_fixture("v2-input.json")).expect("v2-input validates"));
+    assert_eq!(single.input_widget_kinds(), vec!["GtkTextView"]);
+    assert_eq!(single.input_submit_labels(), vec!["Replace"]);
+
+    let doc = parse_semantic_ui(&read_fixture("v2-input-reorder.json")).expect("reorder fixture validates");
+    let pane = realize(&doc);
+
+    // A genuinely MULTILINE control, not the single-line editable-field Entry.
+    assert_eq!(
+        pane.input_widget_kinds(),
+        vec!["GtkTextView", "GtkTextView", "GtkTextView"],
+        "a v2 input must realize as a TextView; a GtkEntry cannot hold a newline"
+    );
+    // ...with an EXPLICIT submit control, so Enter stays newline insertion.
+    assert_eq!(pane.input_submit_labels(), vec!["SC", "SB", "SA"]);
+
+    // The canonical RAW value: leading and trailing spaces, a tab, and a
+    // TRAILING NEWLINE. Every one of those is something a "helpful" host or a
+    // stray .trim() destroys silently.
+    let canonical: serde_json::Value =
+        serde_json::from_str(&read_fixture("intents/submit-input-multiline.json")).expect("canonical intent");
+    let key = canonical["key"].as_i64().expect("key");
+    let text = canonical["text"].as_str().expect("text");
+
+    // key 2 is Alpha, because keys follow ARRAY POSITION and the fixture lists
+    // Gamma first. A port that re-derived a key from content would emit a
+    // different one here.
+    let emitted = pane
+        .submit_input(key, text)
+        .expect("the input must emit an intent when its submit control is pressed");
+    assert_eq!(
+        serde_json::to_value(&emitted).expect("serialize"),
+        canonical,
+        "the GTK submit-input intent must serialize to the SAME bytes the DOM emits \
+         (intents/submit-input-multiline.json)"
+    );
+
+    // And an EMPTY submission still carries text:"" rather than omitting it.
+    let empty_canonical: serde_json::Value =
+        serde_json::from_str(&read_fixture("intents/submit-input-empty.json")).expect("empty intent");
+    let empty = pane.submit_input(0, "").expect("empty submission emits");
+    let mut expected = empty_canonical.clone();
+    expected["key"] = serde_json::json!(0);
+    assert_eq!(serde_json::to_value(&empty).expect("serialize"), expected);
+
+}
+
+/// Every green fixture that CAN be realized IS realized by this lane.
+///
+/// The DOM lane has had this guard all along (test/browser/dom-coexistence.test.js);
+/// this lane only ever PARSED the corpus, which is how a whole node kind reached
+/// `main` with an unexercised realizer. Without this, any future fixture joins the
+/// parse walk and is silently never rendered natively.
+#[test]
+fn every_green_fixture_is_realized_by_this_lane_not_merely_parsed() {
+    // No GTK here: this is a pure source scan. GTK4 binds widget creation to the
+    // thread that initialized it, so only ONE test in this file may build widgets.
+    let source = include_str!("l2_semantic_gtk.rs");
+    let mut checked = 0;
+    for entry in std::fs::read_dir(fixture_path("")).expect("fixture dir") {
+        let entry = entry.expect("entry");
+        if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.ends_with(".json") {
+            continue;
+        }
+        assert!(
+            source.contains(&format!("read_fixture(\"{name}\")")),
+            "green fixture {name} is parsed but never REALIZED by the GTK lane: a fixture only one \
+             host renders is exactly the cross-host divergence the shared corpus exists to prevent"
+        );
+        checked += 1;
+    }
+    assert!(checked >= 8, "expected the green corpus, found {checked}");
 }

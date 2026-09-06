@@ -132,6 +132,28 @@ impl GtkRealization {
         self.intents.borrow().last().cloned()
     }
 
+    /// The GTK type name of each realized input control, in document order. A
+    /// TextView here is the contract; an Entry would be a silent regression to a
+    /// single-line control that cannot hold a newline.
+    pub fn input_widget_kinds(&self) -> Vec<String> {
+        use gtk4::prelude::ObjectExt;
+        self.inputs
+            .borrow()
+            .iter()
+            .map(|(_, view, _)| view.type_().name().to_string())
+            .collect()
+    }
+
+    /// The label of each input's explicit submit control, in document order.
+    pub fn input_submit_labels(&self) -> Vec<String> {
+        use gtk4::prelude::ButtonExt;
+        self.inputs
+            .borrow()
+            .iter()
+            .map(|(_, _, b)| b.label().map(|l| l.to_string()).unwrap_or_default())
+            .collect()
+    }
+
     /// The labels of all action buttons, in document order.
     pub fn action_labels(&self) -> Vec<String> {
         self.buttons

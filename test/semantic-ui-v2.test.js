@@ -123,18 +123,25 @@ test('a document is stamped v2 ONLY when it uses a v2 capability', () => {
   assert.equal(projectWith([]).version, 1, 'an EMPTY inputs array is not a v2 capability');
 });
 
-test('PRODUCTION FENCE: no production presentation carries inputs, so v2 has no affordance yet', () => {
-  // "This slice ships a CAPABILITY, not an affordance" is a scope statement.
-  // This makes it executable. E1 established the rule it protects: never render
-  // an affordance that routes nowhere. The v2 input has no production producer
-  // and no binding until E3 adds them TOGETHER with the Command that gives the
-  // affordance meaning.
+test('PRODUCTION FENCE: no production code path can introduce a v2 input', () => {
+  // WHAT THIS IS, stated accurately because an earlier version of this comment
+  // over-claimed and an adversarial review proved it: this is a GOLDEN-FILE check
+  // plus a SOURCE TRIPWIRE. It is NOT a statement about everything the system
+  // could project at runtime -- `parameters` is a spread of a provider's
+  // `context`, and a provider's context is built from Image data, so in principle
+  // an `inputs` array could arrive without any source file changing. Fully
+  // fencing that would mean driving every registered provider, which is E3-scale
+  // work and is not what this slice is for.
   //
-  // THE LOAD-BEARING CHECK is the checked-in PRODUCTION descriptors themselves:
-  // every production fixture is still v1 and carries no input node. That is a
-  // statement about what the system actually projects, which is the invariant
-  // that matters. (The two v2-* fixtures are the synthetic capability corpus and
-  // are excluded by name -- they exist precisely to exercise the new kind.)
+  // What it DOES catch is the realistic accident this slice must prevent: a
+  // developer wiring a production affordance before its binding and Command
+  // exist. The review's own perturbation -- adding `inputs` to
+  // ProjectBrowser's descriptor parameters -- is caught by the tripwire below,
+  // and previously was not, because the tripwire covered ONE module out of four.
+
+  // (1) GOLDEN FILE: every checked-in production fixture is still v1 with no
+  // input node. These are the projector's own canonical outputs, so this catches
+  // any change to what the projector emits for a known descriptor.
   const SYNTHETIC = new Set(['v2-input.json', 'v2-input-reorder.json']);
   let production = 0;
   for (const name of readdirSync(FIXTURES).filter((f) => f.endsWith('.json'))) {
@@ -147,19 +154,38 @@ test('PRODUCTION FENCE: no production presentation carries inputs, so v2 has no 
   }
   assert.ok(production >= 6, `expected the production corpus to be exercised, saw ${production}`);
 
-  // A SECONDARY TRIPWIRE, not the owner of this invariant: the native Smalltalk
-  // browser is the module E3 will change, so a mention of `inputs` there is an
-  // early warning that a production affordance is arriving. It is a cheaper,
-  // earlier signal than the descriptor check above -- not a substitute for it.
-  //
-  // WHEN E3 LANDS this whole fence is REPLACED ATOMICALLY, never merely deleted:
-  // the invariant becomes "a production input exists AND its binding and Command
-  // exist with it", which is the same rule stated for the state where the
-  // affordance is live.
-  const owner = readFileSync(resolve(HERE, '../src/native-smalltalk-browser.js'), 'utf8');
-  assert.ok(
-    !/\binputs\b/.test(owner),
-    'src/native-smalltalk-browser.js now mentions `inputs`: a production v2 affordance must land in '
-    + 'the SAME slice as its binding and Command, never before them',
-  );
+  // (2) SOURCE TRIPWIRE over EVERY module that turns a provider's context into
+  // descriptor `parameters`. There are four, and the previous version of this
+  // fence scanned only one of them -- which is exactly why the review's
+  // perturbation went undetected. Enumerated from the spread sites themselves so
+  // a fifth builder cannot be added without appearing here.
+  const BUILDERS = [
+    'src/environment-shell.js',
+    'src/project-browser.js',
+    'src/native-smalltalk-browser.js',
+    'src/composition-persistence.js',
+  ];
+  for (const rel of BUILDERS) {
+    const source = readFileSync(resolve(HERE, '..', rel), 'utf8');
+    assert.ok(
+      !/\binputs\b/.test(source),
+      `${rel} now mentions \`inputs\`: a production v2 affordance must land in the SAME slice as `
+      + 'its input binding and its Command, never before them (E1: nothing renders an affordance '
+      + 'that routes nowhere). When E3 lands, REPLACE this fence atomically -- the invariant becomes '
+      + '"a production input exists AND its binding and Command exist with it" -- never merely delete it.',
+    );
+  }
+
+  // (3) The list of builders above must stay complete: every module that spreads
+  // a provider context into descriptor parameters must be in it, or the tripwire
+  // silently shrinks the way it already did once.
+  const spreadSites = readdirSync(resolve(HERE, '../src'))
+    .filter((f) => f.endsWith('.js'))
+    // Matches BOTH shapes in the tree: a spread (`{...presentation.context}`) and
+    // a direct assignment (`parameters: p.context ?? {}`). The first version of
+    // this detector assumed a spread and silently missed two of the four.
+    .filter((f) => /parameters:[^\n]*\.context\b/.test(readFileSync(resolve(HERE, '../src', f), 'utf8')))
+    .map((f) => `src/${f}`);
+  assert.deepEqual(spreadSites.sort(), [...BUILDERS].sort(),
+    'a module builds descriptor parameters from a provider context but is not covered by the tripwire');
 });
