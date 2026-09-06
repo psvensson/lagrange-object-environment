@@ -47,9 +47,13 @@ test('an explicit commandId that is absent dispatches NOTHING', async () => {
 });
 
 test('an explicit commandId dispatches EXACTLY that Command, whatever the registration order', async () => {
-  // Order-dependence is precisely what the `?? commands[0]` fallback hid: asking
-  // for the FIRST registered Command would have passed under both the correct and
-  // the broken implementation.
+  // HONEST SCOPE, corrected after review: this does NOT discriminate the repair.
+  // `find(c => c.id === 'beta')` succeeds in both orders under the OLD selection
+  // too, so this passes either way. It guards a DIFFERENT wrong implementation --
+  // one that ignores `commandId` and always takes commands[0] -- which is worth
+  // pinning but is not the defect this bead is about. The discriminator is the
+  // absent-id test above; it is the only test here that goes red when the
+  // `?? commands[0]` fallback is restored.
   for (const order of [['alpha', 'beta'], ['beta', 'alpha']]) {
     const {router, dispatched} = harness(order);
     const result = await router.consumeIntent({kind: 'activate'}, {
@@ -85,15 +89,24 @@ test('an explicit commandId against an EMPTY applicable set dispatches nothing',
 });
 
 test('a null commandId is treated as absent, not as a Command named null', async () => {
+  // A DELIBERATE tension worth naming: a caller that computed an id and got null
+  // arguably said "I could not determine a Command", which by this bead's own
+  // principle argues for dispatching nothing. It is treated as absent because
+  // that is the pre-existing behaviour and this slice changes ONLY the explicit-id
+  // branch -- and because the absent-id default is relied on by the inspector's
+  // own entry points. Recorded rather than silently blessed.
   const {router, dispatched} = harness(['alpha', 'beta']);
   await router.consumeIntent({kind: 'activate'}, {surfaceHandle: HANDLE, context: {commandId: null}});
   assert.deepEqual(dispatched, ['alpha'], 'an explicitly null id must fall back to the default policy');
 });
 
 test('the authority context names the Command that will actually run', async () => {
-  // The authority demand is built from `command.id`. Under the old fallback a
-  // caller could be authorized for the Command it NAMED while a different one
-  // ran -- so this is not merely cosmetic.
+  // NOT a defence against the old fallback: the demand has ALWAYS been built from
+  // the SELECTED `command.id`, so it always named the Command that ran. An earlier
+  // version of this comment claimed the opposite -- that a caller could be
+  // authorized for the Command it NAMED while a different one ran -- and a review
+  // proved that backwards by execution. What this pins is the ordinary invariant
+  // that selection happens BEFORE authorization and the two cannot disagree.
   const seen = [];
   const commands = [{id: 'alpha'}, {id: 'beta'}];
   const router = createCommandRouter({

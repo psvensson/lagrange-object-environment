@@ -66,14 +66,25 @@ function createCommandRouter({compositor, commandRegistry, dispatch, authorityPr
     //
     // This used to read `commands.find(...) ?? commands[0] ?? null`, which meant a
     // caller could ask for X and, if X was absent or inapplicable, silently get Y
-    // executed against its subject. That is wrong on its own terms, and it forced
-    // a workaround on every caller forever: ownership row 65 already required each
-    // edit binding to declare its own commandId precisely so the router "could not
-    // fall back to an arbitrary applicable Command". The rule belongs here, in the
-    // owner, not in a discipline imposed on consumers.
+    // executed against its subject.
     //
-    // With NO commandId supplied the previous default is unchanged: the first
-    // applicable Command. That path was never the defect.
+    // That is the whole defect and it is sufficient on its own. There was NO
+    // authority divergence: the demand below is built from the SELECTED
+    // `command.id`, so it always named the Command that actually ran.
+    //
+    // `undefined` AND `null` both count as ABSENT, and for an absent id the
+    // previous default is unchanged: the first applicable Command. That path was
+    // never the defect, and preserving it is why ownership row 65's requirement
+    // (every edit binding declares its own commandId) is NOT retired by this
+    // change -- EnvironmentShell still enforces it, and must.
+    //
+    // KNOWN LIMIT: an id naming a Command absent from the REGISTRY -- a wiring or
+    // typo bug -- is indistinguishable here from one merely inapplicable to this
+    // subject, because `discover` answers only the applicable set. Both return a
+    // silent null, a FOURTH meaning of this method's null. A binding wired to a
+    // Command id that does not exist is therefore permanently and silently inert.
+    // See the bead; making that case loud needs a registry seam this owner does
+    // not have.
     const requested = context.commandId;
     const command = requested === undefined || requested === null
       ? (commands[0] ?? null)
