@@ -181,14 +181,15 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
                 // REQUIREMENT by Object Environment E2: createImageClientAdapter now refuses
                 // to construct without it, so both native compositions genuinely need it.
                 'authorizedDescribeSmalltalkMethod',
-                // Images #218's E3 pair. NOTE THE TENSE: at THIS commit no product code
-                // calls either -- this admission slice deliberately carries no E3 behavior --
-                // so unlike every entry above, the justification is a FORWARD commitment, not
-                // a present-tense fact. They are required here on purpose: the point of an
-                // admission slice is that a revision which cannot supply the seams the next
-                // slice needs is refused BEFORE that slice starts, not halfway through it.
-                // Requiring the read without the replacement would admit a revision that can
-                // show an editable method and never edit it.
+                // Images #218's E3 pair. The FORWARD COMMITMENT recorded here by the
+                // admission slice (#80) has been KEPT: Bead eij.3 makes both present-tense
+                // facts. NativeSmalltalkBrowser's method read IS
+                // authorizedReadSmalltalkMethodForUpdate -- the writer-facing read, so the
+                // position token is paired with the descriptor the user is actually shown --
+                // and the replace-native-method Command calls
+                // authorizedReplaceSmalltalkMethod through the ordinary authorized dispatch
+                // lane. Requiring the read without the replacement would have admitted a
+                // revision that can show an editable method and never edit it.
                 'authorizedReadSmalltalkMethodForUpdate',
                 'authorizedReplaceSmalltalkMethod',
                 // Images ccd8321 (#231): the METHOD-POSITION AUTHORITY VOCABULARY. A public
@@ -214,8 +215,19 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
               const requiredEnvironmentConstants = ['SMALLTALK_METHOD_READ_OPERATION'];
               // The authorized native Smalltalk browsing seams the Environment consumes
               // (Images ADR 0087). E1 required only the class seam and said the method seam
-              // would join when something called it; E2 calls it, so the pair is now the
+              // would join when something called it; E2 called it, so the pair became the
               // consumed contract.
+              //
+              // PRECISE AFTER E3, because the obvious reading is now wrong: the BROWSER's
+              // method read moved to authorizedReadSmalltalkMethodForUpdate, since a
+              // replacement token must be paired with the descriptor that is DISPLAYED and a
+              // second read beside it would pair a token with a resolution nobody was shown.
+              // authorizedDescribeSmalltalkMethod stays required and stays exposed as the
+              // adapter's LOOK-ONLY method capability -- Images keeps the reader/writer split
+              // deliberately -- and E3's acceptance exercises it as the INDEPENDENT
+              // cross-check that both seams answer the same revision after a replacement. It
+              // is no longer on a production display path, and saying otherwise here would be
+              // the kind of stale justification this list exists to prevent.
               //
               // Images' class-building and Cuis-import helpers are STILL not required: the
               // native lane deliberately cannot construct a class or install a selector, and

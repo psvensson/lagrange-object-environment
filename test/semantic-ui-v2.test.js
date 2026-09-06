@@ -123,68 +123,124 @@ test('a document is stamped v2 ONLY when it uses a v2 capability', () => {
   assert.equal(projectWith([]).version, 1, 'an EMPTY inputs array is not a v2 capability');
 });
 
-test('PRODUCTION FENCE: no production code path can introduce a v2 input', () => {
-  // WHAT THIS IS, stated accurately because an earlier version of this comment
-  // over-claimed and an adversarial review proved it: this is a GOLDEN-FILE check
-  // plus a SOURCE TRIPWIRE. It is NOT a statement about everything the system
-  // could project at runtime -- `parameters` is a spread of a provider's
-  // `context`, and a provider's context is built from Image data, so in principle
-  // an `inputs` array could arrive without any source file changing. Fully
-  // fencing that would mean driving every registered provider, which is E3-scale
-  // work and is not what this slice is for.
+test('PRODUCTION AFFORDANCE FENCE: a production input exists WITH its binding and its Command', async () => {
+  // REPLACED ATOMICALLY BY E3 (Bead eij.3), which is what ngh's version of this
+  // test instructed its successor to do -- never merely delete it.
   //
-  // What it DOES catch is the realistic accident this slice must prevent: a
-  // developer wiring a production affordance before its binding and Command
-  // exist. The review's own perturbation -- adding `inputs` to
-  // ProjectBrowser's descriptor parameters -- is caught by the tripwire below,
-  // and previously was not, because the tripwire covered ONE module out of four.
+  // ngh's invariant was "NO production code path can introduce a v2 input",
+  // because an affordance that routes nowhere is a dead control: E1's rule that
+  // nothing renders what cannot happen. E3 makes exactly one production input
+  // real, so the invariant INVERTS rather than disappearing: the input may exist
+  // ONLY as long as the binding and the Command that consume it exist with it.
+  //
+  // What is NOT claimed, restated from ngh because it is still true: this is a
+  // golden-file check plus a source tripwire, not a statement about everything
+  // the system could project at runtime -- `parameters` is a spread of a
+  // provider's context, and a provider's context is built from Image data.
+  const browser = await import('../src/native-smalltalk-browser.js');
 
-  // (1) GOLDEN FILE: every checked-in production fixture is still v1 with no
-  // input node. These are the projector's own canonical outputs, so this catches
-  // any change to what the projector emits for a known descriptor.
+  // (1) THE PRODUCTION INPUT IS REAL, and it is the browser's own array -- not a
+  // fixture literal, so a projector/browser drift cannot pass this.
+  const inputs = browser.NATIVE_METHOD_INPUTS;
+  assert.equal(inputs.length, 1, 'E3 threads exactly ONE input; a second needs its own justification');
+  assert.equal(inputs[0].role, browser.NATIVE_METHOD_SOURCE_INPUT_ROLE);
+  assert.ok(Object.isFrozen(inputs) && Object.isFrozen(inputs[0]));
+
+  // (2) ITS COMMAND EXISTS, is discoverable on a native-method subject, and is the
+  // one the binding names. A Command whose id did not match the binding's would
+  // be refused by CommandRouter (Bead z9b) -- loudly, but only at the first user
+  // gesture, which is exactly what this catches at build time instead.
+  const command = browser.createReplaceNativeMethodCommand();
+  assert.equal(command.id, browser.REPLACE_NATIVE_METHOD_COMMAND_ID);
+  assert.equal(command.applies({kind: 'native-method', imageId: 'i', classRef: {}, selector: 's'}, {}), true);
+  assert.equal(command.applies({kind: 'native-class', imageId: 'i', classRef: {}}, {}), false);
+
+  // (3) ITS BINDING EXISTS, names that Command explicitly, and resolves the SAME
+  // key space the projector emits: key 0 -> the source role, and nothing else.
+  const binding = browser.createNativeSmalltalkBrowser({
+    adapter: {
+      describeSmalltalkClass: () => {}, readSmalltalkMethodForUpdate: () => {},
+      classifySmalltalkClassReadError: () => {}, classifySmalltalkMethodReadError: () => {},
+    },
+    presentationRegistry: {discover: () => ({presentations: [], failures: []})},
+    compositor: {openView: async () => {}, presentOn: async () => {}, liveView: () => null},
+  }).replacementInputBinding({authorityFor: () => null, onReplacementError: () => {}});
+  assert.equal(binding.commandId, browser.REPLACE_NATIVE_METHOD_COMMAND_ID,
+    'the binding must name the Command that exists; an explicit commandId dispatches THAT one or nothing');
+  const descriptor = {kind: 'native-method', parameters: {inputs}};
+  assert.deepEqual(binding.resolveInput(descriptor, 0), {role: browser.NATIVE_METHOD_SOURCE_INPUT_ROLE});
+  assert.equal(binding.resolveInput(descriptor, 1), null, 'a key past the array is a no-op, never a wrong input');
+  assert.equal(typeof binding.tokenFor, 'function', 'the affordance carries its transient token supplier');
+
+  // (4) GOLDEN FILE. Exactly ONE production fixture may be v2, and it is the
+  // editable method -- the document the browser actually produces. Every other
+  // production fixture is still v1 with no input node, so E3 widened the
+  // affordance to one place rather than everywhere.
   const SYNTHETIC = new Set(['v2-input.json', 'v2-input-reorder.json']);
+  const V2_PRODUCTION = new Set(['native-method-editable.json']);
   let production = 0;
+  let v2Production = 0;
   for (const name of readdirSync(FIXTURES).filter((f) => f.endsWith('.json'))) {
     if (SYNTHETIC.has(name)) continue;
     const doc = JSON.parse(readFileSync(resolve(FIXTURES, name), 'utf8'));
     if (doc.kind !== 'semantic-ui') continue;
     production += 1;
-    assert.equal(doc.version, 1, `${name} is not v1: no production document may use v2 in this slice`);
+    if (V2_PRODUCTION.has(name)) {
+      v2Production += 1;
+      assert.equal(doc.version, 2, `${name} is the production v2 document and must be stamped v2`);
+      assert.equal(inputsOf(doc).length, 1, `${name} must carry exactly the one E3 input`);
+      assert.deepEqual(inputsOf(doc)[0], {
+        kind: 'input', key: 0, label: 'New source', valueKind: 'text', submitLabel: 'Replace',
+      }, 'the role must NOT cross into the document: the renderer never learns what an input MEANS');
+      continue;
+    }
+    assert.equal(doc.version, 1, `${name} is not v1: only the editable method may use v2`);
     assert.equal(inputsOf(doc).length, 0, `${name} carries an input node`);
   }
-  assert.ok(production >= 6, `expected the production corpus to be exercised, saw ${production}`);
+  assert.ok(production >= 7, `expected the production corpus to be exercised, saw ${production}`);
+  assert.equal(v2Production, 1, 'exactly one production fixture is the v2 one');
 
-  // (2) SOURCE TRIPWIRE over EVERY module that turns a provider's context into
-  // descriptor `parameters`. There are four, and the previous version of this
-  // fence scanned only one of them -- which is exactly why the review's
-  // perturbation went undetected. Enumerated from the spread sites themselves so
-  // a fifth builder cannot be added without appearing here.
+  // (5) SOURCE TRIPWIRE over EVERY module that turns a provider's context into
+  // descriptor `parameters`. ngh forbade `inputs` in all four; E3 permits it in
+  // EXACTLY ONE -- the owner that also supplies the binding and the Command
+  // asserted above -- and still forbids it in the other three. A production
+  // affordance in a module with no binding is the failure this catches.
+  const AFFORDANCE_OWNER = 'src/native-smalltalk-browser.js';
   const BUILDERS = [
     'src/environment-shell.js',
     'src/project-browser.js',
-    'src/native-smalltalk-browser.js',
+    AFFORDANCE_OWNER,
     'src/composition-persistence.js',
   ];
   for (const rel of BUILDERS) {
     const source = readFileSync(resolve(HERE, '..', rel), 'utf8');
+    if (rel === AFFORDANCE_OWNER) {
+      assert.ok(/\binputs\b/.test(source), `${AFFORDANCE_OWNER} must still thread the production input it owns`);
+      continue;
+    }
     assert.ok(
       !/\binputs\b/.test(source),
-      `${rel} now mentions \`inputs\`: a production v2 affordance must land in the SAME slice as `
-      + 'its input binding and its Command, never before them (E1: nothing renders an affordance '
-      + 'that routes nowhere). When E3 lands, REPLACE this fence atomically -- the invariant becomes '
-      + '"a production input exists AND its binding and Command exist with it" -- never merely delete it.',
+      `${rel} now mentions \`inputs\`: a production v2 affordance must land in the SAME slice as its `
+      + 'input binding and its Command, never before them (E1: nothing renders an affordance that '
+      + 'routes nowhere). Widen this fence deliberately, with that owner\'s binding and Command, '
+      + 'never by deleting it.',
     );
   }
 
-  // (3) The list of builders above must stay complete: every module that spreads
+  // (6) The list of builders above must stay complete: every module that spreads
   // a provider context into descriptor parameters must be in it, or the tripwire
   // silently shrinks the way it already did once.
   const spreadSites = readdirSync(resolve(HERE, '../src'))
     .filter((f) => f.endsWith('.js'))
-    // Matches BOTH shapes in the tree: a spread (`{...presentation.context}`) and
-    // a direct assignment (`parameters: p.context ?? {}`). The first version of
-    // this detector assumed a spread and silently missed two of the four.
-    .filter((f) => /parameters:[^\n]*\.context\b/.test(readFileSync(resolve(HERE, '../src', f), 'utf8')))
+    // Matches every shape in the tree: a property spread
+    // (`parameters: {...presentation.context}`), a direct assignment
+    // (`parameters: p.context ?? {}`) and E3's named local
+    // (`const parameters = {...presentation.context}`). The first version of this
+    // detector assumed a spread and silently missed two of the four; a later
+    // draft of THIS one matched a bare `parameters,` and swept in a module that
+    // builds no descriptor at all. It must be tied to `.context`, which is what
+    // makes a module a descriptor-parameter builder in the first place.
+    .filter((f) => /parameters[^\n]{0,60}\.context\b/.test(readFileSync(resolve(HERE, '../src', f), 'utf8')))
     .map((f) => `src/${f}`);
   assert.deepEqual(spreadSites.sort(), [...BUILDERS].sort(),
     'a module builds descriptor parameters from a provider context but is not covered by the tripwire');

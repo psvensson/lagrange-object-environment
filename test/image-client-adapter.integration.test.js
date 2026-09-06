@@ -74,6 +74,7 @@ async function setup() {
     invocations: runtime.invocations,
     executor: runtime.executor,
     authority: runtime.authority,
+    compilation: runtime.compilation,
     defineClass: imagesApi.defineClass,
     installCallableInterfaceV2: imagesApi.installCallableInterfaceV2,
     installImageCreationBinding: imagesApi.installImageCreationBinding,
@@ -93,6 +94,8 @@ async function setup() {
     authorizedRenameProject: imagesApi.authorizedRenameProject,
     authorizedDescribeSmalltalkClass: imagesApi.authorizedDescribeSmalltalkClass,
     authorizedDescribeSmalltalkMethod: imagesApi.authorizedDescribeSmalltalkMethod,
+    authorizedReadSmalltalkMethodForUpdate: imagesApi.authorizedReadSmalltalkMethodForUpdate,
+    authorizedReplaceSmalltalkMethod: imagesApi.authorizedReplaceSmalltalkMethod,
   });
 
   const schema = await adapter.ensureSchema(IMAGE, IDS);
@@ -131,6 +134,7 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
         invocations: noKernel.invocations,
         executor: noKernel.executor,
         authority: noKernel.authority,
+        compilation: noKernel.compilation,
         defineClass: imagesApi.defineClass,
         installCallableInterfaceV2: imagesApi.installCallableInterfaceV2,
         installImageCreationBinding: imagesApi.installImageCreationBinding,
@@ -150,6 +154,8 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
         authorizedRenameProject: imagesApi.authorizedRenameProject,
         authorizedDescribeSmalltalkClass: imagesApi.authorizedDescribeSmalltalkClass,
         authorizedDescribeSmalltalkMethod: imagesApi.authorizedDescribeSmalltalkMethod,
+        authorizedReadSmalltalkMethodForUpdate: imagesApi.authorizedReadSmalltalkMethodForUpdate,
+        authorizedReplaceSmalltalkMethod: imagesApi.authorizedReplaceSmalltalkMethod,
       }).ensureSchema('bare', IDS),
       /no Smalltalk kernel/,
     );
@@ -941,15 +947,15 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
   });
 });
 
-test('createImageClientAdapter validates services and helpers (unit, no runtime)', () => {
+test('createImageClientAdapter validates services and helpers (unit, no runtime)', async () => {
   assert.throws(() => createImageClientAdapter(null), /requires the lagrange-images public surface/);
   assert.throws(() => createImageClientAdapter({images: {}}), /missing required service: invocations/);
 
   const good = {
-    images: {}, invocations: {}, executor: {}, authority: {require: () => {}},
+    images: {}, invocations: {}, executor: {}, compilation: {}, authority: {require: () => {}},
     defineClass: () => {}, installCallableInterfaceV2: () => {}, installImageCreationBinding: () => {},
     installImageMutationBinding: () => {}, installImageObjectReadBinding: () => {}, installImageObservationBinding: () => {}, findSmalltalkKernel: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
-    objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, unpackCompositeValue: () => {}, normalizeTypeDeclarations: () => {}, authorizedReadProject: () => {}, authorizedRenameProject: () => {}, authorizedDescribeSmalltalkClass: () => {}, authorizedDescribeSmalltalkMethod: () => {},
+    objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, unpackCompositeValue: () => {}, normalizeTypeDeclarations: () => {}, authorizedReadProject: () => {}, authorizedRenameProject: () => {}, authorizedDescribeSmalltalkClass: () => {}, authorizedDescribeSmalltalkMethod: () => {}, authorizedReadSmalltalkMethodForUpdate: () => {}, authorizedReplaceSmalltalkMethod: () => {},
   };
   assert.ok(createImageClientAdapter(good));
   const missing = {...good};
@@ -972,6 +978,28 @@ test('createImageClientAdapter validates services and helpers (unit, no runtime)
   const noNativeMethodBrowse = {...good};
   delete noNativeMethodBrowse.authorizedDescribeSmalltalkMethod;
   assert.throws(() => createImageClientAdapter(noNativeMethodBrowse), /missing required helper: authorizedDescribeSmalltalkMethod/);
+  // E3's writer-facing PAIR is required for the same reason (Bead eij.3): a
+  // composition that could show an editable method and never replace one, or
+  // could replace without the read that mints its token, must fail here.
+  const noMethodReadForUpdate = {...good};
+  delete noMethodReadForUpdate.authorizedReadSmalltalkMethodForUpdate;
+  assert.throws(() => createImageClientAdapter(noMethodReadForUpdate), /missing required helper: authorizedReadSmalltalkMethodForUpdate/);
+  const noMethodReplace = {...good};
+  delete noMethodReplace.authorizedReplaceSmalltalkMethod;
+  assert.throws(() => createImageClientAdapter(noMethodReplace), /missing required helper: authorizedReplaceSmalltalkMethod/);
+  // The compilation SERVICE is the ONE optional one, and deliberately so: Images'
+  // portable runtime root exports authorizedReplaceSmalltalkMethod but
+  // createPortableRuntime returns NO compilation service, so requiring it would
+  // make the Environment unconstructible on the native host. An adapter without it
+  // browses fine and REFUSES to replace, loudly and specifically.
+  const noCompilation = {...good};
+  delete noCompilation.compilation;
+  const browseOnly = createImageClientAdapter(noCompilation);
+  assert.equal(typeof browseOnly.readSmalltalkMethodForUpdate, 'function', 'it can still read for update');
+  await assert.rejects(
+    browseOnly.replaceSmalltalkMethod({imageId: 'i', classRef: {}, selector: 's', source: 'x', versionToken: 't'}),
+    /requires the compilation service/,
+  );
   const noAuthorityRequire = {...good, authority: {}};
   assert.throws(() => createImageClientAdapter(noAuthorityRequire), /authority service is missing required operation: require/);
 });
@@ -982,13 +1010,13 @@ test('readProject delegates the Images-owned demand unchanged to the injected au
   const calls = [];
   const descriptor = Object.freeze({format: 'lagrange-project/v1', projectId: 'p', name: 'P', namespace: null, members: []});
   const client = {
-    images: {}, invocations: {}, executor: {},
+    images: {}, invocations: {}, executor: {}, compilation: {},
     authority: {require: (receivedContext, receivedDemand) => calls.push({receivedContext, receivedDemand})},
     defineClass: () => {}, installCallableInterfaceV2: () => {}, installImageCreationBinding: () => {},
     installImageMutationBinding: () => {}, installImageObjectReadBinding: () => {}, installImageObservationBinding: () => {}, findSmalltalkKernel: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
     objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, unpackCompositeValue: () => {}, normalizeTypeDeclarations: () => {},
     authorizedRenameProject: () => {},
-    authorizedDescribeSmalltalkClass: () => {}, authorizedDescribeSmalltalkMethod: () => {},
+    authorizedDescribeSmalltalkClass: () => {}, authorizedDescribeSmalltalkMethod: () => {}, authorizedReadSmalltalkMethodForUpdate: () => {}, authorizedReplaceSmalltalkMethod: () => {},
     authorizedReadProject: ({images, imageId, projectId, require}) => {
       assert.equal(images, client.images);
       assert.equal(imageId, 'img');
@@ -1011,10 +1039,10 @@ test('readProject delegates the Images-owned demand unchanged to the injected au
 
 test('ensureSchema validates its ids eagerly (unit)', async () => {
   const good = {
-    images: {}, invocations: {}, executor: {}, authority: {require: () => {}},
+    images: {}, invocations: {}, executor: {}, compilation: {}, authority: {require: () => {}},
     defineClass: () => {}, installCallableInterfaceV2: () => {}, installImageCreationBinding: () => {},
     installImageMutationBinding: () => {}, installImageObjectReadBinding: () => {}, installImageObservationBinding: () => {}, findSmalltalkKernel: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
-    objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, unpackCompositeValue: () => {}, normalizeTypeDeclarations: () => {}, authorizedReadProject: () => {}, authorizedRenameProject: () => {}, authorizedDescribeSmalltalkClass: () => {}, authorizedDescribeSmalltalkMethod: () => {},
+    objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, unpackCompositeValue: () => {}, normalizeTypeDeclarations: () => {}, authorizedReadProject: () => {}, authorizedRenameProject: () => {}, authorizedDescribeSmalltalkClass: () => {}, authorizedDescribeSmalltalkMethod: () => {}, authorizedReadSmalltalkMethodForUpdate: () => {}, authorizedReplaceSmalltalkMethod: () => {},
   };
   const adapter = createImageClientAdapter(good);
   await assert.rejects(adapter.ensureSchema('img', {}), /ids\.shapeId/);
@@ -1111,13 +1139,13 @@ test('renameProject delegates to authorizedRenameProject mapping ONLY the argume
   // must not fetch, mint, default or validate a token).
   const images = new Proxy({}, {get(_t, prop) { imagesCalls.push(String(prop)); return () => { throw new Error(`renameProject touched images.${String(prop)}`); }; }});
   const client = {
-    images, invocations: {}, executor: {},
+    images, invocations: {}, executor: {}, compilation: {},
     authority: {require: (receivedContext, receivedDemand) => calls.push({receivedContext, receivedDemand})},
     defineClass: () => {}, installCallableInterfaceV2: () => {}, installImageCreationBinding: () => {},
     installImageMutationBinding: () => {}, installImageObjectReadBinding: () => {}, installImageObservationBinding: () => {}, findSmalltalkKernel: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
     objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, unpackCompositeValue: () => {}, normalizeTypeDeclarations: () => {},
     authorizedReadProject: () => {},
-    authorizedDescribeSmalltalkClass: () => {}, authorizedDescribeSmalltalkMethod: () => {},
+    authorizedDescribeSmalltalkClass: () => {}, authorizedDescribeSmalltalkMethod: () => {}, authorizedReadSmalltalkMethodForUpdate: () => {}, authorizedReplaceSmalltalkMethod: () => {},
     authorizedRenameProject: ({images: receivedImages, imageId, projectId, name, expectedVersionToken, require, ...rest}) => {
       assert.equal(receivedImages, images);
       assert.equal(imageId, 'img');

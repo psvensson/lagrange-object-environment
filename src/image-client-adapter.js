@@ -257,6 +257,22 @@ function createImageClientAdapter(client) {
     invocations,
     executor,
     authority: authorityService,
+    // OPTIONAL, and the only optional service here (E3, Bead eij.3). Images'
+    // authorized method REPLACEMENT seam takes a compilation service alongside
+    // `images`, because lowering supplied source to a native program is the
+    // compiler owner's work. It is NOT required at construction, and the reason is
+    // a verified fact about the lower owner rather than a preference: Images'
+    // PORTABLE runtime root exports `authorizedReplaceSmalltalkMethod` but
+    // `createPortableRuntime` returns no `compilation` service (checked at the
+    // pinned revision 15fcb811), so demanding one here would make this adapter --
+    // and therefore the whole Environment -- unconstructible on the native host.
+    // The narrow consequence is recorded rather than papered over: a composition
+    // without it constructs and browses, and its FIRST replacement fails loudly
+    // below, naming the missing service. A native composition cannot reach that
+    // path anyway, because the same portable root exports no way to install a
+    // method there is anything to replace (Bead aov). The asymmetry itself is
+    // Images pressure, recorded on Bead dcx rather than worked around here.
+    compilation = null,
     // Helpers consumed from the public exports (createRuntime's module barrels).
     defineClass,
     installCallableInterfaceV2,
@@ -277,13 +293,15 @@ function createImageClientAdapter(client) {
     authorizedRenameProject,
     authorizedDescribeSmalltalkClass,
     authorizedDescribeSmalltalkMethod,
+    authorizedReadSmalltalkMethodForUpdate,
+    authorizedReplaceSmalltalkMethod,
   } = client;
 
   if (typeof authorityService.require !== 'function') {
     throw new TypeError('lagrange-images client authority service is missing required operation: require');
   }
 
-  for (const [name, fn] of Object.entries({defineClass, installCallableInterfaceV2, installImageCreationBinding, installImageMutationBinding, installImageObjectReadBinding, installImageObservationBinding, findSmalltalkKernel, objectRef, objectResource, parseObjectResource, objectVersionToken, textValue, packCompositeValue, unpackCompositeValue, normalizeTypeDeclarations, authorizedReadProject, authorizedRenameProject, authorizedDescribeSmalltalkClass, authorizedDescribeSmalltalkMethod})) {
+  for (const [name, fn] of Object.entries({defineClass, installCallableInterfaceV2, installImageCreationBinding, installImageMutationBinding, installImageObjectReadBinding, installImageObservationBinding, findSmalltalkKernel, objectRef, objectResource, parseObjectResource, objectVersionToken, textValue, packCompositeValue, unpackCompositeValue, normalizeTypeDeclarations, authorizedReadProject, authorizedRenameProject, authorizedDescribeSmalltalkClass, authorizedDescribeSmalltalkMethod, authorizedReadSmalltalkMethodForUpdate, authorizedReplaceSmalltalkMethod})) {
     if (typeof fn !== 'function') {
       throw new TypeError(`lagrange-images client is missing required helper: ${name}`);
     }
@@ -409,6 +427,91 @@ function createImageClientAdapter(client) {
       imageId,
       classRef,
       selector,
+      require: (demand) => authorityService.require(authority, demand),
+    });
+  }
+
+  /**
+   * Read ONE native Smalltalk method FOR UPDATE through Images' writer-facing
+   * seam (Images #218 `authorizedReadSmalltalkMethodForUpdate`, Bead eij.3).
+   *
+   * Returns Images' result UNCHANGED: `{descriptor, versionToken}` — the SAME
+   * canonical `smalltalk-method-description/v1` record the describe seam answers,
+   * plus an OPAQUE token for the method position it just resolved. Both halves
+   * come from ONE resolution inside Images, so the descriptor and the token can
+   * never describe different revisions; that is the whole reason this seam exists
+   * rather than a token minted beside a second read.
+   *
+   * IT DEMANDS EXACTLY WHAT THE DESCRIBE SEAM DEMANDS and nothing more: reading
+   * in order to write is still only reading. It grants no write authority and
+   * asserts none — the replacement below authorizes its own write when it is
+   * called. Holding a token is an ASSUMPTION ABOUT STATE, never a capability.
+   *
+   * The adapter never inspects, decodes, defaults, compares, mints or persists
+   * the token. It is opaque here in the strict sense that this module has no code
+   * that could look inside it (Images publishes neither the mint nor the parser
+   * on its public roots), and the Environment's own source is fenced against
+   * reaching the private owner that does — see the E3 fence in
+   * `test/native-smalltalk-replacement-fence.test.js`.
+   */
+  async function readSmalltalkMethodForUpdate({imageId, classRef, selector, authority = null} = {}) {
+    return authorizedReadSmalltalkMethodForUpdate({
+      images,
+      imageId,
+      classRef,
+      selector,
+      require: (demand) => authorityService.require(authority, demand),
+    });
+  }
+
+  /**
+   * Replace ONE existing native Smalltalk method from EXPLICITLY SUPPLIED source
+   * (Images #218 `authorizedReplaceSmalltalkMethod`, Bead eij.3).
+   *
+   * The ONLY translation here is the argument name — the Environment's
+   * `versionToken` (the token paired with the method read the caller was SHOWN)
+   * becomes Images' `expectedVersionToken` — exactly as `renameProject` does for
+   * a Project. The token is forwarded VERBATIM: no default, no validation, no
+   * re-read. A hidden fresh read substituted for the caller's assumption would
+   * make a lost update unobservable, which is the one thing this operation exists
+   * to prove it cannot do.
+   *
+   * Returns Images' receipt unchanged: `{replaced: true}`. It carries no new Block
+   * ref, no descriptor, no replacement token and no source, ON PURPOSE — the
+   * displayed truth comes from a fresh authorized reread, never from a receipt.
+   *
+   * NO CONFLICT TRANSLATION HAPPENS HERE, the same rule `renameProject` follows:
+   * Images' own `SmalltalkStaleMethodPositionError` surfaces, and
+   * `CommandDispatcher` — the Environment's Command error owner — maps it to
+   * `CommandConflictError`. `SmalltalkMethodReplacementContentionError` is
+   * deliberately NOT a conflict there: it is transient and explicitly says the
+   * observed position did NOT move, so reporting it as a lost update would be a
+   * lie to the user.
+   *
+   * WHAT THIS ADAPTER NEVER DOES, and what the E3 fence proves it cannot start
+   * doing quietly: mint or parse a position token, call Images' reconciliation or
+   * class-building helpers, choose an execution lane, compile anything, or write
+   * a method dictionary. Every one of those is a lower owner's decision reached
+   * through this ONE authorized seam.
+   */
+  async function replaceSmalltalkMethod({imageId, classRef, selector, source, versionToken, authority = null} = {}) {
+    if (!compilation) {
+      // Loud, and specific about WHOSE service is missing: Images would answer
+      // its own `requires a compilation service`, which reads as an Images defect
+      // rather than as "this composition was built without one".
+      throw new TypeError(
+        'replaceSmalltalkMethod requires the compilation service: this ImageClientAdapter was constructed '
+        + 'without one, so it can browse native methods but cannot replace one',
+      );
+    }
+    return authorizedReplaceSmalltalkMethod({
+      images,
+      compilation,
+      imageId,
+      classRef,
+      selector,
+      source,
+      expectedVersionToken: versionToken,
       require: (demand) => authorityService.require(authority, demand),
     });
   }
@@ -1116,6 +1219,13 @@ function createImageClientAdapter(client) {
     classifySmalltalkClassReadError,
     describeSmalltalkMethod,
     classifySmalltalkMethodReadError,
+    // E3's writer-facing PAIR (Bead eij.3). `readSmalltalkMethodForUpdate` is the
+    // read a caller that intends to replace performs -- it answers the canonical
+    // descriptor AND the position token from one resolution; `replaceSmalltalkMethod`
+    // is the only write in this adapter's native lane. There is still no generic
+    // Block read, method dictionary, compiler, class-building or import API here.
+    readSmalltalkMethodForUpdate,
+    replaceSmalltalkMethod,
     readObject,
     authorizedReadObject,
     resolveAssetBytes,

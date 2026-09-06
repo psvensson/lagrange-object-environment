@@ -41,6 +41,17 @@ const CASES = {
   // The authorized native METHOD description (Images ADR 0087). source and
   // provenance are null, so neither row is emitted at all.
   'native-method': {kind: 'native-method', subject: {kind: 'native-method', imageId: 'img', classRef: ref('smalltalk/class/BrowseChild'), selector: 'childFirst'}, parameters: {smalltalkMethod: {format: 'smalltalk-method-description/v1', class: ref('smalltalk/class/BrowseChild'), side: 'instance', selector: 'childFirst', method: ref('smalltalk/class/BrowseChild/method/Y2hpbGRGaXJzdA'), source: null, provenance: null}}},
+  // The SAME method as DISPLAYED BY THE BROWSER (E3, Bead eij.3): identical
+  // Images description, plus the ONE transient input NativeSmalltalkBrowser
+  // threads onto a native-method descriptor. It is a SECOND fixture rather than
+  // an edit of the first, exactly as `project-editable` sits beside `project`:
+  // the affordance is the Environment's, not Images', and both shapes are real
+  // documents this projector must reproduce. Note what does NOT change -- Source
+  // and Provenance are still absent, because Images still truthfully answers
+  // null; an `input` is not a field, and asserts no durable value exists.
+  'native-method-editable': {kind: 'native-method', subject: {kind: 'native-method', imageId: 'img', classRef: ref('smalltalk/class/BrowseChild'), selector: 'childFirst'}, parameters: {smalltalkMethod: {format: 'smalltalk-method-description/v1', class: ref('smalltalk/class/BrowseChild'), side: 'instance', selector: 'childFirst', method: ref('smalltalk/class/BrowseChild/method/Y2hpbGRGaXJzdA'), source: null, provenance: null}, inputs: [
+    {role: 'native-method-source', label: 'New source', submitLabel: 'Replace'},
+  ]}},
   // SemanticUi/v2 (Bead ngh): the TRANSIENT text input. A generic capability --
   // note the ordinary `object` kind: nothing about `inputs` is native-Smalltalk,
   // and no production descriptor carries one in this slice.

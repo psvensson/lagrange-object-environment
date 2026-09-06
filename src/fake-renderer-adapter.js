@@ -52,17 +52,22 @@ function createFakeRendererAdapter({mintHandle, projector = null} = {}) {
   // Every action node in a realized document, in document order. Structural
   // only: it reads the `kind` and `key` the document already carries and
   // interprets nothing.
-  function actionsOf(doc) {
+  function nodesOfKind(doc, kind) {
     const found = [];
     const walk = (node) => {
       if (!node || typeof node !== 'object') return;
-      if (node.kind === 'action') found.push(node);
+      if (node.kind === kind) found.push(node);
       for (const child of node.children ?? []) walk(child);
       for (const item of node.items ?? []) walk(item);
     };
     walk(doc?.root);
     return found;
   }
+  const actionsOf = (doc) => nodesOfKind(doc, 'action');
+  // SemanticUi/v2 (Bead ngh) realizes a second interactive node kind. Same
+  // structural rule as an action: this double reads the `kind` and `key` the
+  // document already carries and interprets nothing.
+  const inputsOf = (doc) => nodesOfKind(doc, 'input');
   let nextHandle = 0;
   let failNext = null; // method name to fail on next invocation
   const mint = mintHandle ?? ((n) => `fake-surface-${n}`);
@@ -143,6 +148,29 @@ function createFakeRendererAdapter({mintHandle, projector = null} = {}) {
         throw new RangeError(`fake renderer: no realized action ${ordinal} on ${surfaceHandle} (has ${actions.length})`);
       }
       const intent = Object.freeze({kind: 'activate-item', key: action.key});
+      for (const handler of intentHandlers) handler(intent, surfaceHandle);
+      return intent;
+    },
+
+    // The input nodes of that realized document, in document order.
+    realizedInputs: (surfaceHandle) => Object.freeze([...inputsOf(realized.get(surfaceHandle))]),
+    /**
+     * Submit text into the Nth input of what this handle REALIZED, emitting the
+     * ordinary `submit-input` intent with the key that document carries.
+     *
+     * The exact twin of `activateAction`, and for the same reasons: the ordinal
+     * picks a rendered control, the KEY comes from the realization rather than
+     * from the caller, and this double chooses no meaning -- it does not know
+     * what the text is for. The TEXT is the user's, so it does come from the
+     * caller; that is the whole point of a transient input.
+     */
+    submitInput(surfaceHandle, ordinal, text) {
+      const inputs = inputsOf(realized.get(surfaceHandle));
+      const input = inputs[ordinal];
+      if (!input) {
+        throw new RangeError(`fake renderer: no realized input ${ordinal} on ${surfaceHandle} (has ${inputs.length})`);
+      }
+      const intent = Object.freeze({kind: 'submit-input', key: input.key, text});
       for (const handler of intentHandlers) handler(intent, surfaceHandle);
       return intent;
     },

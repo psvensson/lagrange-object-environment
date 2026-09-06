@@ -26,8 +26,10 @@ import {
   createNativeMethodPresentationProvider,
   createNativeMethodSubject,
   createNativeSmalltalkBrowser,
+  createReplaceNativeMethodCommand,
   resolveNativeTarget,
 } from '../src/native-smalltalk-browser.js';
+import {createCommandRouter} from '../src/command-router.js';
 import {semanticUiForPresentation} from '../src/semantic-ui.js';
 import {assertDataRepresentable} from '../src/compositor.js';
 
@@ -119,6 +121,7 @@ function adapterClients(runtime) {
     invocations: runtime.invocations,
     executor: runtime.executor,
     authority: runtime.authority,
+    compilation: runtime.compilation,
     defineClass: imagesApi.defineClass,
     installCallableInterfaceV2: imagesApi.installCallableInterfaceV2,
     installImageCreationBinding: imagesApi.installImageCreationBinding,
@@ -138,6 +141,8 @@ function adapterClients(runtime) {
     authorizedRenameProject: imagesApi.authorizedRenameProject,
     authorizedDescribeSmalltalkClass: imagesApi.authorizedDescribeSmalltalkClass,
     authorizedDescribeSmalltalkMethod: imagesApi.authorizedDescribeSmalltalkMethod,
+    authorizedReadSmalltalkMethodForUpdate: imagesApi.authorizedReadSmalltalkMethodForUpdate,
+    authorizedReplaceSmalltalkMethod: imagesApi.authorizedReplaceSmalltalkMethod,
   };
 }
 
@@ -164,6 +169,14 @@ function recordingAdapter(adapter) {
     describeSmalltalkMethod(args) {
       seamCalls.push(args);
       return adapter.describeSmalltalkMethod(args);
+    },
+    readSmalltalkMethodForUpdate(args) {
+      seamCalls.push(args);
+      return adapter.readSmalltalkMethodForUpdate(args);
+    },
+    replaceSmalltalkMethod(args) {
+      seamCalls.push(args);
+      return adapter.replaceSmalltalkMethod(args);
     },
     classifySmalltalkClassReadError: (error) => adapter.classifySmalltalkClassReadError(error),
     classifySmalltalkMethodReadError: (error) => adapter.classifySmalltalkMethodReadError(error),
@@ -487,10 +500,21 @@ test('class-read authority yields selector NAMES and no method: the Environment 
     // fence. E2 must not weaken that into "the one member we added exists": the
     // fence becomes an EXHAUSTIVE enumeration, so a later describeMethodDictionary,
     // readMethodBlock or installMethod cannot appear silently.
+    // E3 (Bead eij.3) widens the enumeration to FOUR members and not one more:
+    // E2's read-only description, its error mapping, and the writer-facing PAIR
+    // -- the read that mints a position token and the replacement that consumes
+    // one. Still no describeMethodDictionary, readMethodBlock, installMethod,
+    // compileMethod or defineMethodsFromSource, which is exactly what an
+    // exhaustive list (rather than a "the ones we added exist" check) protects.
     assert.deepEqual(
       Object.keys(t.realAdapter).filter((key) => /Method/.test(key)).sort(),
-      ['classifySmalltalkMethodReadError', 'describeSmalltalkMethod'],
-      'the adapter exposes exactly ONE method capability plus its error mapping',
+      [
+        'classifySmalltalkMethodReadError',
+        'describeSmalltalkMethod',
+        'readSmalltalkMethodForUpdate',
+        'replaceSmalltalkMethod',
+      ],
+      'the adapter exposes exactly the E2 read + its error mapping + the E3 writer-facing pair',
     );
     // Browsing the class made exactly ONE seam call, and it was the CLASS one:
     // presenting a class never reaches the method reader, by accident or design.
@@ -769,13 +793,53 @@ async function openNativeVertical(t) {
     return authority;
   };
 
+  // E3 (Bead eij.3): the ORDINARY Command lane, wired exactly as any other --
+  // a registry the composition registers into, the real CommandRouter, and the
+  // adapter's ordinary authorized dispatch seam. Nothing here is native-specific
+  // except the Command the browser owner supplies.
+  const commandRegistry = createCommandRegistry();
+  commandRegistry.register(createReplaceNativeMethodCommand());
+  const writeDemands = [];
+  const commandRouter = createCommandRouter({
+    compositor,
+    commandRegistry,
+    // The REAL adapter's ordinary authorized dispatch seam. Deliberately not the
+    // recording spy: the Command must receive the real ImageClientAdapter, which
+    // is what carries the one authorized replacement seam. What the replacement
+    // did is asserted against IMAGES' own state below, not against a spy.
+    dispatch: t.realAdapter.dispatch,
+    // FRESH per invocation, from the composition. It names the DECLARING CLASS
+    // for object/write, which is the only thing Images demands -- never the Block,
+    // and never anything derived from the token.
+    authorityProvider: async (demand) => {
+      writeDemands.push(demand);
+      const subject = demand.subject;
+      const authority = t.writeAuthorityFor
+        ? t.writeAuthorityFor(subject)
+        : t.runtime.authority.issue({
+          principal: 'alice',
+          grants: [{operation: imagesApi.OBJECT_WRITE_OPERATION, resource: imagesApi.objectResource(IMAGE, subject.classRef.objectId)}],
+        });
+      return authority;
+    },
+  });
+
   const activationErrors = [];
+  const replacementErrors = [];
   shell.bindIntents({
     adapter: rendererAdapter,
+    commandRouter,
     activationBindings: [browser.activationBinding({authorityFor})],
+    inputBindings: [browser.replacementInputBinding({
+      authorityFor,
+      onReplacementError: (error) => replacementErrors.push(error),
+    })],
     onActivateError: (error) => activationErrors.push(error),
   });
-  return {rendererAdapter, compositor, browser, shell, selectionModel, grants, activationErrors};
+  return {
+    rendererAdapter, compositor, browser, shell, selectionModel, grants,
+    activationErrors, replacementErrors, commandRegistry, commandRouter, writeDemands,
+  };
 }
 
 test('E2 acceptance: a live native-class view activates a selector into a freshly authorized method read', {skip}, async () => {
@@ -960,6 +1024,236 @@ test('E2 acceptance: a re-opened view keeps its binding under a NEW handle; the 
     await drain();
     assert.equal(v.compositor.liveView(v.browser.viewId).presentationDescriptor, settled, 'nothing moved');
     await v.compositor.destroy();
+  } finally {
+    await t.runtime.close();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// E3 (Bead eij.3): REPLACE one imported native method through the ORDINARY
+// authorized Command lane, and show a fresh authoritative reread.
+//
+// The vertical under proof, end to end and with nothing stubbed in the middle:
+//
+//   realized SemanticUi/v2 input  ->  submit-input intent (key + text only)
+//   ->  EnvironmentShell input binding  ->  transient position token
+//   ->  CommandRouter (explicit commandId)  ->  authorityProvider (fresh)
+//   ->  CommandDispatcher  ->  replace-native-method Command
+//   ->  ImageClientAdapter.replaceSmalltalkMethod
+//   ->  Images' authorizedReplaceSmalltalkMethod (the ONE authorized write)
+//   ->  fresh authorized reread  ->  re-presented into the SAME logical view.
+//
+// WHY THE SETUP MOVES THE BINDING TWICE FIRST. The composition must hold
+// `object/read` on the Block the reread will land on, and Images' authority
+// service has no wildcards -- a grant names one object id. A method revision id
+// is CONTENT-ADDRESSED (Images composes it over the compiled program), so the id
+// the user's replacement will produce can be learned by performing that exact
+// replacement once, up front, and then moving the binding back. The test then
+// ASSERTS that the id it pre-granted is the one the reread actually lands on, so
+// the assumption is a checked property rather than a hidden dependency: if Images
+// ever stopped content-addressing revisions, this goes red rather than quietly
+// passing on a broader grant.
+const SOURCE_B = '[ ^11 ]';
+const SOURCE_C = '[ ^22 ]';
+const SOURCE_D = '[ ^33 ]';
+
+async function e3Setup() {
+  const t = await setup();
+  const classRef = t.importedClassRef;
+  const selector = 'baseValue';
+  const writeAuthority = t.runtime.authority.issue({
+    principal: 'alice',
+    grants: [{operation: imagesApi.OBJECT_WRITE_OPERATION, resource: imagesApi.objectResource(IMAGE, classRef.objectId)}],
+  });
+
+  const boundNow = async () => (
+    await imagesApi.methodBindings({images: t.runtime.images, imageId: IMAGE, classRef})
+  ).find((b) => b.selector === selector).method;
+
+  // A replacement performed OUTSIDE the Environment's interaction path, through
+  // the same public seams: used to stage state and to play "someone else" in the
+  // conflict proof. It reads for update and replaces, exactly as a second client
+  // would.
+  const replaceOutside = async (source) => {
+    const current = await boundNow();
+    const read = await t.realAdapter.readSmalltalkMethodForUpdate({
+      imageId: IMAGE, classRef, selector, authority: t.authorityFor(classRef.objectId, current.objectId),
+    });
+    await t.realAdapter.replaceSmalltalkMethod({
+      imageId: IMAGE, classRef, selector, source, versionToken: read.versionToken, authority: writeAuthority,
+    });
+    return boundNow();
+  };
+
+  const idC = await replaceOutside(SOURCE_C);
+  const idD = await replaceOutside(SOURCE_D);
+  const idB = await replaceOutside(SOURCE_B);
+  assert.ok(idC.objectId.includes('/revision/'), 'a replaced binding is a fresh immutable revision');
+  assert.notDeepEqual(idB, idC);
+  assert.notDeepEqual(idB, idD);
+
+  // The composition's READ authority: the class plus every revision this test can
+  // legitimately land on. It is issued per action inside openNativeVertical.
+  t.boundBlockFor = () => null;
+  const readIds = [idB.objectId, idC.objectId, idD.objectId];
+  const baseAuthorityFor = t.authorityFor;
+  t.authorityFor = (...ids) => baseAuthorityFor(...ids, ...readIds);
+
+  return {t, classRef, selector, writeAuthority, boundNow, replaceOutside, idB, idC, idD};
+}
+
+// Open the method view the way a user reaches it: browse the class, press the
+// realized selector row. E2 proves that leg; here it is the PRECONDITION, so the
+// replacement is proven against the descriptor the renderer actually realized.
+async function openMethodView(e3) {
+  const v = await openNativeVertical(e3.t);
+  await v.browser.open(createNativeClassSubject({imageId: IMAGE, classRef: e3.classRef}), {
+    authority: e3.t.authorityFor(e3.classRef.objectId),
+    viewDescriptor: {kind: 'surface', width: 200, height: 200},
+  });
+  const handle = v.compositor.surfaceHandleForView(v.browser.viewId);
+  v.rendererAdapter.activateAction(handle, 0);
+  await settleUntil(
+    () => v.compositor.liveView(v.browser.viewId).presentationDescriptor.kind === NATIVE_METHOD_PRESENTATION_KIND,
+    'the selector activation to present a native method',
+  );
+  assert.deepEqual(v.activationErrors, []);
+  return {v, handle};
+}
+
+test('E3 acceptance: a realized input replaces the method through the ordinary Command lane, and the view shows a FRESH authorized reread', {skip}, async () => {
+  const e3 = await e3Setup();
+  const {t, classRef, selector} = e3;
+  try {
+    const {v, handle} = await openMethodView(e3);
+
+    // (1) THE AFFORDANCE IS REALIZED, and carries only what a renderer may see.
+    const inputs = v.rendererAdapter.realizedInputs(handle);
+    assert.equal(inputs.length, 1, 'exactly one transient input on a displayed method');
+    assert.deepEqual(inputs[0], {
+      kind: 'input', key: 0, label: 'New source', valueKind: 'text', submitLabel: 'Replace',
+    });
+    assert.equal(JSON.stringify(inputs).includes('native-method-source'), false,
+      'the semantic ROLE stays with the Environment: the renderer never learns what an input MEANS');
+    const before = v.compositor.liveView(v.browser.viewId).presentationDescriptor;
+    assert.deepEqual(before.parameters.smalltalkMethod.method, e3.idB, 'the view shows the CURRENT revision');
+    assert.equal(before.parameters.smalltalkMethod.source, null, 'Images keeps no source, before');
+
+    // (2) THE USER SUBMITS. The host emits the key it realized plus the text; it
+    // names no Command, no subject, no token and no method.
+    const intent = v.rendererAdapter.submitInput(handle, 0, SOURCE_C);
+    assert.deepEqual(intent, {kind: 'submit-input', key: 0, text: SOURCE_C});
+
+    await settleUntil(
+      () => v.compositor.liveView(v.browser.viewId).presentationDescriptor !== before,
+      'the replacement to complete and the view to be re-presented',
+    );
+    assert.deepEqual(v.replacementErrors, [], 'the replacement must not have failed');
+
+    // (3) EXACTLY ONE AUTHORIZED INVOCATION, named by the Command that ran. The
+    // router builds the demand from the SELECTED command id, so it can never name
+    // a Command other than the one dispatched.
+    assert.equal(v.writeDemands.length, 1);
+    assert.equal(v.writeDemands[0].commandId, 'replace-native-method');
+    assert.deepEqual(v.writeDemands[0].subject, createNativeMethodSubject({imageId: IMAGE, classRef, selector}));
+    // The demand carries the SEMANTIC intent descriptor and no user text: what is
+    // authorized is "this Command on this subject", never the argument bag.
+    assert.deepEqual(v.writeDemands[0].intent, {kind: 'submit-input', key: 0});
+    assert.equal(JSON.stringify(v.writeDemands[0]).includes(SOURCE_C), false,
+      'the supplied source must not travel inside an authority demand');
+
+    // (4) IMAGES ACTUALLY MOVED. The method's semantic identity is unchanged --
+    // same class, same selector -- and its revision is new.
+    const bound = await e3.boundNow();
+    assert.deepEqual(bound, e3.idC, 'the binding is the revision this source compiles to');
+    assert.notDeepEqual(bound, e3.idB);
+
+    // (5) THE VIEW SHOWS A FRESH AUTHORIZED READ, not a patch and not the receipt.
+    const after = v.compositor.liveView(v.browser.viewId).presentationDescriptor;
+    assert.equal(after.kind, NATIVE_METHOD_PRESENTATION_KIND);
+    assert.deepEqual(after.subject, before.subject, 'the SAME method subject: replacement is not navigation');
+    assert.deepEqual(after.parameters.smalltalkMethod.method, e3.idC);
+    assert.equal(after.parameters.smalltalkMethod.source, null, 'and Images still keeps no source, after');
+    assert.equal(JSON.stringify(after).includes(SOURCE_C), false,
+      'the supplied source never becomes displayed state: E3 is replacement, not a source editor');
+
+    // (6) E2's READ-ONLY SEAM AGREES. Two independent Images seams answering the
+    // same revision is what makes "the displayed truth is authoritative" more than
+    // a claim about the one call the browser happens to make.
+    const described = await t.realAdapter.describeSmalltalkMethod({
+      imageId: IMAGE, classRef, selector, authority: t.authorityFor(classRef.objectId, e3.idC.objectId),
+    });
+    assert.deepEqual(described, after.parameters.smalltalkMethod);
+
+    // (7) THE AFFORDANCE SURVIVES AND IS RE-PAIRED: the user can replace again,
+    // against the revision now displayed rather than the one they first opened.
+    assert.deepEqual(v.rendererAdapter.realizedInputs(handle), inputs);
+  } finally {
+    await t.runtime.close();
+  }
+});
+
+test('E3 acceptance: an overtaken observation is a CONFLICT -- refused, surfaced, and authoritatively reread', {skip}, async () => {
+  const e3 = await e3Setup();
+  const {t} = e3;
+  try {
+    const {v, handle} = await openMethodView(e3);
+    const shown = v.compositor.liveView(v.browser.viewId).presentationDescriptor;
+    assert.deepEqual(shown.parameters.smalltalkMethod.method, e3.idB);
+
+    // SOMEONE ELSE WINS while this view is open. The token paired with the
+    // displayed descriptor now names a binding that is no longer current.
+    const winner = await e3.replaceOutside(SOURCE_D);
+    assert.deepEqual(winner, e3.idD);
+
+    v.rendererAdapter.submitInput(handle, 0, SOURCE_C);
+    await settleUntil(() => v.replacementErrors.length > 0, 'the stale replacement to be refused');
+
+    // The Environment's OWN conflict outcome: Images' SmalltalkStaleMethodPositionError
+    // is a LOST UPDATE, so CommandDispatcher classifies it as one.
+    assert.equal(v.replacementErrors.length, 1);
+    assert.equal(v.replacementErrors[0].name, 'CommandConflictError');
+
+    // NOTHING of the caller's attempt landed: the winner is still current.
+    assert.deepEqual(await e3.boundNow(), e3.idD, "the loser's source never became the binding");
+
+    // AND the display is repaired authoritatively rather than left showing a
+    // revision that has moved.
+    await settleUntil(
+      () => v.compositor.liveView(v.browser.viewId).presentationDescriptor !== shown,
+      'the conflict to be followed by an authoritative reread',
+    );
+    const after = v.compositor.liveView(v.browser.viewId).presentationDescriptor;
+    assert.deepEqual(after.parameters.smalltalkMethod.method, e3.idD, "the view shows the WINNER's revision");
+    assert.deepEqual(after.subject, shown.subject);
+  } finally {
+    await t.runtime.close();
+  }
+});
+
+test('E3 acceptance: a caller who may READ the method but not WRITE the class changes nothing', {skip}, async () => {
+  const e3 = await e3Setup();
+  const {t, classRef} = e3;
+  try {
+    // The composition mints an authority carrying the FULL read authority that
+    // minted the token -- and no write. Holding a valid, current token confers
+    // nothing: a token is an assumption about state, never a capability.
+    t.writeAuthorityFor = (subject) => t.authorityFor(subject.classRef.objectId);
+    const {v, handle} = await openMethodView(e3);
+    const shown = v.compositor.liveView(v.browser.viewId).presentationDescriptor;
+
+    v.rendererAdapter.submitInput(handle, 0, SOURCE_C);
+    await settleUntil(() => v.replacementErrors.length > 0, 'the unauthorized replacement to be refused');
+
+    assert.equal(v.replacementErrors[0].name, 'CommandAuthorizationError');
+    assert.deepEqual(await e3.boundNow(), e3.idB, 'a denied write changes nothing');
+    await drain();
+    // A denial is NOT a conflict: the observed position did not move, so the
+    // descriptor on screen is still exactly what Images would answer, and
+    // rereading would throw the user's attempt off the screen for no reason.
+    assert.equal(v.compositor.liveView(v.browser.viewId).presentationDescriptor, shown,
+      'the view is left alone; only a conflict triggers an authoritative reread');
+    assert.equal(v.replacementErrors.length, 1);
   } finally {
     await t.runtime.close();
   }

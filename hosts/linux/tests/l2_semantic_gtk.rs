@@ -262,6 +262,37 @@ fn fixtures_drive_real_gtk_controls_and_identical_intents() {
     );
     assert!(method.action_labels().is_empty(), "Slice A adds no action to a native method pane");
 
+    // --- native-method-editable (E3, Bead eij.3): the SAME method as the browser
+    // DISPLAYS it -- identical Images description plus the ONE transient
+    // replacement input -- realized natively from the SAME fixture bytes the DOM
+    // consumes. The record is unchanged (an input ADDS an affordance, it does not
+    // restate state), Source/Provenance stay absent, and the input realizes as a
+    // multiline TextView with its own submit control rather than as a field.
+    let editable =
+        realize(&parse_semantic_ui(&read_fixture("native-method-editable.json")).expect("editable method validates"));
+    let editable_text = editable.visible_text();
+    assert!(editable_text.iter().any(|t| t == "Method: childFirst"), "{editable_text:?}");
+    assert!(
+        editable_text.iter().any(|t| t == "-> smalltalk/class/BrowseChild/method/Y2hpbGRGaXJzdA"),
+        "the Images-owned Block identity is still shown: {editable_text:?}"
+    );
+    assert!(
+        !editable_text.iter().any(|t| t == "Source" || t == "Provenance"),
+        "an input is not a field: no durable source row appears: {editable_text:?}"
+    );
+    assert_eq!(
+        editable.input_widget_kinds(),
+        vec!["GtkTextView"],
+        "new source is multiline; a GtkEntry could not hold a method body"
+    );
+    assert_eq!(editable.input_submit_labels(), vec!["Replace"]);
+    assert!(editable.editable_texts().is_empty(), "the replacement input must not realize as an editable field");
+    assert_eq!(
+        editable.submit_input(0, "[ ^42 ]"),
+        Some(Intent::submit_input(0, "[ ^42 ]".to_string())),
+        "the native host emits the realized key and the RAW text"
+    );
+
     // --- unavailable + unauthorized: reason lines, no refs/actions.
     let un = realize(&parse_semantic_ui(&read_fixture("unavailable.json")).unwrap());
     let un_text = un.visible_text();

@@ -557,10 +557,15 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
    * results would end up in one bag that no consumer could tell apart. The
    * MECHANICS are near-identical and that is fine; the SEMANTICS are not shared.
    *
-   * NO VERSION TOKEN. This binding takes none. Optimistic concurrency belongs to
-   * a Command that actually consumes a token, and none exists yet; a `tokenFor`
-   * here would be an unpaired supplier with nothing to conflict against, which is
-   * unfalsifiable by construction. E3 adds it together with its Command.
+   * THE VERSION TOKEN ARRIVED WITH ITS COMMAND (E3, Bead eij.3). ngh deliberately
+   * left `tokenFor` out: optimistic concurrency belongs to a Command that
+   * actually consumes a token, and an unpaired supplier with nothing to conflict
+   * against would have been unfalsifiable by construction. A Command that
+   * consumes one now exists, so the OPTIONAL supplier is here, with exactly the
+   * edit table's contract -- consumer-owned, called with the SAME live descriptor
+   * the binding was selected by, its result opaque to this owner and forwarded to
+   * the Command untouched. This owner learns nothing about what a token MEANS,
+   * exactly as it learns nothing about what an input means.
    */
   function normalizeInputBinding(binding) {
     rejectHandleKey(binding, 'input');
@@ -581,6 +586,9 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
     if (binding.onSubmitted !== undefined && binding.onSubmitted !== null
         && typeof binding.onSubmitted !== 'function') {
       throw new TypeError('an input binding onSubmitted must be a function when present');
+    }
+    if (binding.tokenFor !== undefined && binding.tokenFor !== null && typeof binding.tokenFor !== 'function') {
+      throw new TypeError('an input binding tokenFor must be a function when present');
     }
     // REQUIRED, unlike the edit table's optional twin (Bead z9b). Since
     // CommandRouter refuses an unavailable requested Command by THROWING, a
@@ -608,6 +616,7 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
       viewId: binding.viewId,
       resolveInput: binding.resolveInput,
       commandId: binding.commandId,
+      tokenFor: binding.tokenFor ?? null,
       onSubmitted: binding.onSubmitted ?? null,
       onInputError: binding.onInputError,
     });
@@ -645,10 +654,21 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
       return reportInputError(binding, error);
     }
     if (inputContext === null) return null;
+    // The consumer's transient token (opaque here), taken from the SAME live
+    // descriptor the resolver just read -- never fetched, defaulted or remembered
+    // here. A thrower is REPORTED rather than swallowed into a token-free
+    // dispatch: dispatching without the caller's own assumption about what it was
+    // shown is exactly the lost update a token exists to prevent.
+    let versionToken;
+    try {
+      versionToken = binding.tokenFor ? binding.tokenFor(descriptor) : null;
+    } catch (error) {
+      return reportInputError(binding, error);
+    }
     try {
       const result = await commandRouter.consumeIntent(
         {kind: 'submit-input', key},
-        {surfaceHandle, context: {commandId: binding.commandId, text, input: inputContext}},
+        {surfaceHandle, context: {commandId: binding.commandId, text, versionToken, input: inputContext}},
       );
       if (binding.onSubmitted) await binding.onSubmitted(result);
       return result;

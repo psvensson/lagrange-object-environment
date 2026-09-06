@@ -69,10 +69,27 @@ function isAuthorityError(error) {
   return Boolean(error && (error.name === 'AuthorityError' || error instanceof CommandAuthorizationError));
 }
 
+// A CONFLICT is a LOST UPDATE: the caller's observed state was overtaken, so its
+// write was refused and someone else's is current. `SmalltalkStaleMethodPositionError`
+// (Images #218, Bead eij.3) is exactly that for a native method position, and it
+// joins the two generic object-lane conflicts here rather than at the adapter,
+// because this module is the Environment's Command error owner.
+//
+// `SmalltalkMethodReplacementContentionError` is DELIBERATELY ABSENT and must stay
+// absent. Images is explicit that it is TRANSIENT and NOT staleness: the observed
+// position did not move and was not advanced, and the honest response is to retry
+// from a fresh authorized read. Mapping it here would turn a retryable contention
+// into a false "someone else changed this" report -- a lie about what happened to
+// the user's work. It stays a CommandExecutionError until a consumer exists that
+// would actually act on a transient/retry outcome; inventing that outcome now
+// would be an unfalsifiable taxonomy.
 function isConflictError(error) {
   return Boolean(
     error &&
-    (error.name === 'ObjectMutationConflictError' || error.name === 'VersionConflictError' || error instanceof CommandConflictError),
+    (error.name === 'ObjectMutationConflictError'
+      || error.name === 'VersionConflictError'
+      || error.name === 'SmalltalkStaleMethodPositionError'
+      || error instanceof CommandConflictError),
   );
 }
 

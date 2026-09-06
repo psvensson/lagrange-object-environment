@@ -1,4 +1,4 @@
-import {Presentation} from './model.js';
+import {Command, Presentation} from './model.js';
 import {UNAVAILABLE_REF_KIND, UNAUTHORIZED_REF_KIND} from './object-navigator.js';
 
 /**
@@ -80,6 +80,35 @@ const TARGET_GROUP = Object.freeze({
 // presentations SHARE it: presentOn detaches before attaching, so the kind
 // change is an ordinary re-presentation rather than a second view.
 const NATIVE_SMALLTALK_VIEW_ID = 'native-smalltalk-view';
+
+/**
+ * E3 (Bead eij.3): the ONE transient input a displayed native method offers, and
+ * the id of the ONE Command that consumes it.
+ *
+ * It is an INPUT, not a field (SemanticUi/v2, Bead ngh): the user supplies a
+ * transient ARGUMENT — new source — to an interaction. It is emphatically not an
+ * edit of a displayed value, and there is nothing here it could be an edit OF:
+ * Images keeps no text a native method was compiled from, so
+ * `descriptor.source` is truthfully `null` before AND after a replacement. E3 is
+ * REPLACEMENT FROM EXPLICITLY SUPPLIED SOURCE, not a source editor, and this
+ * affordance says exactly that and nothing more.
+ *
+ * The ARRAY is the key space, enumerated once — the projector keys each input by
+ * its index here and `resolveMethodReplacementInput` indexes this same array, so
+ * neither side derives a key independently (E2's lesson: two co-wrong
+ * derivations agree with each other and prove nothing). `role` is the SEMANTIC
+ * name and deliberately never crosses into the document: the renderer must not
+ * learn what an input MEANS.
+ */
+const NATIVE_METHOD_SOURCE_INPUT_ROLE = 'native-method-source';
+const NATIVE_METHOD_INPUTS = Object.freeze([
+  Object.freeze({
+    role: NATIVE_METHOD_SOURCE_INPUT_ROLE,
+    label: 'New source',
+    submitLabel: 'Replace',
+  }),
+]);
+const REPLACE_NATIVE_METHOD_COMMAND_ID = 'replace-native-method';
 
 // The reasons a failed browse presents. FIXED and Environment-owned: Images'
 // own browse messages legitimately name storage (`not a
@@ -308,6 +337,92 @@ function resolveNativeTarget(presentationDescriptor, key) {
 }
 
 /**
+ * Resolve a transient SemanticUi/v2 INPUT key against the CURRENT native-method
+ * presentation descriptor to the SEMANTIC input it supplies (`{role}`), or null
+ * (E3, Bead eij.3).
+ *
+ * PURE over the descriptor, and the exact twin of `resolveNativeTarget`: it
+ * INDEXES the same ordered `parameters.inputs` array the projector keyed, and
+ * derives nothing. Only the ROLE crosses back — never the label, never the
+ * subject, never a token. A null answer is an ordinary no-op (a stale key, or a
+ * descriptor that is not a native method), never a wrong input.
+ */
+function resolveMethodReplacementInput(presentationDescriptor, key) {
+  if (presentationDescriptor?.kind !== NATIVE_METHOD_PRESENTATION_KIND) return null;
+  const inputs = presentationDescriptor?.parameters?.inputs;
+  if (!Array.isArray(inputs)
+      || !Number.isSafeInteger(key) || key < 0 || key >= inputs.length) {
+    return null;
+  }
+  const role = inputs[key]?.role;
+  return typeof role === 'string' && role.length > 0 ? Object.freeze({role}) : null;
+}
+
+/**
+ * THE replacement Command (E3, Bead eij.3) — an ORDINARY Command, built here
+ * because this owner defines the native-method subject kind and the input role
+ * it consumes, and because a second copy in each composition would be two
+ * co-wrong definitions that agree with each other.
+ *
+ * It is ordinary in every way that matters: the CommandRegistry discovers it by
+ * applicability, the CommandRouter selects it by the binding's EXPLICIT
+ * commandId, the CommandDispatcher authorizes and invokes it through the image
+ * seam, and the Environment's conflict taxonomy classifies its failures. This
+ * factory adds no lane and no privilege.
+ *
+ * APPLICABILITY IS NOT AUTHORIZATION: it applies to any native-method subject,
+ * including one the caller may not write. Whether the write is allowed is
+ * Images' decision at invocation, taken against the per-invocation authority the
+ * router mints -- never anticipated here.
+ *
+ * WHAT IT REFUSES TO GUESS. It requires the resolver's own `{role}` to be the
+ * source input, the caller's `text` to be non-empty, and a `versionToken` to be
+ * present. A missing token is a REFUSAL, never a token-free replacement: the
+ * token is the caller's assumption about what it was shown, and replacing
+ * without one would silently overwrite whatever happens to be current -- the
+ * lost update this whole lane exists to make impossible.
+ */
+function createReplaceNativeMethodCommand() {
+  return new Command({
+    id: REPLACE_NATIVE_METHOD_COMMAND_ID,
+    title: 'Replace method source',
+    appliesTo: (subject) => subject?.kind === NATIVE_METHOD_SUBJECT_KIND,
+    invoke: async (subject, context = {}) => {
+      const required = requireNativeMethodSubject(subject);
+      const {adapter, authority = null, text, versionToken, input} = context;
+      if (!adapter || typeof adapter.replaceSmalltalkMethod !== 'function') {
+        throw new TypeError(`${REPLACE_NATIVE_METHOD_COMMAND_ID} requires the ImageClientAdapter's replaceSmalltalkMethod seam`);
+      }
+      if (input?.role !== NATIVE_METHOD_SOURCE_INPUT_ROLE) {
+        throw new TypeError(
+          `${REPLACE_NATIVE_METHOD_COMMAND_ID} consumes the ${NATIVE_METHOD_SOURCE_INPUT_ROLE} input, `
+          + `not ${JSON.stringify(input?.role ?? null)}`,
+        );
+      }
+      if (typeof text !== 'string' || text.length === 0) {
+        throw new TypeError(`${REPLACE_NATIVE_METHOD_COMMAND_ID} requires the supplied source text`);
+      }
+      if (typeof versionToken !== 'string' || versionToken.length === 0) {
+        throw new TypeError(
+          `${REPLACE_NATIVE_METHOD_COMMAND_ID} requires the version token paired with the method that was `
+          + 'displayed; replacing without one would overwrite whatever is current',
+        );
+      }
+      // Images' receipt, unchanged: {replaced: true}. Nothing is read back from
+      // it -- the displayed truth comes from a fresh authorized reread.
+      return adapter.replaceSmalltalkMethod({
+        imageId: required.imageId,
+        classRef: required.classRef,
+        selector: required.selector,
+        source: text,
+        versionToken,
+        authority,
+      });
+    },
+  });
+}
+
+/**
  * The native-class presentation provider. Presents a native-class subject from
  * the Images description the browser read. It validates only that the
  * description is the canonical record FOR THIS SUBJECT — it never repairs,
@@ -378,8 +493,13 @@ function createNativeSmalltalkBrowser({adapter, presentationRegistry, compositor
   if (!adapter || typeof adapter.describeSmalltalkClass !== 'function') {
     throw new TypeError('createNativeSmalltalkBrowser requires an adapter with describeSmalltalkClass');
   }
-  if (typeof adapter.describeSmalltalkMethod !== 'function') {
-    throw new TypeError('createNativeSmalltalkBrowser requires an adapter with describeSmalltalkMethod');
+  // E3 (Bead eij.3): the WRITER-FACING method read replaces the plain describe as
+  // this owner's method read. Not an extra read beside it -- an extra read would
+  // pair a token with a resolution the user was never shown, and Images is
+  // explicit that a hidden fresh read substituted for the caller's assumption
+  // makes a lost update unobservable. One read, one resolution, one token.
+  if (typeof adapter.readSmalltalkMethodForUpdate !== 'function') {
+    throw new TypeError('createNativeSmalltalkBrowser requires an adapter with readSmalltalkMethodForUpdate');
   }
   if (typeof adapter.classifySmalltalkMethodReadError !== 'function') {
     throw new TypeError('createNativeSmalltalkBrowser requires adapter.classifySmalltalkMethodReadError');
@@ -396,10 +516,64 @@ function createNativeSmalltalkBrowser({adapter, presentationRegistry, compositor
   // REQUIRED, the ProjectBrowser precedent: this owner presents into one logical
   // view, and a browser that could not present would make `activationBinding`
   // a promise it cannot keep.
+  // `liveView` joins the pair with E3: the transient method token is masked when
+  // the Compositor no longer shows the exact descriptor it was paired with, and
+  // liveness is the Compositor's call, never this owner's guess.
   if (!compositor
       || typeof compositor.openView !== 'function'
-      || typeof compositor.presentOn !== 'function') {
-    throw new TypeError('createNativeSmalltalkBrowser requires a Compositor (openView, presentOn)');
+      || typeof compositor.presentOn !== 'function'
+      || typeof compositor.liveView !== 'function') {
+    throw new TypeError('createNativeSmalltalkBrowser requires a Compositor (openView, presentOn, liveView)');
+  }
+
+  /**
+   * THE TRANSIENT NATIVE-METHOD REPLACEMENT TOKEN (E3, Bead eij.3; the okv
+   * Slice B precedent). Images' writer-facing read answers
+   * `{descriptor, versionToken}`; ONLY the descriptor reaches the Presentation.
+   * The token is held here, privately, paired STRONGLY with the EXACT
+   * presentationDescriptor object the Compositor admitted.
+   *
+   * It is paired only AFTER admission, CLEARED before every open/present (so a
+   * failed read leaves no usable token), and MASKED at read time when the
+   * Compositor no longer shows that exact descriptor as this owner's live view.
+   * It never enters a Presentation, a presentationDescriptor, a SemanticUi
+   * document, a durable intent, a Perspective or a subject, and this module never
+   * interprets it or decides a conflict outcome -- Images owns the check and
+   * CommandDispatcher owns the taxonomy.
+   *
+   * WEAKER THAN ProjectBrowser's ON PURPOSE, and the difference is licensed: that
+   * owner has a generation counter and a serialized lane with unfiltered follow
+   * rereads, so it pairs on identity + generation + active subject + liveness.
+   * This owner has no generation and no follow loop -- its descriptor is replaced
+   * only by its own open/present, each of which clears first -- so descriptor
+   * IDENTITY plus Compositor LIVENESS is the whole of it. A structurally equal
+   * copy is not the paired object and gets nothing.
+   */
+  let pairedMethod = null;
+  function clearMethodToken() {
+    pairedMethod = null;
+  }
+  function pairMethodToken({presentationDescriptor, versionToken}) {
+    // A class descriptor, or a failed/denied method read, carries no token; the
+    // pairing simply stays cleared rather than storing a null one.
+    if (typeof versionToken !== 'string' || versionToken.length === 0) return;
+    pairedMethod = Object.freeze({presentationDescriptor, versionToken});
+  }
+
+  /**
+   * The consumer-owned transient-token supplier for the shell's input-binding
+   * contract: the token paired with EXACTLY this displayed descriptor, or null.
+   *
+   * Null is not an error here -- it is the honest answer for a descriptor this
+   * owner is not currently showing. The Command refuses a token-free replacement
+   * loudly, which is where that refusal belongs.
+   */
+  function methodTokenFor(descriptor) {
+    if (!pairedMethod || !descriptor) return null;
+    if (descriptor !== pairedMethod.presentationDescriptor) return null;
+    const live = compositor.liveView(NATIVE_SMALLTALK_VIEW_ID);
+    if (!live || live.presentationDescriptor !== descriptor) return null;
+    return pairedMethod.versionToken;
   }
 
   /**
@@ -408,10 +582,17 @@ function createNativeSmalltalkBrowser({adapter, presentationRegistry, compositor
    * (a descriptor is a consumer-facing projection, not a registry concern).
    */
   function toPresentationDescriptor(presentation) {
+    const parameters = {...(presentation.context ?? {})};
+    // THE ONE PRODUCTION AFFORDANCE (E3, Bead eij.3), threaded exactly the way
+    // ProjectBrowser threads `writable`: it is this owner's fact about what a
+    // displayed native method offers, not something Images said. A CLASS
+    // descriptor gets none -- there is no class-level replacement -- and no other
+    // descriptor kind is touched.
+    if (presentation.kind === NATIVE_METHOD_PRESENTATION_KIND) parameters.inputs = NATIVE_METHOD_INPUTS;
     return {
       kind: presentation.kind,
       subject: presentation.subject,
-      parameters: {...(presentation.context ?? {})},
+      parameters,
     };
   }
 
@@ -497,11 +678,11 @@ function createNativeSmalltalkBrowser({adapter, presentationRegistry, compositor
    * Block independently before disclosing its locator. Holding class-read
    * authority is therefore not enough, which is the point.
    */
-  async function browseMethod(subject, {authority = null} = {}) {
+  async function browseMethodWithToken(subject, {authority = null} = {}) {
     const required = requireNativeMethodSubject(subject);
-    let smalltalkMethod = null;
+    let read = null;
     try {
-      smalltalkMethod = await adapter.describeSmalltalkMethod({
+      read = await adapter.readSmalltalkMethodForUpdate({
         imageId: required.imageId,
         classRef: required.classRef,
         selector: required.selector,
@@ -518,8 +699,20 @@ function createNativeSmalltalkBrowser({adapter, presentationRegistry, compositor
           {failures},
         );
       }
-      return presentations[0];
+      return Object.freeze({presentation: presentations[0], versionToken: null});
     }
+    // SHAPE ONLY (presence + string-ness), the ProjectBrowser rule: the token is
+    // never interpreted here, and this owner has no code that could look inside
+    // it. Checked OUTSIDE the catch above ON PURPOSE -- a broken seam is a
+    // PROGRAMMER error, not a denied or missing method, and classifying it as one
+    // would present an affordance that renders and then always refuses. (It was
+    // inside at first, and the falsifier below caught exactly that.)
+    if (!read || typeof read !== 'object' || !read.descriptor || typeof read.descriptor !== 'object'
+        || typeof read.versionToken !== 'string' || read.versionToken.length === 0) {
+      throw new TypeError('adapter.readSmalltalkMethodForUpdate must return {descriptor, versionToken} (the writer-facing Images method read)');
+    }
+    const smalltalkMethod = read.descriptor;
+    const versionToken = read.versionToken;
     const {presentations, failures} = presentationRegistry.discover(required, {smalltalkMethod});
     const candidates = presentations.filter((presentation) => (
       sameNativeMethodSubject(presentation.subject, required)
@@ -539,15 +732,30 @@ function createNativeSmalltalkBrowser({adapter, presentationRegistry, compositor
         {failures},
       );
     }
-    return candidates[0];
+    return Object.freeze({presentation: candidates[0], versionToken});
+  }
+
+  /**
+   * PUBLIC and deliberately TOKEN-FREE (the ProjectBrowser rule): a browse-obtained
+   * token would be a second, unpaired token source, and the only token that may
+   * ever be used is the one paired with a descriptor the Compositor is SHOWING.
+   */
+  async function browseMethod(subject, options = {}) {
+    return (await browseMethodWithToken(subject, options)).presentation;
   }
 
   // Browse a subject of EITHER kind. The only place that maps a semantic target
   // to the read it implies — one small dispatch, in the owner that defines both
   // subject kinds, so the shell never learns what a target means.
-  async function browseTarget(target, {authority = null} = {}) {
-    if (target?.kind === NATIVE_METHOD_SUBJECT_KIND) return browseMethod(target, {authority});
-    return browse(target, {authority});
+  async function browseTargetWithToken(target, {authority = null} = {}) {
+    if (target?.kind === NATIVE_METHOD_SUBJECT_KIND) return browseMethodWithToken(target, {authority});
+    // A CLASS carries no replacement token: there is no class-level replacement,
+    // and answering one here would be a token with nothing to pair it to.
+    return Object.freeze({presentation: await browse(target, {authority}), versionToken: null});
+  }
+
+  async function browseTarget(target, options = {}) {
+    return (await browseTargetWithToken(target, options)).presentation;
   }
 
   /**
@@ -555,9 +763,13 @@ function createNativeSmalltalkBrowser({adapter, presentationRegistry, compositor
    * native Smalltalk view through the Compositor.
    */
   async function open(subject, {authority = null, viewDescriptor} = {}) {
-    const presentation = await browseTarget(subject, {authority});
+    clearMethodToken(); // the previously displayed method's token dies here
+    const {presentation, versionToken} = await browseTargetWithToken(subject, {authority});
     const presentationDescriptor = toPresentationDescriptor(presentation);
     await compositor.openView({viewId: NATIVE_SMALLTALK_VIEW_ID, viewDescriptor, presentationDescriptor});
+    // AFTER admission, never before: a token paired with a descriptor the
+    // Compositor rejected would be usable against something nobody is looking at.
+    pairMethodToken({presentationDescriptor, versionToken});
     return presentationDescriptor;
   }
 
@@ -567,9 +779,11 @@ function createNativeSmalltalkBrowser({adapter, presentationRegistry, compositor
    * before attaching, so the kind change is an ordinary re-presentation.
    */
   async function present(subject, {authority = null} = {}) {
-    const presentation = await browseTarget(subject, {authority});
+    clearMethodToken();
+    const {presentation, versionToken} = await browseTargetWithToken(subject, {authority});
     const presentationDescriptor = toPresentationDescriptor(presentation);
     await compositor.presentOn(NATIVE_SMALLTALK_VIEW_ID, presentationDescriptor);
+    pairMethodToken({presentationDescriptor, versionToken});
     return presentationDescriptor;
   }
 
@@ -598,6 +812,91 @@ function createNativeSmalltalkBrowser({adapter, presentationRegistry, compositor
     });
   }
 
+  /**
+   * The REPLACEMENT INPUT BINDING this owner contributes to EnvironmentShell's
+   * input table (E3, Bead eij.3) — the third table, beside activation and edit.
+   *
+   * The shell owns handle -> live view, binding choice, resolver validation and
+   * dispatch through the CommandRouter. This owner supplies what only it can
+   * know: its view id, the EXPLICIT commandId (never a hint -- Bead 4c4), the
+   * pure resolver over its own input array, the transient token supplier, and
+   * THE MUTATION -> REREAD ORCHESTRATION, which is this owner's by definition.
+   *
+   * REREAD, NEVER PATCH. A completed replacement is followed by a FRESH
+   * AUTHORIZED READ of the same method, re-presented into the same view. Nothing
+   * is copied out of Images' receipt -- it carries `{replaced: true}` and
+   * deliberately nothing else -- and nothing local is patched. A successful
+   * replacement legitimately rebinds the selector to a FRESH Block identity, so
+   * the only honest displayed truth is what a new authorized read answers.
+   *
+   * A CONFLICT IS ALSO REREAD, and that is the point of surfacing it: the
+   * caller's observation was overtaken, so the view is showing a method position
+   * that has moved. The error is reported to the composition FIRST (it owns
+   * failure presentation, the ProjectBrowser precedent) and the authoritative
+   * reread follows. Every OTHER failure -- denied write, malformed call, rejected
+   * source, transient contention -- leaves the display alone, because in every
+   * one of those the observed position did not move and the descriptor on screen
+   * is still exactly what Images would answer.
+   *
+   * `authorityFor(subject)` is the COMPOSITION's: authority is fresh per action
+   * and never inherited from a subject, a descriptor, a token or this owner.
+   */
+  function replacementInputBinding({authorityFor, onReplacementError} = {}) {
+    if (typeof authorityFor !== 'function') {
+      throw new TypeError('replacementInputBinding requires authorityFor(subject) — authority is per action, never inherited');
+    }
+    if (typeof onReplacementError !== 'function') {
+      // The shell requires an error channel on every input binding (Bead z9b);
+      // requiring it HERE too means the composition cannot accidentally build a
+      // replacement affordance whose failures are invisible.
+      throw new TypeError('replacementInputBinding requires onReplacementError(error) — the composition owns failure presentation');
+    }
+
+    // The method currently ON SCREEN, from the Compositor's own live view. Never
+    // remembered here: what to reread is a property of what is displayed now.
+    function displayedMethodSubject() {
+      const live = compositor.liveView(NATIVE_SMALLTALK_VIEW_ID);
+      const subject = live?.presentationDescriptor?.subject ?? null;
+      return subject?.kind === NATIVE_METHOD_SUBJECT_KIND ? subject : null;
+    }
+
+    async function rereadDisplayedMethod() {
+      const subject = displayedMethodSubject();
+      if (!subject) return null; // the view moved on; there is nothing to reread
+      return present(subject, {authority: authorityFor(subject)});
+    }
+
+    return Object.freeze({
+      viewId: NATIVE_SMALLTALK_VIEW_ID,
+      commandId: REPLACE_NATIVE_METHOD_COMMAND_ID,
+      resolveInput: resolveMethodReplacementInput,
+      tokenFor: methodTokenFor,
+      onSubmitted: async (result) => {
+        // `null` is the router saying "not routed" (the view is gone / has no
+        // subject / nothing applies) -- not a replacement, so nothing to reread.
+        // Anything else means the Command ran; its VALUE is not inspected.
+        if (result === null || result === undefined) return null;
+        return rereadDisplayedMethod();
+      },
+      onInputError: async (error) => {
+        await onReplacementError(error);
+        // The Environment's OWN conflict outcome (CommandDispatcher's taxonomy),
+        // not an Images error class: a lost update means the position moved, so
+        // the display is stale and must be replaced by authoritative truth.
+        // Images' transient contention deliberately does NOT arrive as one.
+        if (error?.name !== 'CommandConflictError') return null;
+        try {
+          return await rereadDisplayedMethod();
+        } catch (rereadError) {
+          // Reported ONCE, and never followed by another reread: a reporting loop
+          // would be worse than the failure it is reporting.
+          await onReplacementError(rereadError);
+          return null;
+        }
+      },
+    });
+  }
+
   return Object.freeze({
     viewId: NATIVE_SMALLTALK_VIEW_ID,
     browse,
@@ -606,13 +905,17 @@ function createNativeSmalltalkBrowser({adapter, presentationRegistry, compositor
     open,
     present,
     activationBinding,
+    replacementInputBinding,
     toPresentationDescriptor,
   });
 }
 
 export {
   LOCATOR_RELATION,
+  NATIVE_METHOD_INPUTS,
+  NATIVE_METHOD_SOURCE_INPUT_ROLE,
   NATIVE_SMALLTALK_VIEW_ID,
+  REPLACE_NATIVE_METHOD_COMMAND_ID,
   TARGET_GROUP,
   NATIVE_CLASS_PRESENTATION_KIND,
   NATIVE_CLASS_SUBJECT_KIND,
@@ -626,6 +929,8 @@ export {
   createNativeMethodPresentationProvider,
   createNativeMethodSubject,
   createNativeSmalltalkBrowser,
+  createReplaceNativeMethodCommand,
+  resolveMethodReplacementInput,
   // nativeClassActivationTargets is deliberately NOT exported: the ordered array
   // has ONE locus (browse), and an importable builder would quietly reopen the
   // second one the provider's fallback used to be.

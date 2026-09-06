@@ -53,11 +53,21 @@ export {
   NATIVE_METHOD_PRESENTATION_KIND,
   NATIVE_METHOD_SUBJECT_KIND,
   NativeClassPresentationError,
+  // E3 (Bead eij.3): the production replacement affordance and its Command. A
+  // composition needs all three -- the input array a descriptor carries, the
+  // resolver over it, and the Command a registry registers -- and they are
+  // exported TOGETHER because an affordance without its Command is a dead
+  // control and a Command without its binding is unreachable.
+  NATIVE_METHOD_INPUTS,
+  NATIVE_METHOD_SOURCE_INPUT_ROLE,
+  REPLACE_NATIVE_METHOD_COMMAND_ID,
   createNativeClassPresentationProvider,
   createNativeClassSubject,
   createNativeMethodPresentationProvider,
   createNativeMethodSubject,
   createNativeSmalltalkBrowser,
+  createReplaceNativeMethodCommand,
+  resolveMethodReplacementInput,
   resolveNativeTarget,
 } from './native-smalltalk-browser.js';
 
