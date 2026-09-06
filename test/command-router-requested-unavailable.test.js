@@ -21,10 +21,19 @@ import {createCommandRouter, RequestedCommandUnavailableError} from '../src/comm
 //                                            axis.
 //
 // The error deliberately does NOT say whether the cause was "unregistered" or
-// "inapplicable here". That distinction is not needed to solve the consumer's
-// problem, and it is not cleanly available anyway: `discover(subject, context)`
+// "successfully evaluated and inapplicable here". Those two INTENTIONALLY
+// collapse: the distinction is not needed to solve the consumer's problem, and it
+// is not cleanly separable from this owner either -- `discover(subject, context)`
 // forwards the caller's context to `applies`, so `commandId` may legitimately
 // influence applicability.
+//
+// That collapse covers ONLY that pair. It is NOT a claim that the cause is
+// generally undiagnosable: a matching `applies` FAILURE is a distinct diagnostic
+// the router is already handed and discards, since `discover` returns
+// `{commands, failures}` and CommandRegistry's contract surfaces a throwing
+// `appliesTo` in `failures` rather than swallowing it. That is Bead 1yb, and it
+// is deliberately NOT proven here -- an `applies` failure is not an "unavailable"
+// error at all, so it does not belong inside this error's non-leak contract.
 
 const SUBJECT = {kind: 'ref', imageId: 'img', objectId: 'obj'};
 const HANDLE = 'surface-1';

@@ -44,8 +44,9 @@
  * crashed while deciding applicability is a real programmer error this owner is
  * already handed and does not report. An earlier version of this comment claimed
  * the cause was simply "not cleanly separable", which overstated it into an
- * impossibility. Bead recorded; deliberately not widened here, because the
- * error's contents are a decided contract.
+ * impossibility. Tracked as Bead 1yb; deliberately not widened here, because the
+ * error's contents are a decided contract, and an `applies` failure is not an
+ * "unavailable" error at all.
  *
  * WHY LOUD RATHER THAN NULL. `consumeIntent` already answers null for three
  * unrelated reasons (the view is gone, it has no subject, nothing applies), and
