@@ -28,12 +28,14 @@ import {createCommandRouter, RequestedCommandUnavailableError} from '../src/comm
 // influence applicability.
 //
 // That collapse covers ONLY that pair. It is NOT a claim that the cause is
-// generally undiagnosable: a matching `applies` FAILURE is a distinct diagnostic
-// the router is already handed and discards, since `discover` returns
-// `{commands, failures}` and CommandRegistry's contract surfaces a throwing
-// `appliesTo` in `failures` rather than swallowing it. That is Bead 1yb, and it
-// is deliberately NOT proven here -- an `applies` failure is not an "unavailable"
-// error at all, so it does not belong inside this error's non-leak contract.
+// generally undiagnosable: a matching `applies` FAILURE is a distinct diagnostic,
+// since `discover` returns `{commands, failures}` and CommandRegistry's contract
+// surfaces a throwing `appliesTo` there rather than swallowing it. Bead 1yb
+// consumes it -- by rethrowing the registry's own error UNCHANGED, so this class
+// is never reached for that case and its non-leak contract below is untouched.
+// An `applies` failure is not an "unavailable" error at all, which is exactly why
+// it was not folded in here. Its proofs live in
+// test/command-router-matching-applicability-failure.test.js.
 
 const SUBJECT = {kind: 'ref', imageId: 'img', objectId: 'obj'};
 const HANDLE = 'surface-1';

@@ -38,15 +38,15 @@
  *     `CommandRegistry` does not have and should not grow, since it owns
  *     discovery and applicability, not lookup.
  *
- * NARROWLY: that inseparability covers ONLY that pair. A THIRD case is genuinely
- * diagnosable and is currently discarded -- `discover` also returns `failures`,
- * naming each Command whose own `applies` THREW. A requested Command that
- * crashed while deciding applicability is a real programmer error this owner is
- * already handed and does not report. An earlier version of this comment claimed
- * the cause was simply "not cleanly separable", which overstated it into an
- * impossibility. Tracked as Bead 1yb; deliberately not widened here, because the
- * error's contents are a decided contract, and an `applies` failure is not an
- * "unavailable" error at all.
+ * NARROWLY: that inseparability covers ONLY that pair, and an earlier version of
+ * this comment overstated it into a general impossibility. A THIRD case is
+ * genuinely diagnosable, and since Bead 1yb it is no longer thrown away: a
+ * requested Command whose own `applies` THREW is reported by rethrowing
+ * `CommandRegistry`'s own failure error UNCHANGED, so this error is never
+ * reached for it. That case is deliberately NOT folded into this class -- an
+ * applicability crash is a programmer error owned by the Command, not an
+ * "unavailable" answer, and pressing it in here (even as a `cause`) would widen
+ * a contract whose whole value is how narrow it is.
  *
  * WHY LOUD RATHER THAN NULL. `consumeIntent` already answers null for three
  * unrelated reasons (the view is gone, it has no subject, nothing applies), and
@@ -90,10 +90,12 @@ function createCommandRouter({compositor, commandRegistry, dispatch, authorityPr
    * Returns the dispatch result, or null when the handle no longer resolves to
    * a live view / the view has no subject / no command applies.
    *
-   * REJECTS with `RequestedCommandUnavailableError` when the caller named an
-   * explicit `context.commandId` that is not among the applicable commands
-   * (Bead z9b). A caller on a fire-and-forget renderer path must therefore have
-   * an error channel, or the refusal is invisible to it.
+   * REJECTS when the caller named an explicit `context.commandId` that is not
+   * among the applicable commands: with that Command's OWN applicability error,
+   * unchanged, if it is the one that crashed while deciding (Bead 1yb), and
+   * otherwise with `RequestedCommandUnavailableError` (Bead z9b). A caller on a
+   * fire-and-forget renderer path must therefore have an error channel, or the
+   * refusal is invisible to it.
    */
   async function consumeIntent(intentDescriptor, {surfaceHandle, context = {}} = {}) {
     const view = compositor.viewForSurfaceHandle(surfaceHandle);
@@ -107,7 +109,11 @@ function createCommandRouter({compositor, commandRegistry, dispatch, authorityPr
 
     // Applicability ONLY: discover candidate commands for this subject. This is
     // never authorization.
-    const {commands} = commandRegistry.discover(subject, context);
+    // `failures` names every Command whose own `applies` THREW: the registry
+    // isolates it, treats it as not applicable, and surfaces the error here
+    // rather than swallowing it. Defaulted so a registry double that returns
+    // only `{commands}` still means "nothing failed".
+    const {commands, failures = []} = commandRegistry.discover(subject, context);
 
     // SELECTION POLICY. An explicit `context.commandId` is a STATEMENT OF INTENT,
     // not a hint: it dispatches exactly that Command, or NOTHING.
@@ -138,8 +144,35 @@ function createCommandRouter({compositor, commandRegistry, dispatch, authorityPr
     // becomes a "look X up first, discover second" model and never strips
     // `commandId` out of the context a Command's `applies` may legitimately read.
     const command = commands.find((c) => c.id === requested) ?? null;
-    if (!command) throw new RequestedCommandUnavailableError(requested);
-    return dispatchSelected(command);
+    if (command) return dispatchSelected(command);
+
+    // Bead 1yb. Before answering the generic "unavailable", check whether the
+    // registry ALREADY told us why: a failure entry for the REQUESTED id means
+    // that Command crashed while deciding its own applicability. That is a
+    // programmer error owned by the Command and merely relayed here, so the
+    // THROWN VALUE is rethrown exactly as it came -- no wrapper, no `cause`, no
+    // new taxonomy -- which preserves Error identity, stack and any structured
+    // information WHEN what was thrown is an Error. Stated as the value and not
+    // as "the stack" on purpose: JavaScript permits `throw 'boom'` / `throw null`
+    // / `throw undefined`, and `CommandRegistry` captures whatever was thrown
+    // without requiring `instanceof Error`. A direct rethrow is right for those
+    // too; a wrapper would have had to invent a policy for them.
+    //
+    // This owner decides only WHICH discovery result belongs to the explicit
+    // request; it never invents a message for something `CommandRegistry`
+    // already knows.
+    //
+    // ONLY the matching entry, never another Command's: an unrelated failure is
+    // registry contents this error contract does not disclose, and it must not
+    // poison a request that has nothing to do with it.
+    //
+    // An applicable match wins over a failure entry above, which is observable
+    // only under duplicate Command ids -- the ordered discovery result is
+    // followed mechanically there, and this slice decides no uniqueness policy.
+    const failure = failures.find((f) => f.commandId === requested) ?? null;
+    if (failure) throw failure.error;
+
+    throw new RequestedCommandUnavailableError(requested);
 
     async function dispatchSelected(selected) {
 
