@@ -16,8 +16,8 @@ import {Command} from '../src/model.js';
 // where a failure is `{commandId, error}` for a Command whose own `applies`
 // THREW -- surfaced there rather than swallowed, by the registry's own contract.
 // The router destructured `{commands}` alone, so a requested Command that
-// CRASHED while deciding applicability -- a real programmer error, with a real
-// stack, ALREADY handed to this owner -- was reported identically to a typo'd id.
+// CRASHED while deciding applicability -- a real programmer error ALREADY handed
+// to this owner -- was reported identically to a typo'd id.
 //
 // The repair consumes information the router already has. It needs no
 // `CommandRegistry.has(id)`, no lookup before discovery, no wrapper error and no
@@ -26,6 +26,15 @@ import {Command} from '../src/model.js';
 //     if an applicable Command X exists     -> authorize and dispatch X
 //     else if failures has an entry for X   -> throw that entry.error, unchanged
 //     else                                  -> RequestedCommandUnavailableError(X)
+//
+// "Unchanged" is a claim about the VALUE, not about a stack: JavaScript permits
+// `throw 'boom'` / `throw null` / `throw undefined`, and CommandRegistry captures
+// whatever was thrown without requiring `instanceof Error`. The rethrow is the
+// same thrown value either way -- which preserves Error identity, stack and
+// structured information WHEN an Error is what was thrown. The proofs below use
+// real Errors, a legitimate concrete specimen of that contract; the general
+// wording is deliberately no stronger than the contract, and no test hardens the
+// non-Error case, which has no consumer pressure behind it.
 //
 // Ownership is the point: CommandRegistry owns applicability and the original
 // programmer error; CommandRouter owns only WHICH discovery result belongs to the
@@ -91,9 +100,10 @@ test('a requested Command whose applies THREW rejects with that EXACT error', as
 
   const error = await rejection(submit(h.router, {commandId: 'replace-native-method'}));
 
-  // Identity, not resemblance: the SAME object, so the lower owner's stack and
-  // any structured information it already carries survive intact. A wrapper or a
-  // `cause` would pass a name/message check and fail this one.
+  // Identity, not resemblance: the SAME object. For an Error -- what a crashing
+  // `applies` throws in practice, and what this proof uses -- that is what keeps
+  // the lower owner's stack and any structured information it already carries
+  // intact. A wrapper or a `cause` would pass a name/message check and fail this.
   assert.equal(error, sentinel);
   assert.ok(!(error instanceof RequestedCommandUnavailableError), 'it is not an "unavailable" error at all');
   assert.deepEqual(h.dispatched, [], 'nothing may dispatch');

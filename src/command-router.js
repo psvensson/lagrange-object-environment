@@ -149,11 +149,18 @@ function createCommandRouter({compositor, commandRegistry, dispatch, authorityPr
     // Bead 1yb. Before answering the generic "unavailable", check whether the
     // registry ALREADY told us why: a failure entry for the REQUESTED id means
     // that Command crashed while deciding its own applicability. That is a
-    // programmer error with a real stack, owned by the Command and merely
-    // relayed here, so it is rethrown EXACTLY -- same object, same identity, no
-    // wrapper, no `cause`, no new taxonomy. This owner decides only WHICH
-    // discovery result belongs to the explicit request; it never invents a
-    // message for something `CommandRegistry` already knows.
+    // programmer error owned by the Command and merely relayed here, so the
+    // THROWN VALUE is rethrown exactly as it came -- no wrapper, no `cause`, no
+    // new taxonomy -- which preserves Error identity, stack and any structured
+    // information WHEN what was thrown is an Error. Stated as the value and not
+    // as "the stack" on purpose: JavaScript permits `throw 'boom'` / `throw null`
+    // / `throw undefined`, and `CommandRegistry` captures whatever was thrown
+    // without requiring `instanceof Error`. A direct rethrow is right for those
+    // too; a wrapper would have had to invent a policy for them.
+    //
+    // This owner decides only WHICH discovery result belongs to the explicit
+    // request; it never invents a message for something `CommandRegistry`
+    // already knows.
     //
     // ONLY the matching entry, never another Command's: an unrelated failure is
     // registry contents this error contract does not disclose, and it must not

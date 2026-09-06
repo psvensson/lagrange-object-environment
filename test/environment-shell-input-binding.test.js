@@ -172,9 +172,9 @@ test('a bound Command that CRASHES deciding applicability reaches onInputError a
   // registry's own applicability error unchanged, and it travels the ORDINARY
   // binding channel -- router rejection -> handleInputIntent catch ->
   // onInputError. The shell must NOT special-case it (nor
-  // RequestedCommandUnavailableError); the consumer receives the SAME object the
-  // Command's own `applies` threw, with its stack intact, which is the whole
-  // point of not wrapping it.
+  // RequestedCommandUnavailableError); the consumer receives the SAME value the
+  // Command's own `applies` threw -- here an Error, so its identity and stack
+  // arrive intact, which is the whole point of not wrapping it.
   const {createCommandRouter} = await import('../src/command-router.js');
   const boom = new TypeError('applies() read a field of undefined');
   let onIntent = null;
