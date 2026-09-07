@@ -207,6 +207,30 @@ async function setup() {
     principal: 'alice', grants: objectIds.map(grant),
   });
 
+  // Images ccd8321 (#231) CHANGED THE METHOD-READ CONTRACT, and this helper is
+  // the whole Environment-side consequence in this slice. A public method read
+  // now authorizes, before it resolves anything:
+  //   1. `object/read` on the declaring Class/Metaclass  (unchanged);
+  //   2. `smalltalk-method/read` on the exact LOGICAL POSITION
+  //      {imageId, classRef, selector}.
+  // It is NOT `object/read` on the current Block any more. The position is
+  // nameable from the public semantic locator alone -- no caller has to predict
+  // which immutable revision currently occupies it -- and the grant follows that
+  // position across revisions while conferring no direct Block authority.
+  //
+  // The `objectIds` argument is kept here so this admission slice changes the
+  // authority CONSTRUCTION and nothing else; the Block ids the E2 fixtures still
+  // pass are now redundant, and removing them (with `boundBlockFor`) belongs to
+  // the E3 slice that also proves the first read needs no Block identity at all.
+  const methodPositionGrant = (classRef, selector) => ({
+    operation: imagesApi.SMALLTALK_METHOD_READ_OPERATION,
+    resource: imagesApi.smalltalkMethodPositionResource(IMAGE, classRef, selector),
+  });
+  const authorityForMethod = ({classRef, selector, objectIds = []}) => runtime.authority.issue({
+    principal: 'alice',
+    grants: [...objectIds.map(grant), methodPositionGrant(classRef, selector)],
+  });
+
   return {
     runtime,
     adapter,
@@ -214,6 +238,8 @@ async function setup() {
     browser,
     registry,
     authorityFor,
+    authorityForMethod,
+    methodPositionGrant,
     importedClassRef: imported.classes[0].classRef,
     declaredClassRef: declared.classRef,
   };
@@ -507,7 +533,7 @@ test('class-read authority alone does not yield the Block; the method grant does
     assert.equal(binding.selector, 'baseValue');
 
     const granted = await t.browser.browseMethod(subject, {
-      authority: t.authorityFor(classRef.objectId, binding.method.objectId),
+      authority: t.authorityForMethod({classRef, selector: 'baseValue', objectIds: [classRef.objectId]}),
     });
     assert.equal(granted.kind, NATIVE_METHOD_PRESENTATION_KIND);
     const {smalltalkMethod} = granted.context;
@@ -566,20 +592,39 @@ test('the Block ref comes from Images and is NOT derivable from the class ref an
     assert.ok(after.method.objectId.includes('/revision/'),
       `a redefinition must produce a revision id, got ${after.method.objectId}`);
 
+    // The authority names the LOGICAL POSITION, not a revision. It was MINTED
+    // BEFORE the redefinition existed -- from {imageId, classRef, selector} and
+    // nothing else -- which is exactly the property Images ccd8321 (#231) added
+    // and the reason a caller never has to predict a Block id.
+    const positionAuthority = t.authorityForMethod({
+      classRef, selector: 'baseValue', objectIds: [classRef.objectId],
+    });
     const presentation = await t.browser.browseMethod(
       createNativeMethodSubject({imageId: IMAGE, classRef, selector: 'baseValue'}),
-      {authority: t.authorityFor(classRef.objectId, after.method.objectId)},
+      {authority: positionAuthority},
     );
     assert.deepEqual(presentation.context.smalltalkMethod.method, after.method,
       'the description carries the ref Images has bound NOW, which no local derivation could have produced');
+    assert.notDeepEqual(presentation.context.smalltalkMethod.method, before.method,
+      'and the position grant followed the selector ACROSS the revision, which is the point of it');
 
-    // The stale pre-redefinition Block grant no longer opens the method: authority
-    // names an object, and the object changed.
-    const stale = await t.browser.browseMethod(
+    // REPLACES the old "a stale Block grant no longer opens the method" negative,
+    // whose premise the repaired contract removed: a position grant deliberately
+    // survives A -> B, so there is no longer any such thing as a stale one.
+    // The property that MUST still hold is the other half -- generic Block
+    // authority is not accepted for a semantic method read, in either direction.
+    const blockGrantOnly = await t.browser.browseMethod(
+      createNativeMethodSubject({imageId: IMAGE, classRef, selector: 'baseValue'}),
+      {authority: t.authorityFor(classRef.objectId, after.method.objectId)},
+    );
+    assert.equal(blockGrantOnly.kind, 'unauthorized-reference',
+      'object/read on the CURRENT Block does not authorize the semantic method read');
+    const staleBlockGrantOnly = await t.browser.browseMethod(
       createNativeMethodSubject({imageId: IMAGE, classRef, selector: 'baseValue'}),
       {authority: t.authorityFor(classRef.objectId, before.method.objectId)},
     );
-    assert.equal(stale.kind, 'unauthorized-reference');
+    assert.equal(staleBlockGrantOnly.kind, 'unauthorized-reference',
+      'nor does object/read on a superseded revision');
   } finally {
     await t.runtime.close();
   }
@@ -610,18 +655,40 @@ test('the method seam is no existence oracle, and its licensed distinction is ho
     );
     assert.equal(deniedImplemented.kind, 'unauthorized-reference');
 
-    // WITH class authority the two DO differ — and that is licensed, not a leak:
-    // the class description already listed every selector the class implements,
-    // so "this class does not implement that selector" tells the caller nothing
-    // a class read did not. Recorded on Bead azj as a collapsed cause.
-    const missing = await t.browser.browseMethod(
+    // WITH CLASS AUTHORITY ALONE the two are now IDENTICAL too, and this is a
+    // STRENGTHENING that Images ccd8321 (#231) brought: the method-position check
+    // happens BEFORE any selector resolution, so a caller holding only the class
+    // cannot tell an implemented selector from an unimplemented one either.
+    // Before the repair, class authority alone answered `unavailable` for a
+    // missing selector and `unauthorized` for an implemented one -- licensed at
+    // the time, because a class read had already listed every selector, but a
+    // distinction all the same. It is gone.
+    const missingClassOnly = await t.browser.browseMethod(
       createNativeMethodSubject({imageId: IMAGE, classRef, selector: 'neverImplemented'}), {authority: classOnly});
-    assert.equal(missing.kind, 'unavailable-reference',
-      'a selector the class does not implement is unavailable, not unauthorized');
     const unreadableBlock = await t.browser.browseMethod(
       createNativeMethodSubject({imageId: IMAGE, classRef, selector: 'baseValue'}), {authority: classOnly});
     assert.equal(unreadableBlock.kind, 'unauthorized-reference',
-      'an implemented selector whose Block the caller may not read is unauthorized');
+      'an implemented selector is unauthorized without the method-position grant');
+    assert.equal(missingClassOnly.kind, 'unauthorized-reference',
+      'and so is an unimplemented one: the position check precedes resolution');
+    assert.deepEqual(
+      semanticUiForPresentation(t.browser.toPresentationDescriptor(missingClassOnly)),
+      semanticUiForPresentation(t.browser.toPresentationDescriptor(unreadableBlock)),
+      'byte-identical documents: class authority alone is no existence oracle either',
+    );
+
+    // The licensed distinction MOVED rather than vanished: it now requires the
+    // POSITION grant, which a caller can mint for any {class, selector} pair
+    // without reading anything. Holding it, an unimplemented selector is honestly
+    // `unavailable` -- and that still discloses nothing a class read did not,
+    // because the class description already listed every selector it implements.
+    // Recorded on Bead azj as a collapsed cause.
+    const missing = await t.browser.browseMethod(
+      createNativeMethodSubject({imageId: IMAGE, classRef, selector: 'neverImplemented'}),
+      {authority: t.authorityForMethod({classRef, selector: 'neverImplemented', objectIds: [classRef.objectId]})},
+    );
+    assert.equal(missing.kind, 'unavailable-reference',
+      'a selector the class does not implement is unavailable to a caller authorized for that position');
 
     // Every failure reason is one of this module's own two constants — never an
     // Images message, which is what could carry a storage id. Asserted by
@@ -682,12 +749,22 @@ async function openNativeVertical(t) {
   const authorityFor = (target) => {
     // Fresh per navigation action, from the composition's own provider — never
     // inherited from the subject, the descriptor or the shell.
+    //
+    // Images ccd8321 (#231): a METHOD target's authority is now built from the
+    // public semantic locator -- {imageId, classRef, selector} -- through the
+    // method-position vocabulary. The Block id `boundBlockFor` still supplies is
+    // now REDUNDANT and is kept here only so this admission slice changes the
+    // authority CONSTRUCTION and nothing else; deleting that bootstrap, and
+    // proving a first read needs no Block identity at all, belongs to the E3
+    // slice.
     const ids = [target.classRef.objectId];
     if (target.kind === 'native-method') {
       const bound = t.boundBlockFor?.(target);
       if (bound) ids.push(bound);
     }
-    const authority = t.authorityFor(...ids);
+    const authority = target.kind === 'native-method' && !t.withholdMethodPositionGrant
+      ? t.authorityForMethod({classRef: target.classRef, selector: target.selector, objectIds: ids})
+      : t.authorityFor(...ids);
     grants.push({target, ids, authority});
     return authority;
   };
@@ -780,8 +857,12 @@ test('E2 acceptance: class authority alone cannot open the method through the li
   try {
     const classRef = t.importedClassRef;
     // The composition supplies the CLASS grant only for a method target: the
-    // second authorization is the one that must fail.
+    // second authorization is the one that must fail. Under Images ccd8321 (#231)
+    // that second check is `smalltalk-method/read` on the logical position rather
+    // than `object/read` on the Block, so withholding the POSITION grant is what
+    // makes this negative test the same test it always was.
     t.boundBlockFor = () => null;
+    t.withholdMethodPositionGrant = true;
     const v = await openNativeVertical(t);
     await v.browser.open(createNativeClassSubject({imageId: IMAGE, classRef}), {
       authority: t.authorityFor(classRef.objectId),
