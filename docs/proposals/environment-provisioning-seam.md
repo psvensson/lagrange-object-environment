@@ -2,7 +2,7 @@
 
 **Status:** OPEN. Sent from `lagrange-object-environment` to the `lagrange-images` owner. Originating Bead `lagrange-object-environment-0k7.1` (Object-native Theme foundation). Per environment ADR 0002 this is a downward proposal of a missing image-level semantic contract; the Environment does not shadow it with an unguarded `putObject`, a read-then-put of its own, or another subsystem's provisioning helper.
 
-Audited against pinned Images `9af24da93eba17357b05168ad5fc657be51bce94`, which was the pinned revision when this proposal was written. **Not re-audited at `15fcb811`** (the E3 admission): that bump was scoped to the native method replacement seams and touched nothing in this proposal's area, so the gap is believed to stand — but this proposal does not assert it for that revision.
+Audited against pinned Images `9af24da93eba17357b05168ad5fc657be51bce94`, which was the pinned revision when this proposal was written. **Not re-audited at `15fcb811`** (the E3 admission) **or at `ccd8321`** (the method-position authority admission): neither bump touched this proposal's area — the first was scoped to the native method replacement seams, the second to method-read authority plus unrelated M4 language work — so the gap is believed to stand, but this proposal does not assert it for either revision.
 
 **Sent as:** [lagrange-images#224](https://github.com/psvensson/lagrange-images/issues/224). Discovered-from Bead `lagrange-object-environment-qa3`.
 

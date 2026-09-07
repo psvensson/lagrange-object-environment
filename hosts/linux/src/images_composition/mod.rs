@@ -65,8 +65,8 @@ pub const PORTABLE_RUNTIME_ARTIFACT_ENTRY: &str = "src/portable-runtime.js";
 /// closure and its evidence is EMPIRICAL: the full suite against the exact
 /// revision, recorded as a pass count with zero skipped.
 pub const PORTABLE_RUNTIME_SOURCE_REVISION: &str =
-    "15fcb8118c054a4b55d85ec3446987dbf537498a";
+    "ccd8321fba3dcdb8f50f5ed481512ac38ad4e138";
 
 /// Images-published identity over the exact canonical material bytes above.
 pub const PORTABLE_RUNTIME_CONTENT_IDENTITY: &str =
-    "sha256:fbc160143748a008dec16ea0daccec3b95ac501f38579dc118c2d5dcd96b6edc";
+    "sha256:3ad9eff456f66a275e8a622eac82ef4f113f6b77fa860bd73e525a1fc273cb5e";

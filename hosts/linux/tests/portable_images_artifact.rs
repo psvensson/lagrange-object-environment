@@ -18,9 +18,9 @@ use sha2::{Digest, Sha256};
 fn embedded_portable_runtime_artifact_is_the_pinned_canonical_material() {
     assert_eq!(
         PORTABLE_RUNTIME_SOURCE_REVISION,
-        "15fcb8118c054a4b55d85ec3446987dbf537498a"
+        "ccd8321fba3dcdb8f50f5ed481512ac38ad4e138"
     );
-    assert_eq!(PORTABLE_RUNTIME_ARTIFACT_BYTES.len(), 1_259_511);
+    assert_eq!(PORTABLE_RUNTIME_ARTIFACT_BYTES.len(), 1283741);
     assert_eq!(PORTABLE_RUNTIME_ARTIFACT_BYTES.last(), Some(&b'}'));
 
     let digest = Sha256::digest(PORTABLE_RUNTIME_ARTIFACT_BYTES);
@@ -33,7 +33,7 @@ fn embedded_portable_runtime_artifact_is_the_pinned_canonical_material() {
         serde_json::from_slice(PORTABLE_RUNTIME_ARTIFACT_BYTES).expect("pinned artifact is JSON");
     assert_eq!(artifact["format"], PORTABLE_RUNTIME_ARTIFACT_FORMAT);
     assert_eq!(artifact["entry"], PORTABLE_RUNTIME_ARTIFACT_ENTRY);
-    assert_eq!(artifact["modules"].as_array().map(Vec::len), Some(115));
+    assert_eq!(artifact["modules"].as_array().map(Vec::len), Some(117));
     assert!(
         artifact.get("provenance").is_none(),
         "canonical material must not contain the external source provenance"
@@ -191,7 +191,27 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
                 // show an editable method and never edit it.
                 'authorizedReadSmalltalkMethodForUpdate',
                 'authorizedReplaceSmalltalkMethod',
+                // Images ccd8321 (#231): the METHOD-POSITION AUTHORITY VOCABULARY. A public
+                // method read now authorizes `smalltalk-method/read` on the logical
+                // {image, Class/Metaclass, selector} position BEFORE resolving anything,
+                // instead of `object/read` on the current Block -- so a caller no longer has
+                // to predict which immutable revision occupies the position, which is exactly
+                // what made E3's post-write reread unobtainable.
+                //
+                // TENSE, stated precisely because the two lanes differ here: the vocabulary is
+                // ALREADY in present-tense use by the JS integration lane, whose composition
+                // builds the grant from `src/runtime.js`. Over THIS surface -- the portable
+                // artifact the NATIVE compositions consume -- it is still a forward commitment,
+                // because the native lane browses only the probe class, which has no selectors
+                // to read (Bead aov). Required here anyway, for the reason every admission
+                // slice requires ahead: a revision that cannot supply the vocabulary the next
+                // slice needs is refused before that slice starts.
+                'smalltalkMethodPositionResource',
               ];
+              // A CONSTANT, not a function, so it needs its own kind check: the list above is
+              // filtered on `typeof !== 'function'` and would report a perfectly present string
+              // as missing.
+              const requiredEnvironmentConstants = ['SMALLTALK_METHOD_READ_OPERATION'];
               // The authorized native Smalltalk browsing seams the Environment consumes
               // (Images ADR 0087). E1 required only the class seam and said the method seam
               // would join when something called it; E2 calls it, so the pair is now the
@@ -229,6 +249,14 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
               // E3's adapter does not import them is enforced by review and by a fence over the
               // Environment's OWN source, which belongs with the E3 slice that adds the adapter
               // -- not here. Bead recorded.
+              // The method-position authority vocabulary is a THIRD owner module, so it gets
+              // its own identity group for the same reason the replacement seam did: comparing
+              // it against smalltalk-browse.js would compare `undefined === undefined` and pass
+              // vacuously at any revision.
+              const consumedMethodPositionAuthority = [
+                'SMALLTALK_METHOD_READ_OPERATION',
+                'smalltalkMethodPositionResource',
+              ];
               const forbiddenPrivateOwners = [
                 'smalltalkMethodPositionToken',
                 'parseSmalltalkMethodPositionToken',
@@ -292,6 +320,48 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
                     (name) => typeof owner[name] === 'function' && owner[name] === alias[name],
                   );
                 })(),
+                consumedMethodPositionAuthorityNames: consumedMethodPositionAuthority,
+                missingEnvironmentConstants: requiredEnvironmentConstants.filter(
+                  (name) => typeof alias[name] !== 'string' || alias[name].length === 0,
+                ),
+                unrequiredMethodPositionAuthority: consumedMethodPositionAuthority.filter(
+                  (name) => !requiredEnvironmentExports.includes(name)
+                    && !requiredEnvironmentConstants.includes(name),
+                ),
+                // Owner identity, per KIND: the function by reference, the operation by value
+                // (string equality IS value identity). Both guarded against the vacuous
+                // `undefined === undefined`, and a failed import returns false.
+                methodPositionAuthorityAreOwnerValues: await (async () => {
+                  let owner = null;
+                  try {
+                    owner = await import('src/language/smalltalk-method-position-resource.js');
+                  } catch {
+                    return false;
+                  }
+                  return typeof owner.SMALLTALK_METHOD_READ_OPERATION === 'string'
+                    && owner.SMALLTALK_METHOD_READ_OPERATION.length > 0
+                    && owner.SMALLTALK_METHOD_READ_OPERATION === alias.SMALLTALK_METHOD_READ_OPERATION
+                    && typeof owner.smalltalkMethodPositionResource === 'function'
+                    && owner.smalltalkMethodPositionResource === alias.smalltalkMethodPositionResource;
+                })(),
+                // The WIRE VALUE a composition writes into a grant, read from the artifact.
+                methodPositionOperation: alias.SMALLTALK_METHOD_READ_OPERATION ?? null,
+                // THE PROPERTY THE ENVIRONMENT ACTUALLY DEPENDS ON: the resource is nameable
+                // from public vocabulary ALONE. Called here against an image that does not
+                // exist in this runtime at all -- no graph state, no Block id, nothing read --
+                // and it must still answer a stable value that varies with the selector.
+                methodPositionResourceIsPureVocabulary: (() => {
+                  const classRef = {kind: 'ref', imageId: 'no-such-image', objectId: 'smalltalk/class/X'};
+                  let a; let b; let c;
+                  try {
+                    a = alias.smalltalkMethodPositionResource('no-such-image', classRef, 'foo');
+                    b = alias.smalltalkMethodPositionResource('no-such-image', classRef, 'foo');
+                    c = alias.smalltalkMethodPositionResource('no-such-image', classRef, 'bar');
+                  } catch {
+                    return false;
+                  }
+                  return typeof a === 'string' && a.length > 0 && a === b && a !== c;
+                })(),
                 exposedPrivateOwners: forbiddenPrivateOwners.filter(
                   (name) => alias[name] !== undefined,
                 ),
@@ -306,7 +376,7 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
     assert_eq!(report["exportedCreate"], "function");
     // A NON-VACUITY / closure check only: it catches the requirement list silently
     // shrinking. The semantic contract is the by-name assertions below.
-    assert_eq!(report["requiredEnvironmentExportCount"], 26);
+    assert_eq!(report["requiredEnvironmentExportCount"], 27);
     assert_eq!(
         report["missingEnvironmentExports"],
         serde_json::json!([]),
@@ -343,6 +413,36 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
         report["consumedNativeReplacementSeamNames"],
         serde_json::json!(["authorizedReplaceSmalltalkMethod"])
     );
+    // Images ccd8321 (#231): the method-position authority vocabulary, by name and by
+    // owner, on the same rules as the two seam groups above.
+    assert_eq!(
+        report["consumedMethodPositionAuthorityNames"],
+        serde_json::json!(["SMALLTALK_METHOD_READ_OPERATION", "smalltalkMethodPositionResource"])
+    );
+    assert_eq!(
+        report["missingEnvironmentConstants"],
+        serde_json::json!([]),
+        "the pinned revision must expose the method-read operation constant through the public alias"
+    );
+    assert_eq!(
+        report["unrequiredMethodPositionAuthority"],
+        serde_json::json!([]),
+        "the requirement lists must NAME each consumed authority value, not merely be long enough"
+    );
+    assert_eq!(
+        report["methodPositionAuthorityAreOwnerValues"], true,
+        "the alias must expose the exact values src/language/smalltalk-method-position-resource.js defines"
+    );
+    assert_eq!(
+        report["methodPositionOperation"], "smalltalk-method/read",
+        "the operation a composition writes into a grant is read from the artifact, never assumed"
+    );
+    assert_eq!(
+        report["methodPositionResourceIsPureVocabulary"], true,
+        "a method-position resource must be nameable from the image id, class ref and selector \
+         alone -- no graph state, no Block id -- which is the whole property that makes E3's \
+         post-write reread obtainable"
+    );
     assert_eq!(
         report["uncallableNativeReplacementSeams"],
         serde_json::json!([]),
@@ -361,9 +461,10 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
     assert_eq!(
         report["exposedPrivateOwners"],
         serde_json::json!([]),
-        "the portable surface must not offer the token mint/parser or the reconciliation owners: \
-         E3's adapter is forbidden to use them, and an artifact that cannot supply them enforces \
-         that structurally instead of by review"
+        "the portable surface must not offer the token mint/parser or the reconciliation owners. \
+         This is a REGRESSION DETECTOR on the public barrel, not enforcement -- the block comment \
+         at the list says why, and a deep import still reaches every one of them. Enforcement over \
+         the Environment's OWN source belongs with the E3 slice that adds the adapter (Bead 04f)"
     );
 
     actor.shutdown().await;
