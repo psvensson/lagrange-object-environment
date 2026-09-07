@@ -146,13 +146,63 @@ Success: Project work manipulates one durable image-level model rather than an I
 
 The first pressure comes from real Cuis classes, methods and objects that Images has successfully native-imported. Those are ordinary Images-native identities. Cuis provenance may contribute presentation choices, Commands and presentation-specific semantic policy; it must never select another navigator, dispatcher, authority path, renderer route, mutation mechanism or object store.
 
-- [ ] present one Cuis-origin, Images-native class through ordinary discovery: name, superclass, protocol/category where exposed, methods, and provenance as secondary information
-- [ ] browse that native class to native methods and present selector, source and protocol while preserving native method identity
-- [ ] introduce the smallest useful `PersonalityExtensionRegistry` contract only when the first real Cuis-native consumer requires personality-contributed Presentation providers or Commands
-- [ ] route the first useful edit/evaluation operation through SemanticUi intent -> ordinary Command -> public Images semantic operation -> fresh authoritative reread
-- [ ] add senders/implementors, syntax-aware editing, history or debugging only when the real Cuis workflow supplies concrete pressure
-- [ ] prove one independently authored Cuis application can be browsed, understood and edited here while its authoritative native state survives restart without a live Cuis heap
-- [ ] prove a later language personality uses the same environment substrate after the Cuis path has established the reusable native-import boundary
+DONE (E1-E3, Beads eij.1/eij.2/eij.3). The three checklist items below were written as one
+"browse and edit Cuis code" ambition; E1-E3 established the semantic path, and what they did NOT
+establish is as important as what they did, so each is split into the proven part and the part that
+awaits a LOWER contract.
+
+- [x] present one Cuis-origin, Images-native class through ordinary discovery: name, superclass,
+      side, declared layout, its own selectors, and the class relations as locators (E1). ORIGIN IS
+      NOT IDENTITY: a hand-authored native class and a Cuis-imported one take the identical route,
+      and nothing in the Environment can branch on origin
+- [ ] present `protocol`/`category` and durable Cuis `provenance` on a class. AWAITING A LOWER
+      CONTRACT, not deferred by choice: Images owns no durable Cuis association today and truthfully
+      answers `provenance: null`, so the projector OMITS the row rather than rendering an empty one
+- [x] browse that native class to native methods, preserving native method identity, as a SECOND
+      independently authorized read (E2). Since Images ccd8321 that read is `object/read` on the
+      declaring class plus `smalltalk-method/read` on the logical `{image, class, selector}`
+      position, both before resolution
+- [ ] present method SOURCE and protocol. AWAITING THE SAME LOWER CONTRACT: the class builder
+      installs a method's semantic program and retains no text it compiled from, so
+      `descriptor.source` is truthfully `null` before AND after a replacement. THIS IS NOT A SOURCE
+      BROWSER, and E3 did not make it one
+- [x] route the first useful EDIT operation through SemanticUi intent -> ordinary Command -> public
+      Images semantic operation -> fresh authoritative reread (E3): replace ONE existing native
+      method from EXPLICITLY SUPPLIED new source, with a transient position token, a genuine stale
+      conflict outcome, and displayed truth that always comes from a fresh authorized read rather
+      than from the write's receipt
+- [ ] route an EVALUATION operation. Not attempted: E3 was scoped to replacement precisely because
+      evaluation is a different owner question, and nothing has supplied pressure for it
+- [ ] introduce the smallest useful `PersonalityExtensionRegistry` contract only when the first real
+      Cuis-native consumer requires personality-contributed Presentation providers or Commands. Still
+      not required: E1-E3 needed no personality-selected provider, dispatcher or route
+- [ ] add senders/implementors, syntax-aware editing, history or debugging only when the real Cuis
+      workflow supplies concrete pressure. E1-E3 supplied none, and the remaining vertical (E4-E6) is
+      deliberately anchored to a real imported APPLICATION rather than to more browser features
+- [ ] prove one independently authored Cuis application can be browsed, understood and edited here
+      while its authoritative native state survives restart without a live Cuis heap (E4-E6)
+- [ ] prove a later language personality uses the same environment substrate after the Cuis path has
+      established the reusable native-import boundary
+
+THE REMAINING VERTICAL IS ANCHORED TO A REAL APPLICATION, NOT TO MORE BROWSER FEATURES. E1-E3 proved
+the semantic path against class and method shapes this repository could stage itself; advancing the
+same way would prove the Environment against a GUESS about what a real application needs. The six
+steps therefore read:
+
+    E1  a native class is inhabitable                        (done)
+    E2  a native method is inhabitable                       (done)
+    E3  a native method is safely mutable                    (done)
+    E4  a real imported application GRAPH is inhabitable
+    E5  real application STATE is usefully mutable
+    E6  the application survives RESTART and is re-inhabitable
+
+and the sequencing is deliberately SERIAL rather than both repositories advancing in parallel on
+assumptions: Images M4 supplies real compatibility pressure from the pinned YAXO package, which
+builds a graph of its own application classes and objects, until there are durable application
+roots and domain state worth inhabiting -- and only THEN does E4 begin, against that graph. The
+authority problem that paused M4 is discharged (Images #231, admitted at pin `ccd8321`), so the
+pressure now comes from the application rather than from this repository. Doing less here is the
+faster route to the product.
 
 Success: an existing Cuis application becomes ordinary native classes, methods and durable objects operated through the generic environment, with OpenSmalltalkVM retained only as explicit importer, provenance, oracle or deliberately bounded foreign-service machinery. Adding another language extends the environment rather than adding another IDE architecture.
 
