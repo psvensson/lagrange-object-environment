@@ -32,10 +32,13 @@ import {UNAVAILABLE_REF_KIND, UNAUTHORIZED_REF_KIND} from './object-navigator.js
  * that `foo` exists; it must not reveal the Block that implements it. Browsing
  * a method is therefore a SECOND, separately authorized read through its own
  * seam (`browseMethod`), never a richer reading of the class description: the
- * Images method seam re-resolves the selector against the class's CURRENT
- * dictionary and authorizes the resolved Block before disclosing its locator.
- * The Environment never derives, predicts or reconstructs that Block ref — it
- * composes no object id at all.
+ * Images method seam demands `smalltalk-method/read` on the LOGICAL
+ * {imageId, classRef, selector} position -- before it resolves anything (Images
+ * #231) -- and re-resolves the selector against the class's CURRENT dictionary.
+ * That grant is NOT `object/read` on the Block it resolves to; direct generic
+ * inspection of that Block still needs the Block's own independent grant. The
+ * Environment never derives, predicts or reconstructs that Block ref — it
+ * composes no object id at all, and does not need one to authorize a read.
  *
  * NOT OWNED HERE: discovery (`PresentationRegistry`), rendering, and the
  * renderer activate-item routing itself (`EnvironmentShell`, ownership row 64 —
@@ -255,7 +258,8 @@ function createNativeMethodPresentationProvider() {
         subject,
         kind: NATIVE_METHOD_PRESENTATION_KIND,
         // Images' record by IDENTITY. `method` is the Block ref Images bound —
-        // the method's identity, disclosed only after its own authorization.
+        // the method's identity, disclosed only after the class read AND the
+        // logical-position read are both authorized (Images #231).
         context: {smalltalkMethod},
         state: {},
       });

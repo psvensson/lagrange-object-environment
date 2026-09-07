@@ -263,9 +263,15 @@ function createImageClientAdapter(client) {
     // compiler owner's work. It is NOT required at construction, and the reason is
     // a verified fact about the lower owner rather than a preference: Images'
     // PORTABLE runtime root exports `authorizedReplaceSmalltalkMethod` but
-    // `createPortableRuntime` returns no `compilation` service (checked at the
-    // pinned revision 15fcb811), so demanding one here would make this adapter --
-    // and therefore the whole Environment -- unconstructible on the native host.
+    // `createPortableRuntime` returns no `compilation` service, so demanding one
+    // here would make this adapter -- and therefore the whole Environment --
+    // unconstructible on the native host. RE-VERIFIED AT THE CURRENT PIN,
+    // ccd8321, and still true there: `createRuntimeCore` returns exactly
+    // {backend, images, languages, dispatchers, invocations, codeExecutors,
+    // authority, executor} and the word `compilation` does not occur anywhere in
+    // `src/portable-runtime.js`, while `src/runtime.js` -- the root the JS lane
+    // consumes -- constructs and returns one. Images #231 repaired method-read
+    // authority and deliberately did not touch this.
     // The narrow consequence is recorded rather than papered over: a composition
     // without it constructs and browses, and its FIRST replacement fails loudly
     // below, naming the missing service.
@@ -415,12 +421,20 @@ function createImageClientAdapter(client) {
    * because the class builder installs a method's semantic program and keeps no
    * text it compiled from.
    *
-   * TWO INDEPENDENT AUTHORITY CHECKS, both Images'. The class read authorizes
-   * resolving the selector against the class's OWN method dictionary; the Block
-   * is then authorized SEPARATELY before its locator is disclosed. Class-read
-   * authority may show that `foo` exists and must never yield the Block behind
-   * it, so this seam exists precisely to make that second check happen — it is
-   * not a convenience wrapper over the class read.
+   * TWO INDEPENDENT AUTHORITY CHECKS, both Images', and BOTH BEFORE the selector
+   * or the current binding is resolved (Images #231, pin ccd8321): `object/read`
+   * on the declaring Class/Metaclass, and `smalltalk-method/read` on the LOGICAL
+   * `{imageId, classRef, selector}` position. Class-read authority may show that
+   * `foo` exists and must never yield the method behind it, so this seam exists
+   * precisely to make that second check happen — it is not a convenience wrapper
+   * over the class read.
+   *
+   * THE SECOND CHECK IS ON THE POSITION, NOT ON THE BLOCK. That is what lets a
+   * caller hold authority for a method it has not read yet, and keep it while
+   * immutable revisions replace one another underneath — the property E3's
+   * post-write reread depends on. It is NOT `object/read` on the Block the read
+   * resolves to: direct generic inspection of that Block still needs the Block's
+   * own independent grant.
    *
    * The caller does not need the Block ref in advance and MUST NOT compute one:
    * Images owns the method's identity and reveals it only after both checks
@@ -555,17 +569,23 @@ function createImageClientAdapter(client) {
    * text crosses this boundary.
    *
    * The outcomes are NOT symmetric with the class seam's, and that asymmetry is
-   * licensed rather than accidental:
-   *   without class authority  BOTH an existing and a missing selector are
-   *                            AuthorityError -> 'unauthorized'. Images checks
-   *                            the class BEFORE resolving anything, so the seam
-   *                            is no existence oracle.
-   *   with class authority     a selector the class does not implement is a
-   *                            plain TypeError -> 'unavailable', while a Block
-   *                            the caller may not read is AuthorityError ->
-   *                            'unauthorized'. That distinction discloses
-   *                            nothing new: class read already listed every
-   *                            selector the class implements.
+   * licensed rather than accidental. The boundary MOVED with Images #231, because
+   * both checks now precede resolution:
+   *   missing EITHER grant     BOTH an existing and a missing selector are
+   *                            AuthorityError -> 'unauthorized'. Nothing is
+   *                            resolved before authorization, so the seam is no
+   *                            existence oracle -- and class authority ALONE no
+   *                            longer distinguishes them either.
+   *   with class + position    a selector the class does not implement is a
+   *                            plain TypeError -> 'unavailable'. That distinction
+   *                            discloses nothing new: class read already listed
+   *                            every selector the class implements, and the
+   *                            position grant is minted from public vocabulary
+   *                            without reading anything.
+   * The pre-#231 branch this comment used to carry -- 'a Block the caller may not
+   * read is unauthorized' -- is GONE from this seam. A Block one may not read is
+   * now only a fact about DIRECT generic Block access, which this adapter does
+   * not offer at all.
    * Bead azj records that 'unavailable' now also covers "this class does not
    * implement that selector" (a stale descriptor), which is operationally
    * different from "the read failed" and has no diagnostic channel yet.
