@@ -257,6 +257,35 @@ function createImageClientAdapter(client) {
     invocations,
     executor,
     authority: authorityService,
+    // OPTIONAL, and the only optional service here (E3, Bead eij.3). Images'
+    // authorized method REPLACEMENT seam takes a compilation service alongside
+    // `images`, because lowering supplied source to a native program is the
+    // compiler owner's work. It is NOT required at construction, and the reason is
+    // a verified fact about the lower owner rather than a preference: Images'
+    // PORTABLE runtime root exports `authorizedReplaceSmalltalkMethod` but
+    // `createPortableRuntime` returns no `compilation` service, so demanding one
+    // here would make this adapter -- and therefore the whole Environment --
+    // unconstructible on the native host. RE-VERIFIED AT THE CURRENT PIN,
+    // ccd8321, and still true there: `createRuntimeCore` returns exactly
+    // {backend, images, languages, dispatchers, invocations, codeExecutors,
+    // authority, executor} and the word `compilation` does not occur anywhere in
+    // `src/portable-runtime.js`, while `src/runtime.js` -- the root the JS lane
+    // consumes -- constructs and returns one. Images #231 repaired method-read
+    // authority and deliberately did not touch this.
+    // The narrow consequence is recorded rather than papered over: a composition
+    // without it constructs and browses, and its FIRST replacement fails loudly
+    // below, naming the missing service.
+    //
+    // STATED PRECISELY, because the comfortable version is not true: this is
+    // explicit replacement UNAVAILABILITY on that host, NOT logical
+    // unreachability. Bead aov says the portable TEST HARNESS cannot install a
+    // method to replace -- it says nothing about a real persistent image, which
+    // may already contain plenty of methods a user would reach exactly this way.
+    // So a portable host is a host where native method browsing works and native
+    // method replacement is unavailable, and a consumer is entitled to be told
+    // that rather than to discover it at the first Replace. The asymmetry is
+    // Images pressure, recorded on Bead dcx rather than worked around here.
+    compilation = null,
     // Helpers consumed from the public exports (createRuntime's module barrels).
     defineClass,
     installCallableInterfaceV2,
@@ -277,13 +306,15 @@ function createImageClientAdapter(client) {
     authorizedRenameProject,
     authorizedDescribeSmalltalkClass,
     authorizedDescribeSmalltalkMethod,
+    authorizedReadSmalltalkMethodForUpdate,
+    authorizedReplaceSmalltalkMethod,
   } = client;
 
   if (typeof authorityService.require !== 'function') {
     throw new TypeError('lagrange-images client authority service is missing required operation: require');
   }
 
-  for (const [name, fn] of Object.entries({defineClass, installCallableInterfaceV2, installImageCreationBinding, installImageMutationBinding, installImageObjectReadBinding, installImageObservationBinding, findSmalltalkKernel, objectRef, objectResource, parseObjectResource, objectVersionToken, textValue, packCompositeValue, unpackCompositeValue, normalizeTypeDeclarations, authorizedReadProject, authorizedRenameProject, authorizedDescribeSmalltalkClass, authorizedDescribeSmalltalkMethod})) {
+  for (const [name, fn] of Object.entries({defineClass, installCallableInterfaceV2, installImageCreationBinding, installImageMutationBinding, installImageObjectReadBinding, installImageObservationBinding, findSmalltalkKernel, objectRef, objectResource, parseObjectResource, objectVersionToken, textValue, packCompositeValue, unpackCompositeValue, normalizeTypeDeclarations, authorizedReadProject, authorizedRenameProject, authorizedDescribeSmalltalkClass, authorizedDescribeSmalltalkMethod, authorizedReadSmalltalkMethodForUpdate, authorizedReplaceSmalltalkMethod})) {
     if (typeof fn !== 'function') {
       throw new TypeError(`lagrange-images client is missing required helper: ${name}`);
     }
@@ -390,12 +421,20 @@ function createImageClientAdapter(client) {
    * because the class builder installs a method's semantic program and keeps no
    * text it compiled from.
    *
-   * TWO INDEPENDENT AUTHORITY CHECKS, both Images'. The class read authorizes
-   * resolving the selector against the class's OWN method dictionary; the Block
-   * is then authorized SEPARATELY before its locator is disclosed. Class-read
-   * authority may show that `foo` exists and must never yield the Block behind
-   * it, so this seam exists precisely to make that second check happen — it is
-   * not a convenience wrapper over the class read.
+   * TWO INDEPENDENT AUTHORITY CHECKS, both Images', and BOTH BEFORE the selector
+   * or the current binding is resolved (Images #231, pin ccd8321): `object/read`
+   * on the declaring Class/Metaclass, and `smalltalk-method/read` on the LOGICAL
+   * `{imageId, classRef, selector}` position. Class-read authority may show that
+   * `foo` exists and must never yield the method behind it, so this seam exists
+   * precisely to make that second check happen — it is not a convenience wrapper
+   * over the class read.
+   *
+   * THE SECOND CHECK IS ON THE POSITION, NOT ON THE BLOCK. That is what lets a
+   * caller hold authority for a method it has not read yet, and keep it while
+   * immutable revisions replace one another underneath — the property E3's
+   * post-write reread depends on. It is NOT `object/read` on the Block the read
+   * resolves to: direct generic inspection of that Block still needs the Block's
+   * own independent grant.
    *
    * The caller does not need the Block ref in advance and MUST NOT compute one:
    * Images owns the method's identity and reveals it only after both checks
@@ -409,6 +448,91 @@ function createImageClientAdapter(client) {
       imageId,
       classRef,
       selector,
+      require: (demand) => authorityService.require(authority, demand),
+    });
+  }
+
+  /**
+   * Read ONE native Smalltalk method FOR UPDATE through Images' writer-facing
+   * seam (Images #218 `authorizedReadSmalltalkMethodForUpdate`, Bead eij.3).
+   *
+   * Returns Images' result UNCHANGED: `{descriptor, versionToken}` — the SAME
+   * canonical `smalltalk-method-description/v1` record the describe seam answers,
+   * plus an OPAQUE token for the method position it just resolved. Both halves
+   * come from ONE resolution inside Images, so the descriptor and the token can
+   * never describe different revisions; that is the whole reason this seam exists
+   * rather than a token minted beside a second read.
+   *
+   * IT DEMANDS EXACTLY WHAT THE DESCRIBE SEAM DEMANDS and nothing more: reading
+   * in order to write is still only reading. It grants no write authority and
+   * asserts none — the replacement below authorizes its own write when it is
+   * called. Holding a token is an ASSUMPTION ABOUT STATE, never a capability.
+   *
+   * The adapter never inspects, decodes, defaults, compares, mints or persists
+   * the token. It is opaque here in the strict sense that this module has no code
+   * that could look inside it (Images publishes neither the mint nor the parser
+   * on its public roots), and the Environment's own source is fenced against
+   * reaching the private owner that does — see the E3 fence in
+   * `test/native-smalltalk-replacement-fence.test.js`.
+   */
+  async function readSmalltalkMethodForUpdate({imageId, classRef, selector, authority = null} = {}) {
+    return authorizedReadSmalltalkMethodForUpdate({
+      images,
+      imageId,
+      classRef,
+      selector,
+      require: (demand) => authorityService.require(authority, demand),
+    });
+  }
+
+  /**
+   * Replace ONE existing native Smalltalk method from EXPLICITLY SUPPLIED source
+   * (Images #218 `authorizedReplaceSmalltalkMethod`, Bead eij.3).
+   *
+   * The ONLY translation here is the argument name — the Environment's
+   * `versionToken` (the token paired with the method read the caller was SHOWN)
+   * becomes Images' `expectedVersionToken` — exactly as `renameProject` does for
+   * a Project. The token is forwarded VERBATIM: no default, no validation, no
+   * re-read. A hidden fresh read substituted for the caller's assumption would
+   * make a lost update unobservable, which is the one thing this operation exists
+   * to prove it cannot do.
+   *
+   * Returns Images' receipt unchanged: `{replaced: true}`. It carries no new Block
+   * ref, no descriptor, no replacement token and no source, ON PURPOSE — the
+   * displayed truth comes from a fresh authorized reread, never from a receipt.
+   *
+   * NO CONFLICT TRANSLATION HAPPENS HERE, the same rule `renameProject` follows:
+   * Images' own `SmalltalkStaleMethodPositionError` surfaces, and
+   * `CommandDispatcher` — the Environment's Command error owner — maps it to
+   * `CommandConflictError`. `SmalltalkMethodReplacementContentionError` is
+   * deliberately NOT a conflict there: it is transient and explicitly says the
+   * observed position did NOT move, so reporting it as a lost update would be a
+   * lie to the user.
+   *
+   * WHAT THIS ADAPTER NEVER DOES, and what the E3 fence proves it cannot start
+   * doing quietly: mint or parse a position token, call Images' reconciliation or
+   * class-building helpers, choose an execution lane, compile anything, or write
+   * a method dictionary. Every one of those is a lower owner's decision reached
+   * through this ONE authorized seam.
+   */
+  async function replaceSmalltalkMethod({imageId, classRef, selector, source, versionToken, authority = null} = {}) {
+    if (!compilation) {
+      // Loud, and specific about WHOSE service is missing: Images would answer
+      // its own `requires a compilation service`, which reads as an Images defect
+      // rather than as "this composition was built without one".
+      throw new TypeError(
+        'replaceSmalltalkMethod requires the compilation service: this ImageClientAdapter was constructed '
+        + 'without one, so it can browse native methods but cannot replace one',
+      );
+    }
+    return authorizedReplaceSmalltalkMethod({
+      images,
+      compilation,
+      imageId,
+      classRef,
+      selector,
+      source,
+      expectedVersionToken: versionToken,
       require: (demand) => authorityService.require(authority, demand),
     });
   }
@@ -445,17 +569,23 @@ function createImageClientAdapter(client) {
    * text crosses this boundary.
    *
    * The outcomes are NOT symmetric with the class seam's, and that asymmetry is
-   * licensed rather than accidental:
-   *   without class authority  BOTH an existing and a missing selector are
-   *                            AuthorityError -> 'unauthorized'. Images checks
-   *                            the class BEFORE resolving anything, so the seam
-   *                            is no existence oracle.
-   *   with class authority     a selector the class does not implement is a
-   *                            plain TypeError -> 'unavailable', while a Block
-   *                            the caller may not read is AuthorityError ->
-   *                            'unauthorized'. That distinction discloses
-   *                            nothing new: class read already listed every
-   *                            selector the class implements.
+   * licensed rather than accidental. The boundary MOVED with Images #231, because
+   * both checks now precede resolution:
+   *   missing EITHER grant     BOTH an existing and a missing selector are
+   *                            AuthorityError -> 'unauthorized'. Nothing is
+   *                            resolved before authorization, so the seam is no
+   *                            existence oracle -- and class authority ALONE no
+   *                            longer distinguishes them either.
+   *   with class + position    a selector the class does not implement is a
+   *                            plain TypeError -> 'unavailable'. That distinction
+   *                            discloses nothing new: class read already listed
+   *                            every selector the class implements, and the
+   *                            position grant is minted from public vocabulary
+   *                            without reading anything.
+   * The pre-#231 branch this comment used to carry -- 'a Block the caller may not
+   * read is unauthorized' -- is GONE from this seam. A Block one may not read is
+   * now only a fact about DIRECT generic Block access, which this adapter does
+   * not offer at all.
    * Bead azj records that 'unavailable' now also covers "this class does not
    * implement that selector" (a stale descriptor), which is operationally
    * different from "the read failed" and has no diagnostic channel yet.
@@ -1116,6 +1246,13 @@ function createImageClientAdapter(client) {
     classifySmalltalkClassReadError,
     describeSmalltalkMethod,
     classifySmalltalkMethodReadError,
+    // E3's writer-facing PAIR (Bead eij.3). `readSmalltalkMethodForUpdate` is the
+    // read a caller that intends to replace performs -- it answers the canonical
+    // descriptor AND the position token from one resolution; `replaceSmalltalkMethod`
+    // is the only write in this adapter's native lane. There is still no generic
+    // Block read, method dictionary, compiler, class-building or import API here.
+    readSmalltalkMethodForUpdate,
+    replaceSmalltalkMethod,
     readObject,
     authorizedReadObject,
     resolveAssetBytes,

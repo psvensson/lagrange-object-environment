@@ -89,15 +89,21 @@ function methodDescription(overrides = {}) {
   });
 }
 
-function methodFakeAdapter({describeMethod, classifyMethod} = {}) {
+// E3 (Bead eij.3): the browser's METHOD read is the WRITER-FACING one, which
+// answers {descriptor, versionToken} from one Images resolution. `describeMethod`
+// still supplies (or throws) the descriptor, so every E2 proof below reads
+// exactly as it did; the token rides beside it.
+const METHOD_TOKEN = 'method-position-token-v0:opaque-to-the-environment';
+
+function methodFakeAdapter({describeMethod, classifyMethod, versionToken = METHOD_TOKEN} = {}) {
   const calls = [];
   return {
     calls,
     describeSmalltalkClass: () => description(),
     classifySmalltalkClassReadError: (error) => (error?.name === 'AuthorityError' ? 'unauthorized' : 'unavailable'),
-    describeSmalltalkMethod(args) {
+    readSmalltalkMethodForUpdate(args) {
       calls.push(args);
-      return describeMethod ? describeMethod(args) : methodDescription();
+      return {descriptor: describeMethod ? describeMethod(args) : methodDescription(), versionToken};
     },
     classifySmalltalkMethodReadError: classifyMethod
       ?? ((error) => (error?.name === 'AuthorityError' ? 'unauthorized' : 'unavailable')),
@@ -115,7 +121,7 @@ function fakeAdapter({describe, classify} = {}) {
     },
     classifySmalltalkClassReadError: classify
       ?? ((error) => (error?.name === 'AuthorityError' ? 'unauthorized' : 'unavailable')),
-    describeSmalltalkMethod() { throw new TypeError('this fake adapter browses classes only'); },
+    readSmalltalkMethodForUpdate() { throw new TypeError('this fake adapter browses classes only'); },
     classifySmalltalkMethodReadError: (error) => (error?.name === 'AuthorityError' ? 'unauthorized' : 'unavailable'),
   };
 }
@@ -339,11 +345,11 @@ test('the browser refuses an adapter without the interaction owner\'s error mapp
   const compositor = compositorFor();
   assert.throws(
     () => createNativeSmalltalkBrowser({adapter: {describeSmalltalkClass: () => {}}, presentationRegistry: registry, compositor}),
-    /describeSmalltalkMethod/,
+    /readSmalltalkMethodForUpdate/,
   );
   assert.throws(
     () => createNativeSmalltalkBrowser({
-      adapter: {describeSmalltalkClass: () => {}, describeSmalltalkMethod: () => {}},
+      adapter: {describeSmalltalkClass: () => {}, readSmalltalkMethodForUpdate: () => {}},
       presentationRegistry: registry,
       compositor,
     }),
@@ -351,7 +357,7 @@ test('the browser refuses an adapter without the interaction owner\'s error mapp
   );
   assert.throws(
     () => createNativeSmalltalkBrowser({
-      adapter: {describeSmalltalkClass: () => {}, describeSmalltalkMethod: () => {}, classifySmalltalkMethodReadError: () => {}},
+      adapter: {describeSmalltalkClass: () => {}, readSmalltalkMethodForUpdate: () => {}, classifySmalltalkMethodReadError: () => {}},
       presentationRegistry: registry,
       compositor,
     }),

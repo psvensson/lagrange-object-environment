@@ -36,6 +36,8 @@ import {
   authorizedRenameProject,
   authorizedDescribeSmalltalkClass,
   authorizedDescribeSmalltalkMethod,
+  authorizedReadSmalltalkMethodForUpdate,
+  authorizedReplaceSmalltalkMethod,
   createProject,
   addProjectMember,
   projectObjectId,
@@ -58,6 +60,7 @@ async function setup({imageId, ids}) {
     invocations: runtime.invocations,
     executor: runtime.executor,
     authority: runtime.authority,
+    compilation: runtime.compilation,
     defineClass,
     installCallableInterfaceV2,
     installImageCreationBinding,
@@ -77,6 +80,8 @@ async function setup({imageId, ids}) {
     authorizedRenameProject,
     authorizedDescribeSmalltalkClass,
     authorizedDescribeSmalltalkMethod,
+    authorizedReadSmalltalkMethodForUpdate,
+    authorizedReplaceSmalltalkMethod,
     // Part 2's ObjectNavigator consumes this same public binding. Passing it
     // here keeps the composition surface identical without claiming Navigator
     // behavior in this headless adapter-only slice.

@@ -200,6 +200,38 @@ test('a raw VersionConflictError classifies as conflict', async () => {
   );
 });
 
+test('a stale native METHOD POSITION is a conflict; a transient CONTENTION is deliberately NOT', async () => {
+  // Bead eij.3. A conflict means LOST UPDATE: the caller's observation was
+  // overtaken and someone else's write is current, which is exactly what Images'
+  // SmalltalkStaleMethodPositionError says.
+  const stale = Object.assign(new Error('the observed method position is no longer current'), {
+    name: 'SmalltalkStaleMethodPositionError',
+  });
+  await assert.rejects(
+    createCommandDispatcher({image: async () => { throw stale; }}).dispatch({command: rename, subject, authority: {}}),
+    (classified) => classified instanceof CommandConflictError,
+  );
+
+  // Its neighbour must NOT follow it in. Images is explicit that
+  // SmalltalkMethodReplacementContentionError is TRANSIENT and NOT staleness --
+  // the observed position did not move and was not advanced -- so classifying it
+  // as a conflict would tell the user someone else changed their work when nobody
+  // did, and would turn a retryable outcome into a false lost update. It stays a
+  // generic execution failure until a consumer exists that would act on a retry
+  // outcome; inventing that outcome now would be an unfalsifiable taxonomy.
+  //
+  // This is the falsifier for that decision: adding the name to isConflictError
+  // reddens exactly this assertion and nothing else, which is why it is stated
+  // here rather than left to prose.
+  const contention = Object.assign(new Error('could not be advanced right now'), {
+    name: 'SmalltalkMethodReplacementContentionError',
+  });
+  await assert.rejects(
+    createCommandDispatcher({image: async () => { throw contention; }}).dispatch({command: rename, subject, authority: {}}),
+    (classified) => classified instanceof CommandExecutionError && !(classified instanceof CommandConflictError),
+  );
+});
+
 test('classification is idempotent for an already-typed error', async () => {
   // A seam that re-throws a dispatcher-typed error (e.g. a nested dispatcher)
   // classifies to the same type rather than collapsing to generic failure.

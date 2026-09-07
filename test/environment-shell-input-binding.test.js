@@ -11,10 +11,13 @@ import {createEnvironmentShell} from '../src/environment-shell.js';
 // and collapsing them to share code would erase the distinction SemanticUi/v2
 // exists to draw. The mechanics are near-identical; the semantics are not.
 //
-// NO VERSION TOKEN appears anywhere here. Optimistic concurrency belongs to a
-// Command that consumes a token, and none exists yet -- an unpaired token
-// supplier would have nothing to conflict against and could not be falsified.
-// E3 adds it together with its Command.
+// THE VERSION TOKEN ARRIVED WITH ITS COMMAND (E3, Bead eij.3). ngh left `tokenFor`
+// out because optimistic concurrency belongs to a Command that consumes a token,
+// and an unpaired supplier with nothing to conflict against could not be
+// falsified. One exists now, so the OPTIONAL supplier is part of this table --
+// with the edit table's contract, and with the shell learning nothing about what
+// a token MEANS. A binding that declares none still dispatches, with an explicit
+// null rather than an absent key.
 //
 // The CommandRouter is a FAKE that always routes, so none of these proofs
 // depends on the real router's command-selection policy (see Bead 4c4).
@@ -74,7 +77,12 @@ test('WITH an input binding: resolved context arrives under `input`, never `fiel
   const ctx = h.contexts[0];
   assert.deepEqual(ctx.input, {role: 'replacement-source'});
   assert.ok(!Object.hasOwn(ctx, 'field'), 'an input context leaked under `field`');
-  assert.ok(!Object.hasOwn(ctx, 'versionToken'), 'this prerequisite must carry NO version token');
+  // E3 (Bead eij.3) replaced ngh's "carries NO version token" assertion: the
+  // token arrived WITH the Command that consumes it. A binding that declares no
+  // tokenFor still dispatches -- with an explicit null, never an absent key, so a
+  // Command can tell "no supplier" from "a supplier that answered nothing".
+  assert.ok(Object.hasOwn(ctx, 'versionToken'), 'the input context must carry the token slot');
+  assert.equal(ctx.versionToken, null, 'a binding with no tokenFor supplies null');
   assert.equal(ctx.text, 'line one\nline two', 'the raw multiline text must survive unparsed');
   assert.equal(ctx.commandId, 'replace-demo');
   assert.equal(seen.descriptor, DESCRIPTOR, 'the resolver must see the EXACT live descriptor');
@@ -206,6 +214,63 @@ test('a bound Command that CRASHES deciding applicability reaches onInputError a
   assert.equal(events.length, 1);
   assert.equal(events[0][0], 'onInputError');
   assert.equal(events[0][1], boom, 'the consumer receives the Command\'s OWN error object');
+});
+
+test('a tokenFor is called with the SAME live descriptor, and its result reaches the Command untouched', async () => {
+  const seen = [];
+  const h = harness({inputBindings: [{
+    viewId: VIEW, commandId: 'replace-demo', onInputError: () => {},
+    resolveInput: () => ({role: 'replacement-source'}),
+    tokenFor: (descriptor) => { seen.push(descriptor); return 'opaque-token'; },
+  }]});
+  h.emit({kind: 'submit-input', key: 0, text: 'x'});
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(seen, [DESCRIPTOR], 'the token comes from the descriptor the binding was selected by');
+  assert.equal(seen[0], DESCRIPTOR, 'by IDENTITY: a consumer pairing on identity must be handed the paired object');
+  assert.equal(h.contexts[0].versionToken, 'opaque-token');
+});
+
+test('a THROWING tokenFor is reported and dispatches NOTHING', async () => {
+  // The alternative -- swallowing it into a token-free dispatch -- would replace
+  // whatever is current instead of what the user was shown. A supplier that
+  // cannot answer must stop the interaction, not weaken it.
+  const errors = [];
+  const boom = new Error('the pairing is gone');
+  const h = harness({inputBindings: [{
+    viewId: VIEW, commandId: 'replace-demo',
+    resolveInput: () => ({role: 'replacement-source'}),
+    tokenFor: () => { throw boom; },
+    onInputError: (e) => errors.push(e),
+  }]});
+  h.emit({kind: 'submit-input', key: 0, text: 'x'});
+  await new Promise((r) => setImmediate(r));
+  assert.equal(h.calls.consumeIntent, 0, 'a token-free dispatch must never happen');
+  assert.deepEqual(errors, [boom], 'and the consumer is told, by identity');
+});
+
+test('a tokenFor answering NULL still dispatches: the Command decides what a missing token means', async () => {
+  // The shell has no opinion. A Command that requires a token refuses loudly
+  // (that refusal is its own, and proven with it); a Command that does not is
+  // unaffected. Deciding here would put a token policy in the owner that is
+  // meant to learn nothing about tokens.
+  const h = harness({inputBindings: [{
+    viewId: VIEW, commandId: 'replace-demo', onInputError: () => {},
+    resolveInput: () => ({role: 'replacement-source'}),
+    tokenFor: () => null,
+  }]});
+  h.emit({kind: 'submit-input', key: 0, text: 'x'});
+  await new Promise((r) => setImmediate(r));
+  assert.equal(h.calls.consumeIntent, 1);
+  assert.equal(h.contexts[0].versionToken, null);
+});
+
+test('a non-function tokenFor is REJECTED at bind time', () => {
+  assert.throws(
+    () => harness({inputBindings: [{
+      viewId: VIEW, commandId: 'c', resolveInput: () => ({}), onInputError: () => {}, tokenFor: 'nope',
+    }]}),
+    /tokenFor must be a function/,
+  );
 });
 
 test('an input binding without an error channel is REJECTED at bind time', async () => {

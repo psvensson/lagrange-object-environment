@@ -259,6 +259,25 @@ test('CI: the browser realizer renders the checked-in SemanticUi fixtures (every
       };
       out.nativeMethodIntents = nativeMethod.takeIntents();
       nativeMethod.dispose();
+      // E3 (Bead eij.3): the SAME method as the browser DISPLAYS it -- identical
+      // Images description, plus the ONE transient replacement input. Same fields
+      // as above, same absent Source/Provenance rows, and now a multiline
+      // <textarea> with its own submit control. Proven from the SAME fixture bytes
+      // the GTK realizer consumes, which is what "both hosts take the same route"
+      // means for a production affordance.
+      const editableMethod = await window.__lagrangeProof.renderSemanticUiFixture('../fixtures/semantic-ui/native-method-editable.json', 'native-method');
+      out.editableMethod = {
+        heading: editableMethod.heading,
+        fields: editableMethod.fields,
+        fieldValues: editableMethod.fieldValues,
+        controls: editableMethod.controls,
+        textareas: editableMethod.inputTextareas,
+        submitLabels: editableMethod.inputSubmitLabels,
+        fieldInputs: editableMethod.fieldInputs,
+      };
+      editableMethod.submitInput(0, '[ ^42 ]');
+      out.editableMethodIntents = editableMethod.takeIntents();
+      editableMethod.dispose();
       // unavailable + unauthorized: heading + an explicit reason line, no refs.
       const un = await window.__lagrangeProof.renderSemanticUiFixture('../fixtures/semantic-ui/unavailable.json', 'unavailable-reference');
       out.unavailable = {heading: un.heading, reason: un.reason, buttons: un.buttons};
@@ -377,6 +396,22 @@ test('CI: the browser realizer renders the checked-in SemanticUi fixtures (every
     assert.equal(result.nativeMethod.fields.includes('Provenance'), false);
     assert.deepEqual(result.nativeMethod.controls, [], 'Slice A adds no operable control to a native method pane');
     assert.deepEqual(result.nativeMethodIntents, []);
+
+    // E3 (Bead eij.3): the SAME method with its production replacement input.
+    assert.equal(result.editableMethod.heading, 'Method: childFirst');
+    assert.deepEqual(result.editableMethod.fields, ['Selector', 'Side', 'Declaring class', 'Method'],
+      'the displayed method is unchanged: the affordance ADDS an input, it does not restate the record');
+    assert.equal(result.editableMethod.fields.includes('Source'), false,
+      'still a truthful absence: an input is not a field, and asserts no durable source exists');
+    assert.deepEqual(result.editableMethod.fieldInputs, [],
+      'the replacement input must NOT render as an editable field');
+    assert.deepEqual(result.editableMethod.textareas.map((t) => t.tag), ['textarea'],
+      'new source is multiline: a single-line input would make a real method body impossible');
+    assert.deepEqual(result.editableMethod.textareas.map((t) => t.value), [''],
+      'it starts EMPTY -- there is no current source to prefill, and inventing one would be a lie');
+    assert.deepEqual(result.editableMethod.submitLabels, ['Replace']);
+    assert.deepEqual(result.editableMethodIntents, [{kind: 'submit-input', key: 0, text: '[ ^42 ]'}],
+      'the host emits the realized key and the RAW text, and names no Command, subject or method');
 
     // unavailable + unauthorized (the previously-uncovered kinds)
     assert.equal(result.unavailable.heading, 'unavailable-reference');

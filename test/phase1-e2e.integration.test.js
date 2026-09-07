@@ -61,6 +61,7 @@ test('Phase 1 end-to-end: open -> present -> navigate -> command -> authorized m
     invocations: runtime.invocations,
     executor: runtime.executor,
     authority: runtime.authority,
+    compilation: runtime.compilation,
     defineClass: imagesApi.defineClass,
     installCallableInterfaceV2: imagesApi.installCallableInterfaceV2,
     installImageCreationBinding: imagesApi.installImageCreationBinding,
@@ -80,6 +81,8 @@ test('Phase 1 end-to-end: open -> present -> navigate -> command -> authorized m
     authorizedRenameProject: imagesApi.authorizedRenameProject,
     authorizedDescribeSmalltalkClass: imagesApi.authorizedDescribeSmalltalkClass,
     authorizedDescribeSmalltalkMethod: imagesApi.authorizedDescribeSmalltalkMethod,
+    authorizedReadSmalltalkMethodForUpdate: imagesApi.authorizedReadSmalltalkMethodForUpdate,
+    authorizedReplaceSmalltalkMethod: imagesApi.authorizedReplaceSmalltalkMethod,
   });
   await adapter.ensureSchema(IMAGE, IDS);
 

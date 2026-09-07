@@ -1,0 +1,42 @@
+{
+  "kind": "semantic-ui",
+  "version": 2,
+  "root": {
+    "kind": "group",
+    "title": "Method: childFirst",
+    "children": [
+      {
+        "kind": "text",
+        "role": "heading",
+        "text": "Method: childFirst"
+      },
+      {
+        "kind": "field",
+        "label": "Selector",
+        "text": "childFirst"
+      },
+      {
+        "kind": "field",
+        "label": "Side",
+        "text": "instance"
+      },
+      {
+        "kind": "field",
+        "label": "Declaring class",
+        "text": "-> smalltalk/class/BrowseChild"
+      },
+      {
+        "kind": "field",
+        "label": "Method",
+        "text": "-> smalltalk/class/BrowseChild/method/Y2hpbGRGaXJzdA"
+      },
+      {
+        "kind": "input",
+        "key": 0,
+        "label": "New source",
+        "valueKind": "text",
+        "submitLabel": "Replace"
+      }
+    ]
+  }
+}

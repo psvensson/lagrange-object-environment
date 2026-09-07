@@ -55,6 +55,7 @@ test('EnvironmentShell end-to-end: select ref -> inspector; external mutation ->
     invocations: runtime.invocations,
     executor: runtime.executor,
     authority: runtime.authority,
+    compilation: runtime.compilation,
     defineClass: imagesApi.defineClass,
     installCallableInterfaceV2: imagesApi.installCallableInterfaceV2,
     installImageCreationBinding: imagesApi.installImageCreationBinding,
@@ -74,6 +75,8 @@ test('EnvironmentShell end-to-end: select ref -> inspector; external mutation ->
     authorizedRenameProject: imagesApi.authorizedRenameProject,
     authorizedDescribeSmalltalkClass: imagesApi.authorizedDescribeSmalltalkClass,
     authorizedDescribeSmalltalkMethod: imagesApi.authorizedDescribeSmalltalkMethod,
+    authorizedReadSmalltalkMethodForUpdate: imagesApi.authorizedReadSmalltalkMethodForUpdate,
+    authorizedReplaceSmalltalkMethod: imagesApi.authorizedReplaceSmalltalkMethod,
   });
   await adapter.ensureSchema(IMAGE, IDS);
 
@@ -176,6 +179,7 @@ test('S4a: edit-field routes through CommandRouter to a REAL mutation; a stale t
     invocations: runtime.invocations,
     executor: runtime.executor,
     authority: runtime.authority,
+    compilation: runtime.compilation,
     defineClass: imagesApi.defineClass,
     installCallableInterfaceV2: imagesApi.installCallableInterfaceV2,
     installImageCreationBinding: imagesApi.installImageCreationBinding,
@@ -195,6 +199,8 @@ test('S4a: edit-field routes through CommandRouter to a REAL mutation; a stale t
     authorizedRenameProject: imagesApi.authorizedRenameProject,
     authorizedDescribeSmalltalkClass: imagesApi.authorizedDescribeSmalltalkClass,
     authorizedDescribeSmalltalkMethod: imagesApi.authorizedDescribeSmalltalkMethod,
+    authorizedReadSmalltalkMethodForUpdate: imagesApi.authorizedReadSmalltalkMethodForUpdate,
+    authorizedReplaceSmalltalkMethod: imagesApi.authorizedReplaceSmalltalkMethod,
   });
   await adapter.ensureSchema(IMAGE, IDS);
 
@@ -385,6 +391,7 @@ test('olm: edit-during-active-follow defers the self-observation reread; a secon
   const adapter = createImageClientAdapter({
     images: runtime.images, invocations: runtime.invocations, executor: runtime.executor,
     authority: runtime.authority,
+    compilation: runtime.compilation,
     defineClass: imagesApi.defineClass, installCallableInterfaceV2: imagesApi.installCallableInterfaceV2,
     installImageCreationBinding: imagesApi.installImageCreationBinding,
     installImageMutationBinding: imagesApi.installImageMutationBinding,
@@ -399,6 +406,8 @@ test('olm: edit-during-active-follow defers the self-observation reread; a secon
     authorizedRenameProject: imagesApi.authorizedRenameProject,
     authorizedDescribeSmalltalkClass: imagesApi.authorizedDescribeSmalltalkClass,
     authorizedDescribeSmalltalkMethod: imagesApi.authorizedDescribeSmalltalkMethod,
+    authorizedReadSmalltalkMethodForUpdate: imagesApi.authorizedReadSmalltalkMethodForUpdate,
+    authorizedReplaceSmalltalkMethod: imagesApi.authorizedReplaceSmalltalkMethod,
   });
   await adapter.ensureSchema(IMAGE, IDS);
 
