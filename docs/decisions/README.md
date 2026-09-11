@@ -18,3 +18,4 @@ The first decisions intentionally constrain semantics while leaving visual desig
 14. [0014 — WASM/WIT is the central portable client execution boundary](0014-wasm-centered-client-execution.md)
 15. [0015 — Durable environment state, themes and user preferences are ordinary image objects](0015-durable-environment-state-and-themes-are-objects.md)
 16. [0016 — One semantic browser exposes first-class documentation as a common facet](0016-one-browser-and-first-class-documentation.md)
+17. [0017 — System inspection is a Perspective over transient control-plane observations](0017-live-system-inspection.md)
