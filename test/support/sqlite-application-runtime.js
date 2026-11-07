@@ -1,5 +1,6 @@
-// Test-only SQL runtime copied unchanged from Images9462476733e68195c5cd4a97dcba8ec23930f637
-// test/support/sqlite-application-runtime.js. Serial in-memory use in E4; no restart claim.
+// Test-only SQL runtime implementation copied from Images9462476733e68195c5cd4a97dcba8ec23930f637
+// test/support/sqlite-application-runtime.js. E4/E5 use memory; E6 uses a real
+// SQLite file across fresh processes. This is not distributed-backend acceptance.
 import {DatabaseSync} from 'node:sqlite';
 
 function isReader(sql) {

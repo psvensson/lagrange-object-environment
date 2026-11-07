@@ -56,5 +56,42 @@ importing private modules. Bead `u4k` tracks portable exposure/admission and the
 actual native GTK E5 proof. Existing browser/native regression suites establish
 the shared editing route, not execution of this application-state workflow there.
 
-E6 separately proves durable reacquisition with fresh runtime and Environment
-resources; an in-memory successful edit is not restart evidence.
+E6 proves durable reacquisition with fresh runtime and Environment resources
+as described below; an in-memory successful edit is not restart evidence.
+
+## Restart recovery (E6)
+
+`test/yaxo-restart.integration.test.js` runs two fresh Node processes over one
+SQLite file through the public LagrangeBackend. Process A imports canonical
+source, discovers the parsed graph through the Project, performs the ordinary E5
+edit, releases all views and closes storage. Only after A exits does process B
+start with the database filename and `{imageId, projectId, memberKey}` locator.
+The parent retains A's report solely for comparison; none of its application
+refs, tokens, handles or authority enters B.
+
+B constructs fresh runtime caches, authority service, Session and renderer
+resources. It acquires the Project/member through public authorized reads and
+navigates the same graph by displayed actions. The proof compares the complete
+observed graph, identities, relationships and edited text, then performs another
+ordinary edit and checks the native getter and fresh display. It proves that
+first edit survives process restart, and that interaction can continue afterward;
+it does not claim a second restart has been performed.
+
+Recovery cannot invoke application provisioning. A refusing/counting schema
+adapter makes even an idempotent provisioning attempt fail; a deliberate control
+proves that refusal. Backend-owned SQL schema initialization remains allowed.
+Wrong Project/member locators fail and release admitted resources, while empty,
+Project-only and root-only grants still fail at their independent boundaries.
+Read-only recovery leaves the committed image frontier unchanged.
+
+The parent process helper owns serial child execution, deadlines, cancellation,
+exit collection and temporary-file cleanup. It kills and awaits its child on
+failure or cancellation; valid JSON from a failed process is not acceptance.
+Finite child controls prove timeout/cancellation reaping. Each application process
+proves nonempty live host resources and zero resources after destruction, closes
+the SQL driver and demonstrates that the closed runtime cannot read.
+
+This is durable Node consumer acceptance with a test-only SQLite Application
+Database driver. It is not a distributed-cluster recovery, native-host durable
+backend, launchable-product restoration or durable Perspective proof. Native
+E5/E6 integration remains tracked in `u4k`.
