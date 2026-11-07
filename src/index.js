@@ -73,6 +73,7 @@ export {
 
 export {
   createObjectInspectorProvider,
+  createTextSlotMutationCommand,
   createUnavailableRefProvider,
   createUnauthorizedRefProvider,
 } from './object-presentation-providers.js';
