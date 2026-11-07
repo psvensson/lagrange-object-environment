@@ -2,6 +2,8 @@
 //! sources are embedded verbatim; no filesystem, test module or sibling loader.
 use crate::images_composition::public_entry_loader::PublicEntryCompositionLoader;
 use crate::js_env::EmbeddedLoader;
+pub mod window;
+pub mod cli;
 
 pub fn environment_loader() -> EmbeddedLoader {
     EmbeddedLoader::new()
@@ -63,6 +65,7 @@ pub fn environment_loader() -> EmbeddedLoader {
             "native/read-transport",
             crate::image_read_transport::HOST_BINDING_JS,
         )
+        .with_module("native/viewer-session", include_str!("session.js"))
 }
 
 pub fn loader() -> Result<PublicEntryCompositionLoader, String> {

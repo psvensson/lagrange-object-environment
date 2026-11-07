@@ -1,15 +1,49 @@
 # hosts/linux — native Linux Component host (ADR 0013 L1)
 
-A **falsification spike**, not a production Linux client. It proves the ADR 0013
-portability contract: the browser is one host among several, and the portable
-graphics artifact is the **Component core binary + host-provided WIT imports** —
-not the browser's jco glue.
+The existing `lagrange-host-linux` executable has two modes: `view` opens a
+read-only GTK Project/inspector connected to the authorized Images read service;
+its default mode retains the offscreen GLB portability proof. The viewer embeds
+the ordinary Environment modules in QuickJS and runs no Node/browser subprocess.
+It is a bounded integration client, not a production identity or deployment stack.
 
-It runs the **exact checked-in GLB renderer Component core binary**
-(`test/browser/components/glb/glb.component.wasm`, the same bytes the browser
-tests run) under **Wasmtime** with native `wasi:webgpu` + `wasi-gfx:surface` +
-`lagrange:assets/provider` host imports — with **no jco, no JavaScript, no Node,
-no browser, no DOM, no winit**.
+## Launch the viewer
+
+From this directory, with GTK4/OpenSSL development libraries and the pinned Rust
+toolchain available:
+
+```sh
+sensors
+CARGO_BUILD_JOBS=1 nice -n 15 cargo build --locked --bin lagrange-host-linux
+sensors
+./target/debug/lagrange-host-linux view \
+  --endpoint https://read-service.example:8443 \
+  --image IMAGE_ID --project PROJECT_ID \
+  --credential-file /path/to/viewer.token
+```
+
+The credential file must be a private regular file (for example mode 600), supplied
+by the trusted read-service deployment. Add `--ca-file /path/to/ca.pem` for a
+private CA. TLS certificate/hostname verification remains enabled. Plain HTTP is
+allowed only for literal loopback. The endpoint is the application read service,
+not a Lagrange inter-node listener.
+
+Startup reads only the Project and opens an empty inspector. Click a member to
+read it, then follow inspector reference buttons. `--member KEY` explicitly
+requests one initial member selection. Refresh rereads the Project and current
+selection. Failed refresh visibly disables stale panes until reconnection.
+Close, SIGINT and SIGTERM cancel network work and drain the session; incomplete
+shutdown exits with failure under an eight-second process ceiling.
+
+The service must already be running with its runtime, installed read binding,
+authentication and grants. The executable never provisions an image or infers
+access from membership. Native editing, compilation, observation and production
+SSO remain outside this viewer. See
+[the viewer architecture](../../docs/architecture/native-cluster-viewer.md) and
+[the read-service decision](../../docs/decisions/0017-authorized-read-service.md).
+
+The default graphics mode runs the exact checked-in GLB renderer Component core
+binary (`test/browser/components/glb/glb.component.wasm`) under Wasmtime with
+native `wasi:webgpu`, `wasi-gfx:surface` and `lagrange:assets/provider` imports.
 
 ## What L1 proves (and what it does not)
 
@@ -18,11 +52,10 @@ renders a real shaded GLB mesh on a real GPU outside the browser, and the
 portability contract's key invariants hold natively — artifact identity, a real
 render, per-instance asset isolation, and explicit failure on a denied asset.
 
-**Not yet proven (follow-up Bead):** an **on-screen native window** surface.
+**Not yet proven (follow-up Bead):** an **on-screen GLB Component** surface.
 L1 uses a headless offscreen `wasi-gfx:surface` realization (the native analogue
 of the browser CI's `TextureRenderTarget`). The visible-window proof is a
-separate, narrower surface-realization task. **Do not** call this "native window
-proven."
+separate, narrower surface-realization task. **Do not** treat the GTK viewer window as proof of an on-screen GLB surface.
 
 This is a **native Component host / proof**, not a `LinuxRendererAdapter`: it
 hosts one Component instance and exercises its graphics lifecycle. The six-op
@@ -46,7 +79,7 @@ hosts/linux/
   src/lib.rs          the host: GlbHost + offscreen surface-webgpu + readback
   src/main.rs         manual driver (prints hash + mesh stats, optional PPM dump)
   tests/
-    l1_portability.rs the falsification suite (4 tests)
+    l1_portability.rs the falsification suite (5 tests)
 ```
 
 The Component binary and the GLB assets (`box.glb`, `box-big.glb`) are consumed
@@ -55,9 +88,9 @@ The Component binary and the GLB assets (`box.glb`, `box-big.glb`) are consumed
 ## Run
 
 ```
-cargo test --locked --test l1_portability   # the L1 falsification suite (headless)
-xvfb-run -a cargo test --locked             # the whole native suite (GTK tests need a display)
-cargo run --release --locked -- --dump-ppm /tmp/frame.ppm   # manual, writes a frame
+CARGO_BUILD_JOBS=1 nice -n 15 cargo test --locked --test l1_portability -- --test-threads=1
+CARGO_BUILD_JOBS=1 nice -n 15 xvfb-run -a cargo test --locked -- --test-threads=1
+CARGO_BUILD_JOBS=1 nice -n 15 cargo run --locked -- --dump-ppm /tmp/frame.ppm   # manual, writes a frame
 ```
 
 The L1 tests run headless (offscreen surface); a real GPU/Vulkan driver is used
