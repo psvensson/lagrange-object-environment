@@ -220,11 +220,13 @@ window.__lagrangeProof = {
     // with the ref's fields + references (root carries refs to B and C).
     const RECORDS = {
       'obj-root': {fields: {'slot-title': {kind: 'text', value: 'Root'}}, references: [ref('obj-b'), ref('obj-c')]},
-      'obj-b': {fields: {'slot-title': {kind: 'text', value: 'B'}, 'slot-count': {kind: 'int', value: 17}}, writable: ['slot-title'], references: []},
+      'obj-b': {fields: {'slot-title': {kind: 'text', value: 'B'}, 'slot-count': {kind: 'int', value: 17}}, writable: ['slot-title'], references: [ref('obj-c')]},
       'obj-c': {fields: {'slot-title': {kind: 'text', value: 'C'}}, references: []},
     };
+    const navigationReads = [];
     const navigator = {
       async navigate(subject) {
+        navigationReads.push(subject.objectId);
         const rec = RECORDS[subject.objectId] ?? {fields: {}, references: []};
         return {presentations: [{kind: 'inspector', subject, context: {fields: rec.fields, writable: rec.writable ?? [], references: rec.references}}], commands: [], failures: []};
       },
@@ -244,10 +246,12 @@ window.__lagrangeProof = {
     // Wire the DOM activate-item intents to selection. The binding names the
     // LOGICAL navigator view; the Compositor resolves each emitted DOM surface
     // handle to the live view at interaction time (Bead 4o8).
-    shell.bindIntents({adapter, navigator: true});
+    shell.bindIntents({adapter, navigator: true, inspectorNavigation: true});
     return {
       adapter, compositor, selectionModel, shell,
       navigatorButtons: () => Array.from(document.querySelectorAll('#mount .lagrange-tool-navigator .lagrange-tool-references button')),
+      inspectorButtons: () => Array.from(document.querySelectorAll('#mount .lagrange-tool-inspector .lagrange-tool-references button')),
+      navigationReads: () => [...navigationReads],
       inspectorText: () => document.querySelector('#mount .lagrange-tool-inspector')?.textContent ?? '',
       inspectorFieldInputs: () => Array.from(document.querySelectorAll('#mount .lagrange-tool-inspector .lagrange-tool-field-input')),
       onIntent: (fn) => adapter.onIntent(fn),

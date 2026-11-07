@@ -202,7 +202,7 @@ export function setup({imageId, blockIds, seededObjectIds}) {
     // each emitted GTK handle to the live view at interaction time (Bead 4o8).
     // The handles below are kept ONLY for the native side's intent labelling.
     session.unsubscribeIntents = shell.bindIntents({
-      adapter: intentAdapter, navigator: true, inspector: true,
+      adapter: intentAdapter, navigator: true, inspector: true, inspectorNavigation: true,
       commandRouter, commandId: 'set-title', authority: inertAuthority, readBlockId: blockIds.read,
       // Diagnostic capture: the bindIntents path is otherwise fire-and-forget
       // (errors swallowed + reread). Capture the last edit error name so the

@@ -150,6 +150,21 @@ A future personality must reuse that path. It must not add `SmalltalkClickRouter
 
 References and semantic targets confer no authority. Every target is freshly authorized at the lower public semantic read/invocation boundary.
 
+E4 applies that rule to an application's ordinary object graph. A Project member action
+selects the root through the same shell; `inspectorNavigation: true` binds the inspector's
+reference rows to the existing resolver, independently of editing. Each subsequent action
+reads its exact target through ObjectNavigator and ImageClientAdapter. The real YAXO
+proof (`test/yaxo-application.integration.test.js`) imports verified Cuis source, executes
+the native parser, discovers its result through the authorized Project descriptor, and
+walks the resulting domain objects using rendered action keys. Its read-attempt trace
+includes denials: neither Project membership nor a root read grants descendant access.
+
+This application proof runs in Node. The DOM and GTK proofs exercise the generic
+inspector action route; portable YAXO import/execution, state editing (E5), and durable
+session recovery (E6) remain separate. No YAXO provider or application-specific browser
+is involved. Source provenance and regeneration instructions live beside the fixture.
+
+
 ## Cuis is evidence for the one-browser rule
 
 Cuis is deliberately **not** a separate browser personality after native import.

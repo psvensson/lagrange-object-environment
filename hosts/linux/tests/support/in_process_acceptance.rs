@@ -768,6 +768,42 @@ pub fn run_in_process_acceptance(
 }
 
 
+/// A real GTK inspector action reaches the exact ref via the unchanged JS shell.
+/// The portable lane proves generic navigation, not native YAXO execution.
+pub fn run_inspector_navigation_leg(
+    runtime: &tokio::runtime::Runtime,
+    actor: &JsEnvActor,
+    host: &mut RendererPortHost,
+) {
+    let prepared = run_json_while_pumping(
+        runtime, actor, host,
+        "globalThis.__session.prepareInspectorNavigation()",
+        "prepareInspectorNavigation",
+    );
+    let handle = prepared["inspectorHandle"].as_str().unwrap();
+    let source = &prepared["sourceObjectId"];
+    let target = &prepared["targetObjectId"];
+    assert_ne!(source, target);
+    let before = prepared["readCount"].as_u64().unwrap() as usize;
+    let intent = host.adapter().activate_gtk_action(handle, 0)
+        .expect("activate inspector action").expect("inspector activate-item");
+    assert_eq!(serde_json::to_value(&intent).unwrap(), json!({"kind": "activate-item", "key": 0}));
+    runtime.block_on(actor.push(&json!({"intent": intent, "surfaceHandle": handle}).to_string()))
+        .expect("push inspector action");
+    let state = poll_until(
+        runtime, actor, host,
+        "globalThis.__session.inspectorNavigationState()",
+        |value| value["subjectObjectId"] == *target,
+        "GTK inspector action navigates to its exact target",
+    );
+    assert_eq!(&state["selectedObjectId"], target);
+    assert_eq!(state["focusedViewId"], json!("inspector-view"));
+    let reads = state["reads"].as_array().unwrap();
+    assert_eq!(reads.len(), before + 1, "exactly one fresh authorized read");
+    assert_eq!(reads.last().unwrap(), target);
+    assert_eq!(&reads[before - 1], source);
+}
+
 /// okv Slice C: the PROJECT RENAME leg — run ONLY by the real-Images
 /// acceptance (the fake composition has no Project lane and must never fake
 /// one). Positive path + one negative (denied); stale/conflict and the

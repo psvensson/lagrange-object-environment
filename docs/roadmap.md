@@ -208,6 +208,13 @@ Environment now admits that substrate at `9462476`; E4 can consume the real `app
 Project member and navigate the application's own domain objects. Upstream M4 completion does not
 establish Environment E4, E5 or E6 acceptance: each still needs its own consumer proof.
 
+E4's consumer proof now executes that real parser from verified source input and navigates
+its Project root and native domain objects through ordinary inspector actions. The small
+production addition is opt-in inspector reference navigation, independent of editing.
+Project-only and root-only authority negatives and a complete attempted-read trace guard
+the boundary. Node carries real application execution; DOM and GTK carry the generic
+action route. E5 state mutation and E6 fresh-session recovery remain open.
+
 E4's earlier import-workflow definition remains displaced. An import UI is separate work even
 though Images later shipped an authorized import operation (#306). Likewise, portable compilation
 and install/import exports (#302) are beyond the admitted revision. Native method replacement is
