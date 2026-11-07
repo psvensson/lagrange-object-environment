@@ -77,6 +77,26 @@ The endpoint owners do not jointly own an interaction. Each boundary has one own
 | Environment <-> portable Images in-process TEST composition (3zb-B3) | B3 real-Images composition (`hosts/linux/tests/support/public_entry_composition_loader.rs`, `real-images-composition.mjs`, and `real-images-acceptance-composition.mjs`) | current (headless adapter chain + full Environment/GTK loop) | Sole owner of TEST-ONLY source loading, bootstrap and dependency injection between the unchanged Environment modules and pinned real Images portable runtime inside rquickjs. The shared test loader dispatches artifact resolution before the flat Environment loader, rejects every external direct `src/...` request, and audits the nonempty public-entry crossing; guest bootstrap installs the reviewed crypto binding before `createPortableRuntime`, injects only helpers from `portable-runtime`, provisions schema/data/guest-only authorities, and closes the runtime backend at teardown. It owns no Environment, Images, renderer or acceptance-protocol semantics: those remain with their production owners and the shared oracle row above; artifact byte/module translation remains with `portable_artifact.rs`. It has no sibling/filesystem/package/Node fallback and does NOT prove the plain-data/WIT-shaped Images port. Primary proofs: `tests/real_images_semantics.rs` (narrow headless adapter semantics plus source/public-entry audit) and `tests/real_images_acceptance.rs` (real authority/CAS/observation through the full Environment and LinuxRendererAdapter/GTK, with opaque tokens guest-only). |
 | Browser proof lane execution lifecycle (per-proof resource release, file concurrency policy, CI deadline) | `test/browser/support/proof-lane.js` (`withProofPage`) | current (Bead vbe) | Sole owner of HOW a CI browser proof acquires and RELEASES its local server, Chromium and page: everything is created inside the one try whose cleanup runs unconditionally, `browser.close()` is bounded (on expiry the Chrome process group is SIGKILLed and a `BrowserLifecycleError` is raised), the server is closed in its own step, and nothing is swallowed (a body failure propagates unchanged with any cleanup failure as its `cause`; a cleanup failure on a green body fails). The policy it owns is expressed in `package.json` `test:browser` (`--test-concurrency=1`: the heavyweight proofs run SERIALLY until a shared/parallel harness is deliberately designed; a per-test `--test-timeout` for attribution; never `--test-force-exit`) and `.github/workflows/ci.yml` (`timeout-minutes` on the proof step and both jobs, derived from measured durations); `test/ci-policy.test.js` keeps both executable and fences every CI proof file onto this helper with no options, and `test/browser-proof-lane.test.js` proves each failure path releases both resources (including the real puppeteer launch-timeout control that hung CI on 2026-09-03). The manual real-display canvas proof is outside this lane. |
 
+### Images admission at `9462476` (Bead 9qz)
+
+The Node integration lane and the 122-module portable artifact consume Images
+`9462476733e68195c5cd4a97dcba8ec23930f637`. The artifact owner above retains byte admission and
+source-revision metadata; `ImageClientAdapter` retains every production Environment-to-Images
+crossing. The public portable entry is unchanged at this admission, but its native-language
+closure includes the M4 compatibility changes, including Character, ReadStream, Set, text/Symbol
+equality and the defining-Behavior locality check for `super`.
+
+The separate public package `./graph` entry supplies trusted `provisionObject`/`provisionShape`
+operations and `ProvisioningConflictError`. The Node-only admission proof uses that entry in a
+kernel-free image; it adds no production provisioning caller. Neither `src/runtime.js` nor
+`src/portable-runtime.js` exports those operations, and the provisioning module is outside the
+portable artifact. `EnvironmentProvisioner` and `ThemeResolver` below remain planned.
+
+Images' later portable compilation/install/import surface (#302) and authorized import operation
+(#306) are not in this pin. Beads `aov` and `dcx` remain open; their upstream availability does not
+prove execution in this host. The source-to-artifact comparison for this admission is recorded in
+`9qz`; a permanent executable provenance check remains separate work (`qt3`).
+
 ## ADR 0015 planned ownership — object-native themes, profiles and defaults
 
 ADR 0015 reserves the following owners before implementation so theming cannot create a parallel configuration architecture. These planned rows extend the registry above; they do not claim implementation exists yet. All durable Theme, DesignToken, EnvironmentProfile and EnvironmentCatalog state remains ordinary image data, and every environment-to-Images read/write/observation still crosses the existing `ImageClientAdapter` owner above.

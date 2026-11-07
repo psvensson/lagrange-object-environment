@@ -96,6 +96,12 @@ Do not design a common scene graph before the low-level Component boundary is pr
 
 Implement ADR 0015 before visual polish hardens into renderer-local conventions. This phase must reuse the ordinary object/read/write/observation boundaries rather than creating a settings subsystem.
 
+The lower provisioning contract is available: Images #294 publishes `provisionObject`,
+`provisionShape` and `ProvisioningConflictError` through its public `./graph` entry. Admission at
+Images `9462476` proves chosen identities, write-free replay and divergent refusal in a kernel-free
+Node image (`test/images-provisioning-admission.integration.test.js`). Theme implementation remains
+open; this is neither portable provisioning nor a Theme foundation proof.
+
 - [ ] define the minimal ordinary-object Shapes/classes for `EnvironmentCatalog`, `Theme`, `DesignToken` and `EnvironmentProfile`; keep complete Theme authority graph-visible rather than one opaque DTCG/CSS blob
 - [ ] add one idempotent environment provisioner that installs those Shapes/classes and creates the single stable-id `EnvironmentCatalog` plus canonical stock/default Theme graph; normal Sessions never create shared defaults
 - [ ] define `ThemeResolver` as the sole owner of base-theme traversal, token override/type validation and resolved semantic token values; prove inheritance-cycle/type mismatch failures
@@ -196,13 +202,17 @@ steps therefore read:
     E5  real application STATE is usefully mutable
     E6  the application survives RESTART and is re-inhabitable
 
-and the sequencing is deliberately SERIAL rather than both repositories advancing in parallel on
-assumptions: Images M4 supplies real compatibility pressure from the pinned YAXO package, which
-builds a graph of its own application classes and objects, until there are durable application
-roots and domain state worth inhabiting -- and only THEN does E4 begin, against that graph. The
-authority problem that paused M4 is discharged (Images #231, admitted at pin `ccd8321`), so the
-pressure now comes from the application rather than from this repository. Doing less here is the
-faster route to the product.
+The sequencing remains serial. Images M4 completed the pinned YAXO application's native graph,
+Project-root discovery, mutation and durable restart proof in Images #290 (`2b667f2`). The
+Environment now admits that substrate at `9462476`; E4 can consume the real `application/root`
+Project member and navigate the application's own domain objects. Upstream M4 completion does not
+establish Environment E4, E5 or E6 acceptance: each still needs its own consumer proof.
+
+E4's earlier import-workflow definition remains displaced. An import UI is separate work even
+though Images later shipped an authorized import operation (#306). Likewise, portable compilation
+and install/import exports (#302) are beyond the admitted revision. Native method replacement is
+still explicitly unavailable without a compilation service; the application-state vertical does
+not implicitly require that capability.
 
 Success: an existing Cuis application becomes ordinary native classes, methods and durable objects operated through the generic environment, with OpenSmalltalkVM retained only as explicit importer, provenance, oracle or deliberately bounded foreign-service machinery. Adding another language extends the environment rather than adding another IDE architecture.
 

@@ -1,8 +1,18 @@
 # Proposal: a public provisioning seam for Environment-owned well-known objects
 
-**Status:** OPEN. Sent from `lagrange-object-environment` to the `lagrange-images` owner. Originating Bead `lagrange-object-environment-0k7.1` (Object-native Theme foundation). Per environment ADR 0002 this is a downward proposal of a missing image-level semantic contract; the Environment does not shadow it with an unguarded `putObject`, a read-then-put of its own, or another subsystem's provisioning helper.
+**Status:** DELIVERED by [Images #294](https://github.com/psvensson/lagrange-images/pull/294),
+admitted at `9462476733e68195c5cd4a97dcba8ec23930f637` (Bead `9qz`). The public package
+`./graph` entry exports `provisionObject`, `provisionShape` and `ProvisioningConflictError`.
+`test/images-provisioning-admission.integration.test.js` proves the Node consumer's chosen-id,
+write-free-replay and conflict-refusal paths without installing a Smalltalk kernel. Neither
+the Node runtime root nor the portable root exports these operations; portable provisioning and
+Theme implementation are not claimed. Issue #224's open state does not supersede the delivered code.
 
-Audited against pinned Images `9af24da93eba17357b05168ad5fc657be51bce94`, which was the pinned revision when this proposal was written. **Not re-audited at `15fcb811`** (the E3 admission) **or at `ccd8321`** (the method-position authority admission): neither bump touched this proposal's area — the first was scoped to the native method replacement seams, the second to method-read authority plus unrelated M4 language work — so the gap is believed to stand, but this proposal does not assert it for either revision.
+The remainder preserves the original handoff, originating from Bead
+`lagrange-object-environment-0k7.1`, audited against Images
+`9af24da93eba17357b05168ad5fc657be51bce94`. Its missing-contract statements describe that historical
+revision. The Environment still consumes the lower owner rather than implementing its admission
+rule or using the Smalltalk kernel wrapper.
 
 **Sent as:** [lagrange-images#224](https://github.com/psvensson/lagrange-images/issues/224). Discovered-from Bead `lagrange-object-environment-qa3`.
 

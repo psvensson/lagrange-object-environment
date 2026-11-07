@@ -103,6 +103,7 @@ function cuisManifest() {
       superclassName: 'Object',
       superclass: imagesApi.CUIS_NATIVE_ROOT_OBJECT_IDENTITY,
       instanceVariables: ['baseValue'],
+      classVariables: [],
     }],
     methods: [{
       identity: 'cuis-method/Fixture/BrowseImported/instance/baseValue',
