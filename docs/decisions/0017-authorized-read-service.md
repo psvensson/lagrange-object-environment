@@ -63,6 +63,26 @@ navigation, no read-time writes, bounded admission, late-result suppression and
 process shutdown. They do not prove a real cluster or native executable. That
 acceptance belongs to the dependent native viewer task.
 
+The native binding carries raw status/body data through the same connection.
+It fixes one origin and `/v1/read`, verifies TLS with system trust or an explicit
+CA, and permits plaintext only for literal loopback. Redirects, proxy discovery,
+compression and retries are disabled. The operator credential is read from a
+bounded private regular file and remains in Rust; guest modules receive neither
+that credential nor an arbitrary URL capability. Admission is limited to 16
+requests, with 16 KiB request and 4 MiB streaming response limits.
+
+Native I/O runs on a composition-supplied executor separate from the JavaScript
+owner. Cancellation guards hold the exact operation handle, and capacity remains
+occupied until actual I/O settlement. Socket cancellation therefore does not
+require guest progress. OS hostname resolution can outlive HTTP cancellation;
+the executable must retain its independent process shutdown ceiling. Native
+transport tests use scripted socket responses and prove mechanics only.
+
+The production and test composition share one public-entry resolver. Its fence
+checks the canonical resolved target after either resolver path, including the
+flat Environment fallback. External modules may enter the Images artifact only
+through literal `portable-runtime`; normalized private-path spellings are refused.
+
 Rejected: serializing AuthorityContexts; using the trusted storage scaffold as a
 client API; accepting a caller-selected Block; implementing root grant policy in
 the UI; requiring managed hosting before a standalone application service can be

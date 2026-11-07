@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 const ARTIFACT_COMPOSITION_FILES: &[&str] = &[
     "images_composition/mod.rs",
     "images_composition/portable_artifact.rs",
+    "images_composition/public_entry_loader.rs",
+    "native_viewer/mod.rs",
 ];
 
 const FORBIDDEN_IN_ARTIFACT_COMPOSITION: &[&str] = &[
