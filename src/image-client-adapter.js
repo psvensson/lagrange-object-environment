@@ -257,34 +257,11 @@ function createImageClientAdapter(client) {
     invocations,
     executor,
     authority: authorityService,
-    // OPTIONAL, and the only optional service here (E3, Bead eij.3). Images'
-    // authorized method REPLACEMENT seam takes a compilation service alongside
-    // `images`, because lowering supplied source to a native program is the
-    // compiler owner's work. It is NOT required at construction, and the reason is
-    // a verified fact about the lower owner rather than a preference: Images'
-    // PORTABLE runtime root exports `authorizedReplaceSmalltalkMethod` but
-    // `createPortableRuntime` returns no `compilation` service, so demanding one
-    // here would make this adapter -- and therefore the whole Environment --
-    // unconstructible on the native host. RE-VERIFIED AT THE CURRENT PIN,
-    // ccd8321, and still true there: `createRuntimeCore` returns exactly
-    // {backend, images, languages, dispatchers, invocations, codeExecutors,
-    // authority, executor} and the word `compilation` does not occur anywhere in
-    // `src/portable-runtime.js`, while `src/runtime.js` -- the root the JS lane
-    // consumes -- constructs and returns one. Images #231 repaired method-read
-    // authority and deliberately did not touch this.
-    // The narrow consequence is recorded rather than papered over: a composition
-    // without it constructs and browses, and its FIRST replacement fails loudly
-    // below, naming the missing service.
-    //
-    // STATED PRECISELY, because the comfortable version is not true: this is
-    // explicit replacement UNAVAILABILITY on that host, NOT logical
-    // unreachability. Bead aov says the portable TEST HARNESS cannot install a
-    // method to replace -- it says nothing about a real persistent image, which
-    // may already contain plenty of methods a user would reach exactly this way.
-    // So a portable host is a host where native method browsing works and native
-    // method replacement is unavailable, and a consumer is entitled to be told
-    // that rather than to discover it at the first Replace. The asymmetry is
-    // Images pressure, recorded on Bead dcx rather than worked around here.
+    // Optional for read-only/custom compositions. Images owns compilation and
+    // authorized method replacement; the adapter neither compiles nor chooses
+    // an execution lane. Both runtime roots supply this service at caf72f2.
+    // A composition that omits it can browse, while replacement fails explicitly
+    // below. Keep this guard for capability-limited clients.
     compilation = null,
     // Helpers consumed from the public exports (createRuntime's module barrels).
     defineClass,

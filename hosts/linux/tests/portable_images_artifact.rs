@@ -18,9 +18,9 @@ use sha2::{Digest, Sha256};
 fn embedded_portable_runtime_artifact_is_the_pinned_canonical_material() {
     assert_eq!(
         PORTABLE_RUNTIME_SOURCE_REVISION,
-        "9462476733e68195c5cd4a97dcba8ec23930f637"
+        "caf72f26d6a28a6901aea876a49d22311e29cf21"
     );
-    assert_eq!(PORTABLE_RUNTIME_ARTIFACT_BYTES.len(), 1331919);
+    assert_eq!(PORTABLE_RUNTIME_ARTIFACT_BYTES.len(), 1555650);
     assert_eq!(PORTABLE_RUNTIME_ARTIFACT_BYTES.last(), Some(&b'}'));
 
     let digest = Sha256::digest(PORTABLE_RUNTIME_ARTIFACT_BYTES);
@@ -33,7 +33,7 @@ fn embedded_portable_runtime_artifact_is_the_pinned_canonical_material() {
         serde_json::from_slice(PORTABLE_RUNTIME_ARTIFACT_BYTES).expect("pinned artifact is JSON");
     assert_eq!(artifact["format"], PORTABLE_RUNTIME_ARTIFACT_FORMAT);
     assert_eq!(artifact["entry"], PORTABLE_RUNTIME_ARTIFACT_ENTRY);
-    assert_eq!(artifact["modules"].as_array().map(Vec::len), Some(122));
+    assert_eq!(artifact["modules"].as_array().map(Vec::len), Some(138));
     assert!(
         artifact.get("provenance").is_none(),
         "canonical material must not contain the external source provenance"
@@ -153,6 +153,10 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
                 'installSmalltalkKernel',
                 'findSmalltalkKernel',
                 'defineClass',
+                // Native application parity consumes these trusted bootstrap
+                // APIs from the portable barrel, with runtime.compilation.
+                'installSymmetricSmalltalkStandardImage',
+                'importCuisNativePackage',
                 'installCallableInterfaceV2',
                 'installImageCreationBinding',
                 'installImageMutationBinding',
@@ -199,14 +203,8 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
                 // to predict which immutable revision occupies the position, which is exactly
                 // what made E3's post-write reread unobtainable.
                 //
-                // TENSE, stated precisely because the two lanes differ here: the vocabulary is
-                // ALREADY in present-tense use by the JS integration lane, whose composition
-                // builds the grant from `src/runtime.js`. Over THIS surface -- the portable
-                // artifact the NATIVE compositions consume -- it is still a forward commitment,
-                // because the native lane browses only the probe class, which has no selectors
-                // to read (Bead aov). Required here anyway, for the reason every admission
-                // slice requires ahead: a revision that cannot supply the vocabulary the next
-                // slice needs is refused before that slice starts.
+                // Both the JS integration lane and native application parity use
+                // this vocabulary to read and replace a real imported selector.
                 'smalltalkMethodPositionResource',
               ];
               // A CONSTANT, not a function, so it needs its own kind check: the list above is
@@ -229,10 +227,9 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
               // is no longer on a production display path, and saying otherwise here would be
               // the kind of stale justification this list exists to prevent.
               //
-              // Images' class-building and Cuis-import helpers are STILL not required: the
-              // native lane deliberately cannot construct a class or install a selector, and
-              // that gap is Bead lagrange-object-environment-aov, not something to paper over
-              // by widening this list.
+              // The native parity composition also consumes the trusted standard
+              // image installer and Cuis importer named above. Authorized human
+              // import remains a separate contract and is not implied here.
               const consumedNativeBrowseSeams = [
                 'authorizedDescribeSmalltalkClass',
                 'authorizedDescribeSmalltalkMethod',
@@ -388,7 +385,7 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
     assert_eq!(report["exportedCreate"], "function");
     // A NON-VACUITY / closure check only: it catches the requirement list silently
     // shrinking. The semantic contract is the by-name assertions below.
-    assert_eq!(report["requiredEnvironmentExportCount"], 27);
+    assert_eq!(report["requiredEnvironmentExportCount"], 29);
     assert_eq!(
         report["missingEnvironmentExports"],
         serde_json::json!([]),
