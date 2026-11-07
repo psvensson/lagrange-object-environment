@@ -183,14 +183,15 @@ awaits a LOWER contract.
       Cuis-native consumer requires personality-contributed Presentation providers or Commands. Still
       not required: E1-E3 needed no personality-selected provider, dispatcher or route
 - [ ] add senders/implementors, syntax-aware editing, history or debugging only when the real Cuis
-      workflow supplies concrete pressure. E1-E3 supplied none, and the remaining vertical (E4-E6) is
+      workflow supplies concrete pressure. E1-E3 supplied none, and the completed vertical (E4-E6) is
       deliberately anchored to a real imported APPLICATION rather than to more browser features
-- [ ] prove one independently authored Cuis application can be browsed, understood and edited here
-      while its authoritative native state survives restart without a live Cuis heap (E4-E6)
+- [x] prove one independently authored Cuis application can be browsed, understood and edited here
+      while its authoritative native state survives restart without a live Cuis heap (E4-E6,
+      Node consumer acceptance). Native E5/E6 integration remains Bead `u4k`.
 - [ ] prove a later language personality uses the same environment substrate after the Cuis path has
       established the reusable native-import boundary
 
-THE REMAINING VERTICAL IS ANCHORED TO A REAL APPLICATION, NOT TO MORE BROWSER FEATURES. E1-E3 proved
+THE COMPLETED VERTICAL IS ANCHORED TO A REAL APPLICATION, NOT TO MORE BROWSER FEATURES. E1-E3 proved
 the semantic path against class and method shapes this repository could stage itself; advancing the
 same way would prove the Environment against a GUESS about what a real application needs. The six
 steps therefore read:
