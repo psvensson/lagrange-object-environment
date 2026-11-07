@@ -805,10 +805,35 @@ function createImageClientAdapter(client) {
     return Object.freeze({slots, indexed, versionToken: result['version-token']});
   }
 
-  /** Trusted composition of an installed, immutable one-text-slot binding.
+  /** Bind a trusted, installed read-only operation before serving clients.
    * Images parses its own binding/interface. No application record is read.
-   * The portable root does not yet expose these public helpers (Bead u4k).
    */
+  async function bindObjectRead({imageId, blockId}) {
+    const {parseImageObjectReadBindingArtifact, resolveCallableInterface, assertObjectReadInterface} = client;
+    for (const [name, helper] of Object.entries({
+      parseImageObjectReadBindingArtifact, resolveCallableInterface, assertObjectReadInterface,
+    })) {
+      if (typeof helper !== 'function') throw new TypeError('object read requires public Images helper: ' + name);
+    }
+    const block = await images.getBlock(imageId, blockId);
+    if (!block || block.imageId !== imageId || block.id !== blockId
+        || block.environment !== null || block.code?.kind !== 'ref'
+        || block.code.imageId !== imageId) {
+      throw new TypeError('object read requires a local Block with no lexical environment');
+    }
+    const artifact = await images.getCodeArtifact(imageId, block.code.objectId);
+    if (!artifact || artifact.imageId !== imageId || artifact.id !== block.code.objectId) {
+      throw new TypeError('object read binding must belong to its target image');
+    }
+    parseImageObjectReadBindingArtifact(artifact);
+    const {descriptor} = await resolveCallableInterface(images, artifact, 'object read');
+    assertObjectReadInterface(descriptor);
+    return Object.freeze({
+      imageId,
+      read: ({objectId, authority}) => authorizedReadObject({imageId, objectId, authority, blockId}),
+    });
+  }
+
   async function bindTextSlotMutation({imageId, blockId}) {
     const {parseImageMutationBindingArtifact, resolveCallableInterface, resolveDeclaredType} = client;
     for (const [name, helper] of Object.entries({
@@ -1260,6 +1285,7 @@ function createImageClientAdapter(client) {
     createObject,
     mutateObject,
     bindTextSlotMutation,
+    bindObjectRead,
     ensurePerspectiveSchema,
     savePerspective,
     loadPerspective,
@@ -1304,6 +1330,29 @@ function createImageClientAdapter(client) {
   return api;
 }
 
+function createRemoteImageClientAdapter({connection} = {}) {
+  if (!connection || typeof connection.readProject !== 'function' || typeof connection.readObject !== 'function') {
+    throw new TypeError('Remote image adapter requires a read connection');
+  }
+  function remoteContext(authority, blockId) {
+    if (authority != null || blockId !== undefined) {
+      throw new TypeError('Remote reads use server-side authority and binding selection');
+    }
+  }
+  return Object.freeze({
+    projectWritableFields: Object.freeze([]),
+    writableSlots: Object.freeze([]),
+    readProject({imageId, projectId, authority = null} = {}) {
+      remoteContext(authority);
+      return connection.readProject({imageId, projectId});
+    },
+    readObject({imageId, objectId, authority = null, blockId} = {}) {
+      remoteContext(authority, blockId);
+      return connection.readObject({imageId, objectId});
+    },
+  });
+}
+
 function classIdFor(className) {
   return `smalltalk/class/${className}`;
 }
@@ -1334,5 +1383,6 @@ export {
   PROBE_TYPE_DECLARATIONS,
   classIdFor,
   createImageClientAdapter,
+  createRemoteImageClientAdapter,
   refToEdgeString,
 };

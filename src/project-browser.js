@@ -140,8 +140,8 @@ function resolveProjectMemberTarget(presentationDescriptor, key) {
 }
 
 function createProjectBrowser({adapter, presentationRegistry, compositor} = {}) {
-  if (!adapter || typeof adapter.readProject !== 'function' || typeof adapter.observe !== 'function') {
-    throw new TypeError('createProjectBrowser requires an adapter with readProject and observe');
+  if (!adapter || typeof adapter.readProject !== 'function') {
+    throw new TypeError('createProjectBrowser requires an adapter with readProject');
   }
   if (!Array.isArray(adapter.projectWritableFields)) {
     // Loud: a mis-wired adapter must not silently present every field read-only.
@@ -383,6 +383,7 @@ function createProjectBrowser({adapter, presentationRegistry, compositor} = {}) 
   }
 
   function follow({authority = null, observationBlockId, afterCursor, intervalMs, onUpdate, onError} = {}) {
+    if (typeof adapter.observe !== 'function') throw new TypeError('Project observation is unavailable');
     const subject = activeSubject;
     if (!subject) throw new TypeError('follow requires an active Project');
     const expectedGeneration = generation;
