@@ -23,7 +23,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: psvensson/lagrange-images
-          ref: 9462476733e68195c5cd4a97dcba8ec23930f637
+          ref: caf72f26d6a28a6901aea876a49d22311e29cf21
           path: lagrange-images
       # v5+ runs on the Node.js 24 action runtime (v4 targeted the deprecated
       # Node.js 20 runtime; Bead u2y). Automatic package-manager caching (a v5
@@ -132,12 +132,12 @@ jobs:
             --test native_crypto_images \
             --test portable_images_observe \
             --test real_images_semantics
-      - name: Prove artifact-backed real Images full GTK loop without a sibling checkout
+      - name: Prove artifact-backed real Images GTK loop and application parity without a sibling checkout
         working-directory: lagrange-object-environment/hosts/linux
         run: |
           test ! -e "$GITHUB_WORKSPACE/lagrange-images"
           xvfb-run -a -s "-screen 0 1280x1024x24" \
-            cargo test --locked --test real_images_acceptance
+            cargo test --locked --test real_images_acceptance --test native_application_parity
       # L1 (Component graphics) + L2b (GTK semantic UI). The GTK tests need
       # gtk4::init(), which requires a display — run the whole native suite
       # under Xvfb (the L1 offscreen GPU tests are unaffected by a display).

@@ -204,7 +204,7 @@ steps therefore read:
 
 The sequencing remains serial. Images M4 completed the pinned YAXO application's native graph,
 Project-root discovery, mutation and durable restart proof in Images #290 (`2b667f2`). The
-Environment now admits that substrate at `9462476`; E4 can consume the real `application/root`
+Environment now admits that substrate at `caf72f2`; E4 can consume the real `application/root`
 Project member and navigate the application's own domain objects. Upstream M4 completion does not
 establish Environment E4, E5 or E6 acceptance: each still needs its own consumer proof.
 
@@ -216,10 +216,10 @@ the boundary. Node carries real application execution; DOM and GTK carry the gen
 action route. E5 state mutation and E6 fresh-session recovery remain open.
 
 E4's earlier import-workflow definition remains displaced. An import UI is separate work even
-though Images later shipped an authorized import operation (#306). Likewise, portable compilation
-and install/import exports (#302) are beyond the admitted revision. Native method replacement is
-still explicitly unavailable without a compilation service; the application-state vertical does
-not implicitly require that capability.
+though Images later shipped an authorized import operation (#306). Portable compilation and trusted install/import (#302) are admitted at `caf72f2`
+for native-host parity (sl1). The generic Wasmtime host facility supplies execution,
+while Images retains compiler, import and authority semantics. Human import UI,
+application-state editing and durable recovery remain separate work.
 
 Success: an existing Cuis application becomes ordinary native classes, methods and durable objects operated through the generic environment, with OpenSmalltalkVM retained only as explicit importer, provenance, oracle or deliberately bounded foreign-service machinery. Adding another language extends the environment rather than adding another IDE architecture.
 

@@ -237,6 +237,16 @@ impl LinuxRendererAdapter {
         })
     }
 
+    /// Type into the current GTK input and activate its submit control. This is
+    /// a host-side intent seam, not a RendererAdapter contract operation.
+    pub fn submit_gtk_input(&self, handle: &str, key: i64, text: &str) -> Result<Option<Intent>, String> {
+        let entry = self.require_live(handle, "submit_gtk_input")?;
+        Ok(match &entry.realization {
+            Some(Realization::Gtk { realization, .. }) => realization.submit_input(key, text),
+            _ => None,
+        })
+    }
+
     /// The descriptor behind a GTK surface's current realization (host-side;
     /// NOT a contract op): the fixture resolves key->ref against this via
     /// `descriptor_references`, replicating how `EnvironmentShell` reads the

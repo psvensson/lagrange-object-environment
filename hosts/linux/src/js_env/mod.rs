@@ -1,13 +1,13 @@
-//! 3zb-A: bounded Environment-side rquickjs embed (runtime shell ONLY).
+//! Bounded Environment-side rquickjs embed (ADR 0014 fallback).
 //!
 //! This module hosts the EXISTING checked-in Environment ESM core (`src/*.js`,
 //! unchanged — NO native source fork) inside a native rquickjs (QuickJS) runtime
 //! in the Linux client. It is the embedded-JS-runtime host-port owner (see
 //! `docs/ownership.md`, "Environment JS <-> embedded JS runtime host").
 //!
-//! # Scope of THIS slice (3zb-A slice 1 — runtime shell)
+//! # Host-runtime scope
 //!
-//! Only the substrate that can HOST JS, with NO Environment semantics wired:
+//! Host facilities and capability ports, with no duplicated Environment semantics:
 //!   - ONE explicit JS-runtime execution owner (`JsEnvOwner`): all QuickJS
 //!     contact happens on this owner; `rquickjs`'s `parallel` feature enables the
 //!     cross-thread mechanism but does NOT establish ownership — this wrapper
@@ -41,24 +41,29 @@
 //!         obligation: `LanguagePlatform.register` clones every descriptor, the
 //!         mock backend clones EVERY value in and out, and the graph image
 //!         service clones every durable put record.
-//!   - `process` is ABSENT (asserted in tests). NO Buffer shim, NO crypto shim,
+//!       * Generic cryptographic primitives (host_crypto); provider binding is
+//!         separately owned by images_composition.
+//!       * Bounded `WebAssembly` Module/Instance/compile/instantiate host surface
+//!         (host_wasm, sl1): i32 functions only, no memory/tables or non-function
+//!         imports/exports. Wasmtime owns validation and execution; JS wrappers
+//!         retain imports, and native closures retain only Rust state.
+//!   - `process` is ABSENT (asserted in tests). NO Buffer or Node crypto shim,
 //!     NO node:crypto/fs/process/child_process, NO Node module personality, NO
 //!     lagrange-images imports, and NO dependency on the throwaway 64j Node
 //!     worker (the structural guard enforces this by source scan).
 //!
-//! # What this slice deliberately does NOT contain
+//! # Capability and semantic boundaries
 //!
-//! No RendererAdapter port, no Images capability (test or real), no Environment
-//! wiring. Those arrive in later slices only after the cross-thread async-port
-//! falsifier (slice 2) proves the ownership/threading model. Keeping this slice
-//! narrow is the point: the boundary must be reviewed before it accretes
-//! runtime features.
+//! renderer_port and images_capability translate the plain-data ports; they do
+//! not reimplement renderer or image semantics. Application composition remains
+//! outside this module, behind the existing Environment and public-image owners.
 //!
 //! # Deletion criterion (ADR 0014 fallback)
 //!
 //! This is a TEMPORARY bounded fallback. The preferred architecture is a real JS
-//! WASM Component + WIT, upstream-blocked on async guest imports (ComponentizeJS
-//! #335). When JS guest async imports land, this module is removed and the
+//! WASM Component + WIT. The async acceptance path is not yet proven there
+//! (ComponentizeJS #335 tracks async exports, not an async-import proof).
+//! When that real async acceptance path is viable, this module is removed and the
 //! plain-data Images port becomes the WIT boundary. NOT a precedent for
 //! per-language native bridges.
 
@@ -69,6 +74,7 @@ use rquickjs::loader::{ImportAttributes, Loader, Resolver};
 
 pub mod actor;
 pub mod host_crypto;
+pub mod host_wasm;
 pub mod images_capability;
 pub mod renderer_port;
 
@@ -253,6 +259,7 @@ impl JsEnvOwner {
             install_text_coders(&ctx)?;
             install_structured_clone(&ctx)?;
             host_crypto::install_host_crypto(&ctx)?;
+            host_wasm::install_host_wasm(&ctx)?;
             Ok::<_, Error>(())
         })
         .await?;

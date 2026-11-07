@@ -255,9 +255,9 @@ async function setup({imageId, ids}) {
   // NATIVE SMALLTALK BROWSING (Bead gzz). The class it browses is the ordinary
   // probe class `ensureSchema` already defines through Images' own `defineClass`,
   // so this lane needs no class-building helper of its own. It has no selectors
-  // (the portable runtime exports no method installer, Bead aov), which is
-  // exactly why the SELECTOR leg is proven in the JS lane and the CLASS-LOCATOR
-  // leg is proven here, natively, end to end.
+  // by construction: this fixture retains its narrow class-locator role.
+  // Native imported methods and replacement are exercised separately by
+  // native_application_parity against the real portable compiler/executor.
   const nativeBrowser = createNativeSmalltalkBrowser({adapter, presentationRegistry, compositor});
   const nativeClassRef = objectRef(imageId, classIdFor(ids.className));
   session.openNativeClass = async () => {

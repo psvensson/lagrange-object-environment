@@ -49,10 +49,9 @@ import {assertDataRepresentable} from '../src/compositor.js';
 // is not a grant, and a denied browse is the same answer whether or not the
 // class exists.
 //
-// LANE SCOPE (Bead aov): this runs in the JS lane only. Images'
-// portable-runtime exports the ADR 0087 browse seams but NOT the class-building
-// or Cuis-import helpers, so the native lane cannot construct either class. Its
-// coverage is the seam admission plus the checked-in SemanticUi fixture.
+// LANE SCOPE: this file runs in the JS lane. The admitted portable runtime
+// also supplies trusted installation/import; native application execution,
+// browsing and replacement are proven by hosts/linux/tests/native_application_parity.rs.
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_RUNTIME = resolve(HERE, '../../lagrange-images/src/runtime.js');
@@ -734,9 +733,9 @@ test('the method seam is no existence oracle, and its licensed distinction is ho
 // authorized method read — against the REAL Images runtime.
 //
 // The host here is the headless fake renderer with the REAL projector injected:
-// it projects on attach and emits the key IT REALIZED. That is the only lane
-// where a real Images authority rule, a real Compositor and a real intent path
-// meet — the native lane cannot install a selector at all (Bead aov).
+// it projects on attach and emits the key IT REALIZED. The native parity proof
+// separately exercises real Images authority, Compositor and GTK controls
+// against imported YAXO selectors.
 // ---------------------------------------------------------------------------
 
 // A bounded poll on the OBSERVABLE rather than a fixed sleep. For a positive
