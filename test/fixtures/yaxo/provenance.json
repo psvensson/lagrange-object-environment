@@ -1,0 +1,47 @@
+{
+  "imagesRevision": "9462476733e68195c5cd4a97dcba8ec23930f637",
+  "cuisCommit": "6bcee3f38ce037c9714b997ccd3b5b3ff62965c8",
+  "vmIdentity": "opensmalltalk-vm/202606270913/squeak.cog.spur_linux64x64/sha256:dff5dd4217820e971828e9459f235d0ab3a07aa02aea9004d0e4318391eb09ba",
+  "cuisImageIdentity": "cuis/6bcee3f38ce037c9714b997ccd3b5b3ff62965c8/Cuis7.9-8090.image/gitblob:523dc5e74b5b550922b56ff2406415c19700ee8e",
+  "packageIdentity": "cuis-package/YAXO/6bcee3f38ce037c9714b997ccd3b5b3ff62965c8/gitblob:67d670ed38cc136d88afdf7e0df5bf8bc6519087",
+  "scopeSource": "test/cuis-yaxo-native-import-real.test.js: M4_SCOPE_CLASSES and M4_APPLICATION_METHODS",
+  "scopeSourceSha256": "3901147620f5fbaf903bd5ff02f777690e4ee6982a0dfbe7ed9e23837e7c1049",
+  "licenseUrl": "https://github.com/Cuis-Smalltalk/Cuis-Smalltalk-Dev/blob/6bcee3f38ce037c9714b997ccd3b5b3ff62965c8/LICENSE",
+  "inputs": {
+    "image": {
+      "path": "cuis/Cuis7.9-8090.image",
+      "sha256": "8e85aa65e5bf58a8b6bb317c39b24ee9ae4aa45a0da1ba1e61696b09e25eeb4c",
+      "gitBlob": "523dc5e74b5b550922b56ff2406415c19700ee8e"
+    },
+    "changes": {
+      "path": "cuis/Cuis7.9-8090.changes",
+      "sha256": "a80f0232c336301863830a69647272aa15e84eeab3ea703dded2b25013556670",
+      "gitBlob": "8ecbf3783d053ffb8034702ac2e4b8e1381a9ab6"
+    },
+    "sources": {
+      "path": "cuis/Cuis7.8.sources",
+      "sha256": "30f1c5597cfaa2098352eb70e42864f57f6608de3f503bd81fb00475f2cfb2f8",
+      "gitBlob": "ec2f7f6abd5fc270d92e906cc407edd5c66e4295"
+    },
+    "package": {
+      "path": "cuis/YAXO.pck.st",
+      "sha256": "06a38229dcf8005e207b2cfa3162d71b8ff1c732442bb8d8c6112494b89c348a",
+      "gitBlob": "67d670ed38cc136d88afdf7e0df5bf8bc6519087"
+    },
+    "vmArchive": {
+      "path": "opensmalltalk-vm/vm.tar.gz",
+      "sha256": "dff5dd4217820e971828e9459f235d0ab3a07aa02aea9004d0e4318391eb09ba"
+    },
+    "vm": {
+      "path": "opensmalltalk-vm/sqcogspur64linuxht/lib/squeak/7.0-202606270913-64bit/squeak",
+      "sha256": "45be87faa8d0d495b791e08315615e155a3797f4c1e293f68939a6450b003049"
+    }
+  },
+  "output": {
+    "sha256": "9ff25bbdcf147c710bf6732945b26154a10db9f7f4d9c0bd6a31ac5ccc12f643",
+    "bytes": 127725,
+    "classes": 24,
+    "methods": 341,
+    "scopeSha256": "7ebebc59d872c9ed14ddf5d8cdb60f5e80649063a99c6809c2bbdbb93cec8a32"
+  }
+}

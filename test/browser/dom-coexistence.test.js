@@ -116,6 +116,40 @@ test('CI: the real navigator -> selection -> inspector loop drives through real 
   });
 });
 
+test('CI: inspector references continue navigation through actual DOM actions', {skip: !available && 'no Chrome available'}, async () => {
+  await withProofPage(async ({page}) => {
+    const result = await page.evaluate(async () => {
+      const S = await window.__lagrangeProof.openDomLoopSession();
+      const waitForSubject = async (id) => {
+        const deadline = Date.now() + 2000;
+        while (S.inspectorSubject() !== id && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        if (S.inspectorSubject() !== id) throw new Error('navigation did not reach ' + id);
+      };
+      try {
+        S.navigatorButtons()[0].click();
+        await waitForSubject('obj-b');
+        const labels = S.inspectorButtons().map((button) => button.textContent);
+        const intents = [];
+        S.onIntent((intent) => intents.push(intent));
+        S.inspectorButtons()[0].click();
+        await waitForSubject('obj-c');
+        return {labels, intents, subject: S.inspectorSubject(), selected: S.selected(),
+          focused: S.focused(), reads: S.navigationReads()};
+      } finally {
+        await S.destroyAll();
+      }
+    });
+    assert.deepEqual(result.labels, ['obj-c']);
+    assert.deepEqual(result.intents, [{kind: 'activate-item', key: 0}]);
+    assert.equal(result.subject, 'obj-c');
+    assert.equal(result.selected, 'obj-c');
+    assert.equal(result.focused, 'inspector-view');
+    assert.deepEqual(result.reads, ['obj-root', 'obj-b', 'obj-c']);
+  });
+});
+
 test('CI: the dispatch seam is INJECTED, not a hard-coded kind switch (sentinel realizer)', {skip: !available && 'no Chrome available'}, async () => {
   await withProofPage(async ({page}) => {
     const result = await page.evaluate(async () => {

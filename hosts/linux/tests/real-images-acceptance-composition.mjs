@@ -185,8 +185,12 @@ async function setup({imageId, ids}) {
     },
   }));
 
+  const navigationReads = [];
   const navigator = createObjectNavigator({
-    adapter,
+    adapter: {...adapter, readObject(options) {
+      navigationReads.push(options.objectId);
+      return adapter.readObject(options);
+    }},
     presentationRegistry,
     commandRegistry,
     referencesOfValue,
@@ -372,6 +376,7 @@ async function setup({imageId, ids}) {
     session.unsubscribeIntents = shell.bindIntents({
       adapter: intentAdapter,
       navigator: true,
+      inspectorNavigation: true,
       inspector: true,
       commandRouter,
       commandId: 'set-title',
@@ -461,6 +466,25 @@ async function setup({imageId, ids}) {
       tokenAdvanced: previousToken !== null && nextToken !== previousToken,
     };
   };
+
+  // E4's native lane proves generic inspector navigation over real Images.
+  // No YAXO import/execution is claimed by this portable composition.
+  session.prepareInspectorNavigation = async () => {
+    await shell.selectObject(ref(root.objectId), {
+      authority: authorities.read(root.objectId), readBlockId: ids.readBlockId,
+    });
+    return {
+      inspectorHandle: compositor.surfaceHandleForView(shell.inspectorViewId),
+      sourceObjectId: root.objectId, targetObjectId: primary.objectId,
+      readCount: navigationReads.length,
+    };
+  };
+  session.inspectorNavigationState = () => ({
+    subjectObjectId: compositor.liveView(shell.inspectorViewId).presentationDescriptor.subject.objectId,
+    selectedObjectId: selectionModel.selectedSubject()?.objectId ?? null,
+    focusedViewId: compositor.focusedView(),
+    reads: [...navigationReads],
+  });
 
   session.inspector = () => {
     const view = compositor.durableIntent().find((entry) => entry.viewId === 'inspector-view');

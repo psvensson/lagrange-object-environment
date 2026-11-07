@@ -22,7 +22,7 @@
     "puppeteer-core": "25.9.0"
   },
   "engines": {
-    "node": ">=22"
+    "node": "^22.13.0 || >=23.4.0"
   },
   "dependencies": {
     "@wasi-gfx/wasi-gfx-shim": "0.1.0"

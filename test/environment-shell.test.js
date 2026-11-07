@@ -752,6 +752,61 @@ const customPresentation = (labels, target) => ({
 });
 const VIEW = {kind: 'canvas', width: 64, height: 64};
 
+test('E4 inspector navigation is read-only, follows the current descriptor and survives reopening', async () => {
+  const records = {
+    'obj-root': {slots: {next: ref('obj-b')}},
+    'obj-b': {slots: {next: ref('obj-c')}},
+    'obj-c': {slots: {}},
+  };
+  const {shell, selectionModel, compositor, readCalls} = makeShell({records});
+  const {adapter, emit} = intentSeam();
+  const authority = {test: 'explicit authority'};
+  // Bind before admission. No CommandRouter or editing capability is needed.
+  const unsubscribe = shell.bindIntents({adapter, inspectorNavigation: true, authority});
+  await shell.openWorkspace(ref('obj-root'));
+  const firstHandle = compositor.surfaceHandleForView('inspector-view');
+  emit({kind: 'activate-item', key: 0}, firstHandle);
+  await settle();
+  assert.deepEqual(selectionModel.selectedSubject(), ref('obj-b'));
+  assert.equal(compositor.focusedView(), 'inspector-view');
+  emit({kind: 'activate-item', key: 0}, firstHandle);
+  await settle();
+  assert.deepEqual(selectionModel.selectedSubject(), ref('obj-c'), 'same key resolves against the new descriptor');
+  assert.deepEqual(readCalls.slice(1).map(({objectId}) => objectId), ['obj-b', 'obj-c']);
+  assert.ok(readCalls.slice(1).every((call) => call.authority === authority));
+
+  const current = {kind: 'inspector', subject: ref('obj-root'), parameters: {references: [ref('obj-b')]}};
+  await compositor.closeView('inspector-view');
+  await compositor.openView({viewId: 'inspector-view', viewDescriptor: VIEW, presentationDescriptor: current});
+  const secondHandle = compositor.surfaceHandleForView('inspector-view');
+  assert.notEqual(secondHandle, firstHandle);
+  const before = readCalls.length;
+  for (const key of [-1, 1, 0.5, '0']) emit({kind: 'activate-item', key}, secondHandle);
+  emit({kind: 'activate-item', key: 0}, firstHandle);
+  await settle();
+  assert.equal(readCalls.length, before, 'invalid keys and stale handles cause no read');
+  emit({kind: 'activate-item', key: 0}, secondHandle);
+  await settle();
+  assert.deepEqual(selectionModel.selectedSubject(), ref('obj-b'));
+  assert.equal(readCalls.length, before + 1);
+  unsubscribe();
+  await compositor.destroy();
+});
+
+test('E4 inspector navigation preserves custom activation and the separate edit binding contract', async () => {
+  const {shell} = makeShell();
+  const {adapter} = intentSeam();
+  const custom = {viewId: 'inspector-view', resolveItem: () => ref('custom')};
+  const unsubscribe = shell.bindIntents({adapter, inspectorNavigation: false, activationBindings: [custom]});
+  unsubscribe();
+  assert.throws(() => shell.bindIntents({
+    adapter, inspectorNavigation: true, activationBindings: [custom],
+  }), /activation bindings must be unique/);
+  assert.throws(() => shell.bindIntents({adapter, inspector: true}), /requires a CommandRouter/);
+  assert.throws(() => shell.bindIntents({adapter, inspector: true, inspectorNavigation: true}),
+    /requires a CommandRouter/);
+});
+
 test('P1/P2/P3/P7 reopen: a binding for logical view V survives close + re-open; H2 routes (both kinds) with the CURRENT descriptor and the emitted handle; stale H1 does nothing', async () => {
   const target1 = {kind: 'ref', imageId: 'other-image', objectId: 'obj-b'};
   const target2 = {kind: 'ref', imageId: 'other-image', objectId: 'obj-c'};

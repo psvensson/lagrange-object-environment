@@ -811,6 +811,8 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
   // `onIntent(handler)` seam that calls handler(intent, surfaceHandle)).
   //   navigator: true  -> the shell's activation binding for the navigator view
   //                       (reference-row indexing);
+  //   inspectorNavigation: true -> the same reference activation for the inspector,
+  //                       independent of editing; no CommandRouter required;
   //   inspector: true  -> the shell's internal edit binding for the inspector view
   //                       (requires commandRouter; the top-level commandId/
   //                       onEdited/onEditError apply to THIS binding only);
@@ -827,6 +829,7 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
     // the flag never shadows the injected ObjectNavigator (`navigator`) in scope.
     navigator: bindNavigator = false,
     inspector: bindInspector = false,
+    inspectorNavigation = false,
     activationBindings = [],
     editBindings = [],
     inputBindings = [],
@@ -861,6 +864,7 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
       activations.set(binding.viewId, binding);
     };
     if (bindNavigator) addActivation(Object.freeze({viewId: NAVIGATOR_VIEW_ID, resolveItem: resolveNavigatorItem, activateTarget: null}));
+    if (inspectorNavigation) addActivation(Object.freeze({viewId: INSPECTOR_VIEW_ID, resolveItem: resolveNavigatorItem, activateTarget: null}));
     for (const binding of activationBindings) addActivation(normalizeActivationBinding(binding));
     const edits = new Map();
     if (bindInspector || editBindings.length > 0) {

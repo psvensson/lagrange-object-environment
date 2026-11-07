@@ -94,7 +94,7 @@ src/index.js
   public exports
 ```
 
-Run with Node.js 22 or newer:
+Run with Node.js 22.13+ on the 22.x line, or 23.4+:
 
 ```sh
 npm test
@@ -108,3 +108,6 @@ npm test
 4. [Identity, authority and sharing](docs/security-and-sharing.md)
 5. [Roadmap](docs/roadmap.md)
 6. [Architecture decisions](docs/decisions/README.md)
+
+The real YAXO application proof uses the built-in SQLite module. See
+[test input provenance](test/fixtures/yaxo/README.md) for reproducible source export.
