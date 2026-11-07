@@ -199,27 +199,27 @@ steps therefore read:
     E2  a native method is inhabitable                       (done)
     E3  a native method is safely mutable                    (done)
     E4  a real imported application GRAPH is inhabitable    (done)
-    E5  real application STATE is usefully mutable
-    E6  the application survives RESTART and is re-inhabitable
+    E5  real application STATE is usefully mutable          (Node consumer proven)
+    E6  the application survives RESTART and is re-inhabitable (Node consumer proven)
 
 The sequencing remains serial. Images M4 completed the pinned YAXO application's native graph,
 Project-root discovery, mutation and durable restart proof in Images #290 (`2b667f2`). The
 Environment now admits that substrate at `caf72f2`; E4 can consume the real `application/root`
 Project member and navigate the application's own domain objects. Upstream M4 completion does not
-establish Environment E4, E5 or E6 acceptance: each still needs its own consumer proof.
+establish Environment E4, E5 or E6 acceptance: each requires its own consumer proof, recorded below.
 
 E4's consumer proof now executes that real parser from verified source input and navigates
 its Project root and native domain objects through ordinary inspector actions. The small
 production addition is opt-in inspector reference navigation, independent of editing.
 Project-only and root-only authority negatives and a complete attempted-read trace guard
 the boundary. Node carries real application execution; DOM and GTK carry the generic
-action route. E5 now supplies a declared scalar edit of the real parsed XML text through the ordinary Command and authorized mutation binding, with denied/stale/reread proofs in the Node consumer lane. Native E5 remains Bead `u4k`; E6 fresh-session recovery remains open. See `docs/architecture/application-state.md`.
+action route. E5 now supplies a declared scalar edit of the real parsed XML text through the ordinary Command and authorized mutation binding, with denied/stale/reread proofs in the Node consumer lane. E6 now proves fresh-process recovery of that edited graph from a durable SQLite-backed Images runtime and continued interaction under fresh authority. Native E5/E6 integration remains Bead `u4k`. See `docs/architecture/application-state.md`.
 
 E4's earlier import-workflow definition remains displaced. An import UI is separate work even
 though Images later shipped an authorized import operation (#306). Portable compilation and trusted install/import (#302) are admitted at `caf72f2`
 for native-host parity (sl1). The generic Wasmtime host facility supplies execution,
 while Images retains compiler, import and authority semantics. Human import UI,
-native application-state editing and durable recovery remain separate work.
+native application-state editing and native durable recovery remain separate work.
 
 Success: an existing Cuis application becomes ordinary native classes, methods and durable objects operated through the generic environment, with OpenSmalltalkVM retained only as explicit importer, provenance, oracle or deliberately bounded foreign-service machinery. Adding another language extends the environment rather than adding another IDE architecture.
 

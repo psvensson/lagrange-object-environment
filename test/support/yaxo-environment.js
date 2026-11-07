@@ -115,11 +115,18 @@ async function prepare(runtime, {editing = false} = {}) {
   return {document, documentElements, root, child, text};
 }
 
-async function openEnvironment(runtime, {editing = false} = {}) {
-  const adapter = createImageClientAdapter({...api, ...runtime});
+async function openEnvironment(runtime, {
+  editing = false, provision = true,
+  locator = {imageId: IMAGE, projectId: PROJECT, memberKey: MEMBER},
+  adapter = createImageClientAdapter({...api, ...runtime}),
+  renderer = createFakeRendererAdapter({projector: semanticUiForPresentation}),
+} = {}) {
+  assert.deepEqual(Object.keys(locator).sort(), ['imageId', 'memberKey', 'projectId']);
+  for (const value of Object.values(locator)) assert.ok(typeof value === 'string' && value.length > 0);
+  const {imageId, projectId, memberKey} = locator;
   // Existing trusted adapter bootstrap installs the ordinary read lane. Its
   // unused Probe schema does not manufacture any application instance.
-  await adapter.ensureSchema(IMAGE, {
+  if (provision) await adapter.ensureSchema(imageId, {
     shapeId: 'e4-probe-shape', className: 'E4Probe',
     interfaceId: 'e4-create-interface', bindingId: 'e4-create-binding', blockId: 'e4-create-block',
     mutationInterfaceId: 'e4-mutate-interface', mutationBindingId: 'e4-mutate-binding',
@@ -128,7 +135,7 @@ async function openEnvironment(runtime, {editing = false} = {}) {
     observationInterfaceId: 'e4-observe-interface', observationBindingId: 'e4-observe-binding',
     observationBlockId: 'e4-observe-block',
   });
-  const mutation = editing ? await adapter.bindTextSlotMutation({imageId: IMAGE, blockId: MUTATION}) : null;
+  const mutation = editing ? await adapter.bindTextSlotMutation({imageId, blockId: MUTATION}) : null;
   const commands = createCommandRegistry();
   if (mutation) commands.register(createTextSlotMutationCommand({id: EDIT, title: 'Edit text', mutation}));
   const attemptedReads = [];
@@ -148,8 +155,8 @@ async function openEnvironment(runtime, {editing = false} = {}) {
     adapter: recordingAdapter, presentationRegistry, commandRegistry: commands,
     referencesOfValue: api.referencesOfValue,
   });
-  const renderer = createFakeRendererAdapter({projector: semanticUiForPresentation});
   const compositor = createCompositor({rendererAdapter: renderer});
+  try {
   const selection = createSelectionModel();
   const shell = createEnvironmentShell({navigator, selectionModel: selection, compositor,
     writableSlots: mutation?.writableSlots ?? []});
@@ -164,14 +171,14 @@ async function openEnvironment(runtime, {editing = false} = {}) {
     principal: 'e4-reader',
     grants: [{operation, resource: api.objectResource(ref.imageId, ref.objectId)}],
   });
-  const projectAuthority = grantFor(api.objectRef(IMAGE, api.projectObjectId(PROJECT)));
-  const opened = await browser.open(createProjectSubject({imageId: IMAGE, projectId: PROJECT}), {
+  const projectAuthority = grantFor(api.objectRef(imageId, api.projectObjectId(projectId)));
+  const opened = await browser.open(createProjectSubject({imageId, projectId}), {
     authority: projectAuthority,
   });
   assert.equal(attemptedReads.length, 0, 'no application read before a Project action');
   const project = opened.presentationDescriptor.parameters.project;
-  const ordinal = project.members.findIndex(({key}) => key === MEMBER);
-  assert.ok(ordinal >= 0);
+  const ordinal = project.members.findIndex(({key}) => key === memberKey);
+  assert.ok(ordinal >= 0, 'requested Project member must exist');
   assert.equal(project.members[ordinal].role, 'application-root');
   const rootRef = project.members[ordinal].target;
   const descriptor = () => compositor.liveView(shell.inspectorViewId).presentationDescriptor;
@@ -260,6 +267,11 @@ async function openEnvironment(runtime, {editing = false} = {}) {
   return {compositor, renderer, shell, adapter, mutation, dispatches, edit, reread,
     descriptor, activateRoot, activateReference, projectAuthority, grantFor, rootRef,
     attemptedReads, expectedAttempts};
+  } catch (error) {
+    try { await compositor.destroy(); }
+    catch (cleanupError) { throw new AggregateError([error, cleanupError], 'failed open and resource cleanup'); }
+    throw error;
+  }
 }
 
 
