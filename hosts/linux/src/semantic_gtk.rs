@@ -89,12 +89,19 @@ impl Intent {
     }
 }
 
+type IntentSink = Rc<RefCell<Rc<dyn Fn(Intent)>>>;
+fn emit_intent(sink: &IntentSink, intent: Intent) {
+    let callback = sink.borrow().clone();
+    callback(intent); // no sink borrow is held across host code
+}
+
 /// A realized tool pane: the root GTK widget plus the recorded intents, the
 /// action buttons, and the editable-field entries (so a test can drive them).
 pub struct GtkRealization {
     pub root: gtk4::Box,
     /// Intents emitted by action activations + edit commits, in order.
     pub intents: Rc<RefCell<Vec<Intent>>>,
+    sink: IntentSink,
     /// One button per `action(key)` node, in document order.
     buttons: Rc<RefCell<Vec<(i64, gtk4::Button)>>>,
     /// One entry per editable `field(key)` node, in document order.
@@ -104,7 +111,21 @@ pub struct GtkRealization {
     inputs: Rc<RefCell<Vec<(i64, gtk4::TextView, gtk4::Button)>>>,
 }
 
+impl Drop for GtkRealization {
+    fn drop(&mut self) {
+        *self.sink.borrow_mut() = Rc::new(|_| {});
+        self.intents.borrow_mut().clear();
+    }
+}
+
 impl GtkRealization {
+    /// Host event delivery replaces the default inspection buffer. The host
+    /// owns queue capacity/order; this realizer emits only plain control intents.
+    pub fn set_intent_sink(&self, callback: Rc<dyn Fn(Intent)>) {
+        self.intents.borrow_mut().clear();
+        *self.sink.borrow_mut() = callback;
+    }
+
     /// Programmatically activate the action with the given descriptor-local
     /// key (the native analogue of a DOM button `.click()`). Returns the
     /// intent it emitted, or None if no such action exists.
@@ -227,6 +248,10 @@ fn collect_text(widget: &gtk4::Widget, out: &mut Vec<String>) {
 /// must have been called (once per process).
 pub fn realize(doc: &SemanticUi) -> GtkRealization {
     let intents = Rc::new(RefCell::new(Vec::new()));
+    let recorded = Rc::clone(&intents);
+    let sink: IntentSink = Rc::new(RefCell::new(Rc::new(move |intent| {
+        recorded.borrow_mut().push(intent)
+    })));
     let buttons = Rc::new(RefCell::new(Vec::new()));
     let entries = Rc::new(RefCell::new(Vec::new()));
     let inputs = Rc::new(RefCell::new(Vec::new()));
@@ -235,10 +260,11 @@ pub fn realize(doc: &SemanticUi) -> GtkRealization {
     if let Some(title) = group_title(&doc.root) {
         root.set_tooltip_text(Some(&title));
     }
-    render_children(&doc.root, &root, &intents, &buttons, &entries, &inputs);
+    render_children(&doc.root, &root, &sink, &buttons, &entries, &inputs);
     GtkRealization {
         root,
         intents,
+        sink,
         buttons,
         entries,
         inputs,
@@ -255,14 +281,14 @@ fn group_title(node: &Node) -> Option<String> {
 fn render_children(
     node: &Node,
     container: &gtk4::Box,
-    intents: &Rc<RefCell<Vec<Intent>>>,
+    sink: &IntentSink,
     buttons: &Rc<RefCell<Vec<(i64, gtk4::Button)>>>,
     entries: &Rc<RefCell<Vec<(i64, gtk4::Entry)>>>,
     inputs: &Rc<RefCell<Vec<(i64, gtk4::TextView, gtk4::Button)>>>,
 ) {
     if let Node::Group { children, .. } = node {
         for child in children {
-            render_node(child, container, intents, buttons, entries, inputs);
+            render_node(child, container, sink, buttons, entries, inputs);
         }
     }
 }
@@ -270,7 +296,7 @@ fn render_children(
 fn render_node(
     node: &Node,
     container: &gtk4::Box,
-    intents: &Rc<RefCell<Vec<Intent>>>,
+    sink: &IntentSink,
     buttons: &Rc<RefCell<Vec<(i64, gtk4::Button)>>>,
     entries: &Rc<RefCell<Vec<(i64, gtk4::Entry)>>>,
     inputs: &Rc<RefCell<Vec<(i64, gtk4::TextView, gtk4::Button)>>>,
@@ -286,7 +312,12 @@ fn render_node(
             }
             container.append(&label);
         }
-        Node::Field { label, text, key, editable } => {
+        Node::Field {
+            label,
+            text,
+            key,
+            editable,
+        } => {
             let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
             row.set_widget_name("lagrange-tool-field");
             let key_label = gtk4::Label::new(Some(label));
@@ -300,11 +331,9 @@ fn render_node(
                 let entry = gtk4::Entry::new();
                 entry.set_text(text);
                 entry.set_widget_name("lagrange-tool-field-input");
-                let intents = Rc::clone(intents);
+                let sink = Rc::clone(sink);
                 entry.connect_activate(move |e| {
-                    intents
-                        .borrow_mut()
-                        .push(Intent::edit_field(field_key, e.text().to_string()));
+                    emit_intent(&sink, Intent::edit_field(field_key, e.text().to_string()));
                 });
                 entries.borrow_mut().push((field_key, entry.clone()));
                 row.append(&entry);
@@ -315,7 +344,12 @@ fn render_node(
             }
             container.append(&row);
         }
-        Node::Input { key, label, value_kind: _, submit_label } => {
+        Node::Input {
+            key,
+            label,
+            value_kind: _,
+            submit_label,
+        } => {
             // A TRANSIENT text argument. Deliberately NOT the editable-field
             // widget: a GtkEntry is single-line by construction, which would
             // silently make a multiline replacement source impossible, and would
@@ -341,20 +375,20 @@ fn render_node(
             let submit = gtk4::Button::with_label(submit_label);
             submit.set_widget_name("lagrange-tool-input-submit");
             let input_key = *key;
-            let intents_for_submit = Rc::clone(intents);
+            let sink_for_submit = Rc::clone(sink);
             let view_for_submit = view.clone();
             submit.connect_clicked(move |_| {
                 let buffer = view_for_submit.buffer();
                 let (start, end) = buffer.bounds();
                 // include_hidden_chars = true: the full raw string, newlines kept.
                 let text = buffer.text(&start, &end, true).to_string();
-                intents_for_submit
-                    .borrow_mut()
-                    .push(Intent::submit_input(input_key, text));
+                emit_intent(&sink_for_submit, Intent::submit_input(input_key, text));
             });
             row.append(&submit);
 
-            inputs.borrow_mut().push((input_key, view.clone(), submit.clone()));
+            inputs
+                .borrow_mut()
+                .push((input_key, view.clone(), submit.clone()));
             container.append(&row);
         }
         Node::Collection { items, .. } => {
@@ -371,15 +405,15 @@ fn render_node(
                 match item {
                     Node::Action { key, label } => {
                         let button = gtk4::Button::with_label(label);
-                        let intents = Rc::clone(intents);
+                        let sink = Rc::clone(sink);
                         let key = *key;
                         button.connect_clicked(move |_| {
-                            intents.borrow_mut().push(Intent::activate_item(key));
+                            emit_intent(&sink, Intent::activate_item(key));
                         });
                         buttons.borrow_mut().push((key, button.clone()));
                         list.append(&button);
                     }
-                    other => render_node(other, &list, intents, buttons, entries, inputs),
+                    other => render_node(other, &list, sink, buttons, entries, inputs),
                 }
             }
             container.append(&list);
@@ -387,7 +421,7 @@ fn render_node(
         Node::Group { children, .. } => {
             let nested = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
             for child in children {
-                render_node(child, &nested, intents, buttons, entries, inputs);
+                render_node(child, &nested, sink, buttons, entries, inputs);
             }
             container.append(&nested);
         }

@@ -115,14 +115,20 @@ impl RendererPortHost {
     /// Called repeatedly by the GTK thread's loop (test pump or the client's
     /// main loop). No QuickJS contact happens here.
     pub fn pump(&mut self) -> usize {
+        let n = self.pump_ops(usize::MAX);
+        while gtk4::glib::MainContext::default().iteration(false) {}
+        n
+    }
+
+    /// Bounded operation pump for a real GLib callback. Never iterates/reenters
+    /// the main context while its caller holds the host's mutable borrow.
+    pub fn pump_ops(&mut self, limit: usize) -> usize {
         let mut n = 0;
-        while let Ok(op) = self.rx.try_recv() {
+        while n < limit {
+            let Ok(op) = self.rx.try_recv() else { break; };
             self.execute(op);
             n += 1;
         }
-        // Iterate the GTK main context so realization/intents advance on this
-        // thread between ops.
-        while gtk4::glib::MainContext::default().iteration(false) {}
         n
     }
 

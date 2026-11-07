@@ -28,9 +28,11 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use gtk4::prelude::*;
 use serde_json::Value;
 
 use crate::projector::project;
@@ -47,8 +49,11 @@ use crate::{GlbHost, GlbInstance};
 /// visible, deliberate change — and there is none.
 pub trait RendererAdapterOps {
     fn create_surface(&mut self, view_descriptor: &Value) -> Result<String, String>;
-    fn attach_presentation(&mut self, handle: &str, presentation_descriptor: &Value)
-        -> Result<(), String>;
+    fn attach_presentation(
+        &mut self,
+        handle: &str,
+        presentation_descriptor: &Value,
+    ) -> Result<(), String>;
     fn detach_presentation(&mut self, handle: &str) -> Result<(), String>;
     fn resize(&mut self, handle: &str, width: u32, height: u32) -> Result<(), String>;
     fn destroy_surface(&mut self, handle: &str) -> Result<(), String>;
@@ -147,6 +152,34 @@ struct SurfaceEntry {
     width: u32,
     height: u32,
     realization: Option<Realization>,
+    epoch: u64,
+    container: Option<gtk4::Box>,
+    mount: Option<gtk4::Box>,
+}
+
+/// Native event lifetime only: no reference, descriptor or authority crosses.
+#[derive(Clone, Debug)]
+pub struct RealizedIntent {
+    pub surface_handle: String,
+    pub epoch: u64,
+    pub intent: Intent,
+}
+
+impl SurfaceEntry {
+    fn clear_realization(&mut self) {
+        if let Some(Realization::Gtk { realization, .. }) = &self.realization {
+            realization.intents.borrow_mut().clear();
+            if let Some(container) = &self.container {
+                container.remove(&realization.root);
+            }
+        }
+        self.realization = None;
+    }
+    fn unmount(&mut self) {
+        if let (Some(parent), Some(container)) = (self.mount.take(), &self.container) {
+            parent.remove(container);
+        }
+    }
 }
 
 /// The native Linux RendererAdapter. ONE surface map behind ONE adapter; a
@@ -156,6 +189,7 @@ pub struct LinuxRendererAdapter {
     glb_host: Arc<GlbHost>,
     glb_runner: GlbRunner,
     surfaces: HashMap<String, SurfaceEntry>,
+    intent_sink: Option<Rc<dyn Fn(RealizedIntent)>>,
 }
 
 impl LinuxRendererAdapter {
@@ -164,22 +198,64 @@ impl LinuxRendererAdapter {
             glb_host: Arc::new(GlbHost::new()),
             glb_runner,
             surfaces: HashMap::new(),
+            intent_sink: None,
         }
     }
 
     fn require_live(&self, handle: &str, method: &str) -> Result<&SurfaceEntry, String> {
-        self.surfaces
-            .get(handle)
-            .ok_or_else(|| format!("linux renderer: {method} on unknown/destroyed surface {handle}"))
+        self.surfaces.get(handle).ok_or_else(|| {
+            format!("linux renderer: {method} on unknown/destroyed surface {handle}")
+        })
     }
 
-    fn require_live_mut(&mut self, handle: &str, method: &str) -> Result<&mut SurfaceEntry, String> {
-        self.surfaces
-            .get_mut(handle)
-            .ok_or_else(|| format!("linux renderer: {method} on unknown/destroyed surface {handle}"))
+    fn require_live_mut(
+        &mut self,
+        handle: &str,
+        method: &str,
+    ) -> Result<&mut SurfaceEntry, String> {
+        self.surfaces.get_mut(handle).ok_or_else(|| {
+            format!("linux renderer: {method} on unknown/destroyed surface {handle}")
+        })
     }
 
     // -- HOST-SIDE SEAMS (NOT contract ops) ---------------------------------
+
+    /// Stable surface container; replacing a presentation changes its child.
+    pub fn mount_gtk_surface(&mut self, handle: &str, parent: &gtk4::Box) -> Result<(), String> {
+        let entry = self.require_live_mut(handle, "mount")?;
+        let container = entry
+            .container
+            .as_ref()
+            .ok_or("surface has no GTK realization")?;
+        if entry.mount.as_ref() == Some(parent) {
+            return Ok(());
+        }
+        if entry.mount.is_some() {
+            return Err("surface is already mounted".into());
+        }
+        parent.append(container);
+        entry.mount = Some(parent.clone());
+        Ok(())
+    }
+
+    pub fn realization_is_current(&self, event: &RealizedIntent) -> bool {
+        self.surfaces
+            .get(&event.surface_handle)
+            .is_some_and(|entry| {
+                entry.epoch == event.epoch
+                    && matches!(entry.realization, Some(Realization::Gtk { .. }))
+            })
+    }
+
+    /// Configure native event delivery before creating surfaces. The adapter
+    /// captures realization identity at emission; the composition owns queueing.
+    pub fn set_intent_sink(&mut self, sink: Rc<dyn Fn(RealizedIntent)>) {
+        assert!(
+            self.surfaces.is_empty(),
+            "configure intent sink before realization"
+        );
+        self.intent_sink = Some(sink);
+    }
 
     /// Host-side inspection seam (the native analogue of the browser's
     /// `readRenderedPixels`; NOT a contract op): a `glb` handle -> the latest
@@ -229,7 +305,12 @@ impl LinuxRendererAdapter {
     /// it (Enter/activate), returning the emitted `{kind:'edit-field', key,
     /// text}` intent. Returns None for a non-GTK handle, a stale key, or a
     /// read-only field.
-    pub fn edit_gtk_field(&self, handle: &str, key: i64, text: &str) -> Result<Option<Intent>, String> {
+    pub fn edit_gtk_field(
+        &self,
+        handle: &str,
+        key: i64,
+        text: &str,
+    ) -> Result<Option<Intent>, String> {
         let entry = self.require_live(handle, "edit_gtk_field")?;
         Ok(match &entry.realization {
             Some(Realization::Gtk { realization, .. }) => realization.edit_field(key, text),
@@ -239,7 +320,12 @@ impl LinuxRendererAdapter {
 
     /// Type into the current GTK input and activate its submit control. This is
     /// a host-side intent seam, not a RendererAdapter contract operation.
-    pub fn submit_gtk_input(&self, handle: &str, key: i64, text: &str) -> Result<Option<Intent>, String> {
+    pub fn submit_gtk_input(
+        &self,
+        handle: &str,
+        key: i64,
+        text: &str,
+    ) -> Result<Option<Intent>, String> {
         let entry = self.require_live(handle, "submit_gtk_input")?;
         Ok(match &entry.realization {
             Some(Realization::Gtk { realization, .. }) => realization.submit_input(key, text),
@@ -357,6 +443,9 @@ impl RendererAdapterOps for LinuxRendererAdapter {
                 width,
                 height,
                 realization: None,
+                epoch: 0,
+                container: None,
+                mount: None,
             },
         );
         Ok(handle)
@@ -378,7 +467,7 @@ impl RendererAdapterOps for LinuxRendererAdapter {
                     .to_string(),
             );
         }
-        let (width, height) = {
+        let (width, height, epoch) = {
             let entry = self.require_live(handle, "attachPresentation")?;
             if entry.realization.is_some() {
                 return Err(
@@ -386,7 +475,14 @@ impl RendererAdapterOps for LinuxRendererAdapter {
                         .to_string(),
                 );
             }
-            (entry.width, entry.height)
+            (
+                entry.width,
+                entry.height,
+                entry
+                    .epoch
+                    .checked_add(1)
+                    .ok_or("realization identity exhausted")?,
+            )
         };
 
         // Kind -> native realizer dispatch (the native analogue of the
@@ -396,8 +492,19 @@ impl RendererAdapterOps for LinuxRendererAdapter {
         let realization = if is_tool_kind(kind) {
             let doc = project(presentation_descriptor)
                 .map_err(|e| format!("linux renderer: project({kind}): {e}"))?;
+            let realization = realize(&doc);
+            if let Some(sink) = self.intent_sink.clone() {
+                let handle = handle.to_string();
+                realization.set_intent_sink(Rc::new(move |intent| {
+                    sink(RealizedIntent {
+                        surface_handle: handle.clone(),
+                        epoch,
+                        intent,
+                    })
+                }));
+            }
             Realization::Gtk {
-                realization: realize(&doc),
+                realization,
                 descriptor: presentation_descriptor.clone(),
             }
         } else if kind == "glb" {
@@ -414,9 +521,8 @@ impl RendererAdapterOps for LinuxRendererAdapter {
                     let b64 = bytes_val.as_str().ok_or_else(|| {
                         format!("linux renderer: glb asset {name:?} must be a base64 string")
                     })?;
-                    let bytes = linux_adapter_base64::decode(b64).map_err(|e| {
-                        format!("linux renderer: glb asset {name:?} base64: {e}")
-                    })?;
+                    let bytes = linux_adapter_base64::decode(b64)
+                        .map_err(|e| format!("linux renderer: glb asset {name:?} base64: {e}"))?;
                     allowlist.insert(name.clone(), bytes);
                 }
             }
@@ -436,6 +542,16 @@ impl RendererAdapterOps for LinuxRendererAdapter {
         };
 
         let entry = self.require_live_mut(handle, "attachPresentation")?;
+        entry.epoch = epoch;
+        if let Realization::Gtk { realization, .. } = &realization {
+            let container = entry.container.get_or_insert_with(|| {
+                let root = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+                root.set_hexpand(true);
+                root.set_vexpand(true);
+                root
+            });
+            container.append(&realization.root);
+        }
         entry.realization = Some(realization);
         Ok(())
     }
@@ -445,7 +561,7 @@ impl RendererAdapterOps for LinuxRendererAdapter {
         // Dropping the realization tears it down: a GTK widget tree is dropped
         // (GTK teardown); a GlbInstance's Drop aborts its start task, ending
         // the Component. The surface (slot + size) stays.
-        entry.realization = None;
+        entry.clear_realization();
         Ok(())
     }
 
@@ -460,12 +576,12 @@ impl RendererAdapterOps for LinuxRendererAdapter {
     }
 
     fn destroy_surface(&mut self, handle: &str) -> Result<(), String> {
-        let entry = self
-            .surfaces
-            .remove(handle)
-            .ok_or_else(|| format!("linux renderer: destroySurface on unknown/destroyed surface {handle}"))?;
+        let mut entry = self.surfaces.remove(handle).ok_or_else(|| {
+            format!("linux renderer: destroySurface on unknown/destroyed surface {handle}")
+        })?;
         // Drop the realization (GTK widget tree / GlbInstance) before removing.
-        drop(entry.realization);
+        entry.clear_realization();
+        entry.unmount();
         Ok(())
     }
 
@@ -477,8 +593,9 @@ impl RendererAdapterOps for LinuxRendererAdapter {
         // constructing a fresh one (the Compositor owns Session lifecycle; the
         // recreated composition mints FRESH handles, never reusing a destroyed
         // one — handles are process-unique, see create_surface).
-        for (_, entry) in self.surfaces.drain() {
-            drop(entry.realization);
+        for (_, mut entry) in self.surfaces.drain() {
+            entry.clear_realization();
+            entry.unmount();
         }
         Ok(())
     }

@@ -1006,7 +1006,7 @@ function activationHarness({resolveItem, activateTarget, onActivateError, record
   const handlers = new Set();
   const adapter = {onIntent: (fn) => { handlers.add(fn); return () => handlers.delete(fn); }};
   const emit = (surfaceHandle, key = 0) => {
-    for (const fn of handlers) fn({kind: 'activate-item', key}, surfaceHandle);
+    return Promise.all([...handlers].map((fn) => fn({kind: 'activate-item', key}, surfaceHandle)));
   };
   return {...made, adapter, emit, bind: (extra = {}) => made.shell.bindIntents({
     adapter,
@@ -1015,6 +1015,38 @@ function activationHarness({resolveItem, activateTarget, onActivateError, record
     ...extra,
   })};
 }
+
+test('native activation callers can await completion and one failure report', async () => {
+  for (const fails of [false, true]) {
+    const entered = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    const failure = new Error('activation failed');
+    const errors = [];
+    let completed = false;
+    const h = activationHarness({
+      resolveItem: () => ({kind: 'consumer-target'}),
+      activateTarget: async () => {
+        entered.resolve();
+        await release.promise;
+        if (fails) throw failure;
+        completed = true;
+      },
+      onActivateError: (error) => { errors.push(error); throw new Error('reporter failed'); },
+    });
+    await h.shell.openWorkspace(ref('obj-root'), {});
+    h.bind();
+    let settled = false;
+    const pending = h.emit(h.compositor.surfaceHandleForView('navigator-view')).then(() => { settled = true; });
+    await entered.promise;
+    await Promise.resolve();
+    assert.equal(settled, false, 'returned completion stays pending through activation');
+    release.resolve();
+    await pending;
+    assert.equal(completed, !fails);
+    assert.deepEqual(errors, fails ? [failure] : []);
+    await h.compositor.destroy();
+  }
+});
 
 
 test('gzz: an ObjectRef still takes the selection path, unchanged', async () => {

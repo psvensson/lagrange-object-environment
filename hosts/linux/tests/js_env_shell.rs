@@ -113,6 +113,38 @@ return { log, afterFirst, log2 };
     actor.shutdown().await;
 }
 
+/// Cancellation preserves the first exact reason before notifying listeners.
+#[tokio::test]
+async fn abort_signal_reason_identity_and_default() {
+    let actor = JsEnvActor::spawn(EmbeddedLoader::new()).unwrap();
+    let json = actor.eval_async(r#"
+const controller = new AbortController();
+const initial = controller.signal.reason === undefined;
+const first = {opaque: 'reason'};
+let seen = false;
+controller.signal.addEventListener('abort', () => {
+  controller.abort('reentrant replacement');
+  seen = controller.signal.reason === first;
+});
+controller.abort(first);
+controller.abort('replacement');
+try { controller.signal.reason = 'assignment'; } catch {}
+const preserved = controller.signal.reason === first;
+const explicit = [null, false, 0].every(value => {
+  const c = new AbortController(); c.abort(value); return c.signal.reason === value;
+});
+const omitted = new AbortController(); omitted.abort();
+const undef = new AbortController(); undef.abort(undefined);
+return {initial, seen, preserved, explicit, defaults:
+  [omitted, undef].every(c => c.signal.reason instanceof Error && c.signal.reason.name === 'AbortError')};
+"#).await.unwrap();
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    for key in ["initial", "seen", "preserved", "explicit", "defaults"] {
+        assert_eq!(value[key], true, "{key}: {value}");
+    }
+    assert_eq!(actor.shutdown().await, lagrange_host_linux::js_env::actor::ShutdownOutcome::Clean);
+}
+
 /// A guest setTimeout fires AUTOMATICALLY through the actor's command-loop pump
 /// — with NO manual `__jsenv_fire_due` call. This is the 3B correction: the
 /// actor's loop wakes at the next timer's due time and fires it (image-observation

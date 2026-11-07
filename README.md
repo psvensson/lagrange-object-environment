@@ -16,6 +16,16 @@ image objects -> presentations -> commands -> authorized image operations
 
 A rendered thing retains the identity of the object it presents. The same object may have many presentations: a list row, source fragment, inspector, graph node, topology view or domain-specific editor. Operations are commands on semantic objects rather than arbitrary widget callbacks.
 
+## Native viewer
+
+The Linux executable can open a Project and inspect its members through the
+[authorized read service](docs/decisions/0017-authorized-read-service.md). It uses
+the ordinary Environment core and native GTK controls, with explicit refresh and
+no desktop Node process. See [build and launch instructions](hosts/linux/README.md)
+and the [current scope](docs/architecture/native-cluster-viewer.md). Service
+bootstrap, authentication and actual cluster acceptance are separate from the
+native transport/window proofs.
+
 ## System boundary
 
 ```text

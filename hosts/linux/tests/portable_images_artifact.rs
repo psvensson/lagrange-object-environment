@@ -40,43 +40,52 @@ fn embedded_portable_runtime_artifact_is_the_pinned_canonical_material() {
     );
 }
 
-/// ONE Images revision, two consumers: the vendored artifact (native lane) and
-/// the CI sibling checkout (JS real-runtime integration lane) must agree, and
+/// ONE Images revision, three consumers: the vendored artifact (native lane) and
+/// both CI sibling checkouts (JS integration and real native cluster) must agree, and
 /// `PORTABLE_RUNTIME_SOURCE_REVISION` is the authoritative value. A bump that
 /// moves one without the other is a hard failure here, never a silent drift.
 #[test]
 fn ci_sibling_checkout_pins_the_same_images_revision_as_the_artifact() {
-    let workflow = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.github/workflows/ci.yml");
-    let text = std::fs::read_to_string(&workflow)
-        .unwrap_or_else(|e| panic!("the CI workflow must be readable at {}: {e}", workflow.display()));
-    // Exactly ONE Images checkout block may exist; a second (with its own ref)
-    // would otherwise be invisible to the anchor below.
-    assert_eq!(
-        text.matches("repository: psvensson/lagrange-images").count(),
-        1,
-        "ci.yml must check out psvensson/lagrange-images exactly once"
-    );
-    // Anchor on the sibling-checkout block, then take its `ref:` line. NOTE: the
-    // key order `repository:` -> `ref:` -> `path:` is load-bearing for this
-    // parse (YAML itself does not require it); a reordering fails CLOSED here.
-    let block_start = text
-        .find("repository: psvensson/lagrange-images")
-        .expect("ci.yml must check out the pinned psvensson/lagrange-images sibling");
-    let refs: Vec<&str> = text[block_start..]
-        .lines()
-        .take_while(|line| !line.trim_start().starts_with("path:"))
-        .filter_map(|line| line.trim().strip_prefix("ref:"))
-        .map(str::trim)
-        .collect();
-    assert_eq!(
-        refs.len(),
-        1,
-        "exactly one `ref:` must follow the lagrange-images checkout block, found {refs:?}"
-    );
-    assert_eq!(
-        refs[0], PORTABLE_RUNTIME_SOURCE_REVISION,
-        "the JS lane's sibling checkout (src/runtime.js) and the native lane's vendored artifact (src/portable-runtime.js) must consume ONE Images revision: PORTABLE_RUNTIME_SOURCE_REVISION is authoritative"
-    );
+    for name in ["ci.yml", "native-cluster.yml"] {
+        let workflow = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.github/workflows")
+            .join(name);
+        let text = std::fs::read_to_string(&workflow).unwrap_or_else(|e| {
+            panic!(
+                "the CI workflow must be readable at {}: {e}",
+                workflow.display()
+            )
+        });
+        // Exactly ONE Images checkout block may exist; a second (with its own ref)
+        // would otherwise be invisible to the anchor below.
+        assert_eq!(
+            text.matches("repository: psvensson/lagrange-images")
+                .count(),
+            1,
+            "ci.yml must check out psvensson/lagrange-images exactly once"
+        );
+        // Anchor on the sibling-checkout block, then take its `ref:` line. NOTE: the
+        // key order `repository:` -> `ref:` -> `path:` is load-bearing for this
+        // parse (YAML itself does not require it); a reordering fails CLOSED here.
+        let block_start = text
+            .find("repository: psvensson/lagrange-images")
+            .expect("ci.yml must check out the pinned psvensson/lagrange-images sibling");
+        let refs: Vec<&str> = text[block_start..]
+            .lines()
+            .take_while(|line| !line.trim_start().starts_with("path:"))
+            .filter_map(|line| line.trim().strip_prefix("ref:"))
+            .map(str::trim)
+            .collect();
+        assert_eq!(
+            refs.len(),
+            1,
+            "exactly one `ref:` must follow the lagrange-images checkout block, found {refs:?}"
+        );
+        assert_eq!(
+            refs[0], PORTABLE_RUNTIME_SOURCE_REVISION,
+            "the JS lane's sibling checkout (src/runtime.js) and the native lane's vendored artifact (src/portable-runtime.js) must consume ONE Images revision: PORTABLE_RUNTIME_SOURCE_REVISION is authoritative"
+        );
+    }
 }
 
 #[test]
@@ -426,7 +435,10 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
     // owner, on the same rules as the two seam groups above.
     assert_eq!(
         report["consumedMethodPositionAuthorityNames"],
-        serde_json::json!(["SMALLTALK_METHOD_READ_OPERATION", "smalltalkMethodPositionResource"])
+        serde_json::json!([
+            "SMALLTALK_METHOD_READ_OPERATION",
+            "smalltalkMethodPositionResource"
+        ])
     );
     assert_eq!(
         report["missingEnvironmentConstants"],

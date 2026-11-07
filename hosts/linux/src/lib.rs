@@ -45,6 +45,8 @@ pub mod semantic_ui;
 // precedent.
 pub mod images_composition;
 pub mod js_env;
+pub mod image_read_transport;
+pub mod native_viewer;
 
 use std::collections::HashMap;
 use std::future::Future;

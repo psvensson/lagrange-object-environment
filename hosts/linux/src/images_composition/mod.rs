@@ -10,6 +10,7 @@
 //! of re-deriving it, and so it is reviewable as the module it is.
 
 pub mod portable_artifact;
+pub mod public_entry_loader;
 
 /// The guest bootstrap that adapts the generic host crypto primitives to the
 /// `lagrange-images` crypto-provider contract and installs them through the

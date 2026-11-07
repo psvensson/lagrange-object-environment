@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 const ARTIFACT_COMPOSITION_FILES: &[&str] = &[
     "images_composition/mod.rs",
     "images_composition/portable_artifact.rs",
+    "images_composition/public_entry_loader.rs",
+    "native_viewer/mod.rs",
 ];
 
 const FORBIDDEN_IN_ARTIFACT_COMPOSITION: &[&str] = &[
@@ -173,6 +175,11 @@ fn production_src_has_no_node_or_subprocess_dependency() {
         let text = fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("structural guard: cannot read {}: {e}", path.display()));
         for (line_no, line) in text.lines().enumerate() {
+            // The standalone native shutdown ceiling exits THIS process. This
+            // exact statement grants no subprocess/Command/import exception.
+            if file == Path::new("native_viewer/cli.rs") && line.trim() == "std::process::exit(1);" {
+                continue;
+            }
             for needle in FORBIDDEN_NEEDLES {
                 if line.contains(needle) {
                     violations.push(format!(
