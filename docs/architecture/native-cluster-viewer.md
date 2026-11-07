@@ -52,3 +52,7 @@ Bead `8dh`'s separate real-cluster acceptance must use the pinned published Lagr
 package, a separately launched trusted service deployment, independently observed
 source values/history, and the same production native assembly. No mock fallback
 may be reported as that acceptance.
+
+The first real deployment attempt is currently blocked in the published Lagrange
+package before image creation. See [the acceptance record](native-cluster-acceptance.md)
+for the exact failure, owner, pins, and remaining gate.

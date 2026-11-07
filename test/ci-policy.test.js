@@ -25,6 +25,23 @@ const BROWSER_DIR = join(REPO_ROOT, 'test', 'browser');
 const MANUAL_PROOF = 'browser-proof.canvas.manual.test.js'; // real display, not CI
 const BROWSER_STEP = '      - name: Browser WebGPU proof';
 
+test('ci policy: native cluster acceptance is a separate bounded required job using the published lock', () => {
+  const workflow = readFileSync(join(REPO_ROOT, '.github/workflows/native-cluster.yml'), 'utf8').split('\n');
+  const job = windowOf(workflow, (line) => line === '  native-cluster:', /^  \S/, 'native cluster job');
+  exactlyOneTimeout(job, 4, 'native cluster job', 30);
+  const proof = windowOf(workflow, (line) => line.includes('- name: Native executable and GTK actions'), /^      - /, 'real native proof');
+  exactlyOneTimeout(proof, 8, 'real native proof', 10);
+  assert(proof.some((line) => line.includes('node test/native-cluster/run.js')));
+  assert(!workflow.some((line) => isCode(line) && /continue-on-error|^\s+if:/.test(line)), 'live gate cannot silently skip or tolerate failure');
+  assert(workflow.some((line) => line.includes('run: npm ci')));
+  assert(workflow.some((line) => line.includes('--test native_cluster --no-run')));
+  const lock = JSON.parse(readFileSync(join(REPO_ROOT, 'examples/native-cluster/package-lock.json')));
+  const dependency = lock.packages['node_modules/lagrange-server'];
+  assert.equal(dependency.version, lock.packages[''].dependencies['lagrange-server']);
+  assert.match(dependency.resolved, /^https:\/\/registry.npmjs.org\/lagrange-server\/-\/lagrange-server-/);
+  assert.match(dependency.integrity, /^sha512-/);
+});
+
 const isCode = (line) => !line.trimStart().startsWith('#');
 
 // The window of a block: from its anchor (matched exactly once) to the next

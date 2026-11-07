@@ -1,0 +1,14 @@
+{
+  "status": "blocked-before-image-create",
+  "baseCommit": "bf37609",
+  "attemptSource": "N3 was uncommitted; logs are first-failure evidence, not final-head acceptance. Lifecycle and revocation-proof corrections followed without another cluster attempt.",
+  "lagrangeVersion": "0.4.0",
+  "lagrangeSource": "07206ba1c8bb396f4eb097a753915bb34580d824",
+  "imagesSource": "caf72f26d6a28a6901aea876a49d22311e29cf21",
+  "setupDeadlineMs": 160000,
+  "totalDeadlineMs": 500000,
+  "sha256": {
+    "published-startup-failure.txt": "93e0de5f63e7c7e0b396f6476eafcd3c38f946c4800431a83e7094bb43d185de",
+    "provenance-diagnostic.txt": "def98d6f54941f48ae224637c0361aa957ea9127a08c51cc793e2df35a8b942b"
+  }
+}

@@ -41,6 +41,11 @@ SSO remain outside this viewer. See
 [the viewer architecture](../../docs/architecture/native-cluster-viewer.md) and
 [the read-service decision](../../docs/decisions/0017-authorized-read-service.md).
 
+Real-cluster acceptance is currently blocked before image creation by the
+published Lagrange package's build-provenance defect. The native viewer has
+passed controlled-service tests; see [the live acceptance record](../../docs/architecture/native-cluster-acceptance.md)
+before treating it as an accepted cluster client.
+
 The default graphics mode runs the exact checked-in GLB renderer Component core
 binary (`test/browser/components/glb/glb.component.wasm`) under Wasmtime with
 native `wasi:webgpu`, `wasi-gfx:surface` and `lagrange:assets/provider` imports.

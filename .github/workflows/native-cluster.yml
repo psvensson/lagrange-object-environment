@@ -1,0 +1,57 @@
+name: Native cluster
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  native-cluster:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: lagrange-object-environment
+      - uses: actions/checkout@v5
+        with:
+          repository: psvensson/lagrange-images
+          ref: caf72f26d6a28a6901aea876a49d22311e29cf21
+          path: lagrange-images
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.98.0'
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libudev-dev \
+            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libssl-dev mesa-vulkan-drivers libgl1-mesa-dri \
+            libgtk-4-dev xvfb
+      - name: Install locked published Lagrange deployment
+        working-directory: lagrange-object-environment/examples/native-cluster
+        run: npm ci --no-audit --no-fund
+      - name: Compile native artifacts before starting cluster processes
+        working-directory: lagrange-object-environment
+        run: |
+          cargo test --manifest-path hosts/linux/Cargo.toml --locked \
+            --test native_cluster --no-run --message-format=json > /tmp/native-cluster-build.jsonl
+          node --input-type=module -e '
+            import {readFileSync, writeFileSync} from "node:fs";
+            const rows = readFileSync("/tmp/native-cluster-build.jsonl", "utf8").trim().split("\n").map(JSON.parse);
+            const binaries = rows.filter(r => r.reason === "compiler-artifact" && r.target.name === "native_cluster" && r.executable);
+            if (binaries.length !== 1) throw new Error("missing native action test");
+            writeFileSync("/tmp/native-cluster-test-path", binaries[0].executable);
+          '
+      - name: Native executable and GTK actions against real Lagrange
+        timeout-minutes: 10
+        working-directory: lagrange-object-environment
+        # One owned service/runtime and one native process at a time. The
+        # harness has a 160s setup bound and 500s total backstop, no retries.
+        run: |
+          xvfb-run -a -s "-screen 0 1280x1024x24" node test/native-cluster/run.js \
+            "$(cat /tmp/native-cluster-test-path)" "$GITHUB_WORKSPACE/lagrange-images"
