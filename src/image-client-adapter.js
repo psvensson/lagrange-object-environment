@@ -805,6 +805,63 @@ function createImageClientAdapter(client) {
     return Object.freeze({slots, indexed, versionToken: result['version-token']});
   }
 
+  /** Trusted composition of an installed, immutable one-text-slot binding.
+   * Images parses its own binding/interface. No application record is read.
+   * The portable root does not yet expose these public helpers (Bead u4k).
+   */
+  async function bindTextSlotMutation({imageId, blockId}) {
+    const {parseImageMutationBindingArtifact, resolveCallableInterface, resolveDeclaredType} = client;
+    for (const [name, helper] of Object.entries({
+      parseImageMutationBindingArtifact, resolveCallableInterface, resolveDeclaredType,
+    })) {
+      if (typeof helper !== 'function') throw new TypeError(`text-slot mutation requires public Images helper: ${name}`);
+    }
+    const blockRef = objectRef(imageId, blockId);
+    const block = await images.getBlock(imageId, blockId);
+    if (!block || block.environment !== null || block.code?.kind !== 'ref'
+        || block.code.imageId !== imageId) {
+      throw new TypeError('text-slot mutation requires a local Block with no lexical environment');
+    }
+    const artifact = await images.getCodeArtifact(block.code.imageId, block.code.objectId);
+    // The executor selects its target image from CODE, not the invocation.
+    if (!artifact || artifact.imageId !== imageId) {
+      throw new TypeError('text-slot mutation binding must belong to its target image');
+    }
+    const {fields} = parseImageMutationBindingArtifact(artifact);
+    const {descriptor} = await resolveCallableInterface(images, artifact, 'text-slot mutation');
+    const {parameters, result, types} = descriptor;
+    const record = resolveDeclaredType(parameters[2], types);
+    const mapped = fields[0];
+    if (parameters.length !== 3 || parameters[0] !== 'string' || parameters[1] !== 'string'
+        || result !== 'string' || fields.length !== 1 || !mapped.slot || mapped.indexed || mapped.edge
+        || record?.kind !== 'record' || record.fields.length !== 1
+        || record.fields[0].name !== mapped.name
+        || resolveDeclaredType(record.fields[0].type, types) !== 'string') {
+      throw new TypeError('text-slot mutation requires exactly one mapped string slot');
+    }
+    const accepts = (subject, field) => Boolean(subject?.kind === 'ref'
+      && subject.imageId === imageId && typeof subject.objectId === 'string'
+      && subject.objectId.length > 0 && field?.slot === mapped.slot);
+    return Object.freeze({
+      writableSlots: Object.freeze([mapped.slot]),
+      accepts,
+      async mutate({subject, field, text, versionToken, authority}) {
+        if (!accepts(subject, field)) throw new TypeError('text-slot mutation subject or field does not match its binding');
+        if (typeof text !== 'string') throw new TypeError('text-slot mutation requires string text');
+        // Never fetch a fresh token here: this must describe what the user saw.
+        if (typeof versionToken !== 'string' || versionToken.length === 0) {
+          throw new TypeError('text-slot mutation requires the displayed version token');
+        }
+        const activation = await invocations.invokeBlock(blockRef, [
+          textValue(subject.objectId), textValue(versionToken),
+          packCompositeValue({[mapped.name]: text}, parameters[2], types),
+        ]);
+        const receipt = await executor.execute(activation, {authority});
+        return Object.freeze({objectId: subject.objectId, versionToken: receipt.value});
+      },
+    });
+  }
+
   /**
    * readObject is the environment's single runtime read abstraction: it routes
    * through the authorized whole-record read lane (never the privileged
@@ -1202,6 +1259,7 @@ function createImageClientAdapter(client) {
     ensureSchema,
     createObject,
     mutateObject,
+    bindTextSlotMutation,
     ensurePerspectiveSchema,
     savePerspective,
     loadPerspective,

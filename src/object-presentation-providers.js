@@ -1,4 +1,4 @@
-import {Presentation} from './model.js';
+import {Command, Presentation} from './model.js';
 import {UNAVAILABLE_REF_KIND, UNAUTHORIZED_REF_KIND} from './object-navigator.js';
 
 /**
@@ -101,4 +101,19 @@ function createUnauthorizedRefProvider() {
   });
 }
 
-export {createObjectInspectorProvider, createUnavailableRefProvider, createUnauthorizedRefProvider};
+// A declared scalar edit, not Smalltalk message execution. The adapter alone
+// translates the displayed slot into the binding's record field.
+function createTextSlotMutationCommand({id, title, mutation}) {
+  if (typeof mutation?.accepts !== 'function' || typeof mutation?.mutate !== 'function') {
+    throw new TypeError('text-slot Command requires an adapter mutation binding');
+  }
+  return new Command({
+    id, title,
+    appliesTo: (subject, {field} = {}) => mutation.accepts(subject, field),
+    invoke: (subject, {field, text, versionToken, authority}) =>
+      mutation.mutate({subject, field, text, versionToken, authority}),
+  });
+}
+
+export {createObjectInspectorProvider, createUnavailableRefProvider, createUnauthorizedRefProvider,
+  createTextSlotMutationCommand};

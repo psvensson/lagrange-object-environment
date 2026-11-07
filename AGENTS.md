@@ -200,6 +200,7 @@ main -> agent/<task> -> pull request -> exact-head CI -> squash merge -> main
 - Branch from current `main` unless the task explicitly depends on another unmerged branch.
 - Keep the PR narrow enough that its ownership and proof story are obvious.
 - Prefer squash merge so the main history contains one semantic commit per task.
+- Finish and merge PRs by default once the required independent reviews and exact-head verification gates pass. Do not stop at an unmerged ready PR unless a gate is unresolved or the user asks to stop. Package publication remains a separate action.
 
 ## Code and dependency policy
 
