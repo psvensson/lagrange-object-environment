@@ -89,5 +89,8 @@ export {
   PROBE_TYPE_DECLARATIONS,
   classIdFor,
   createImageClientAdapter,
+  createRemoteImageClientAdapter,
   refToEdgeString,
 } from './image-client-adapter.js';
+
+export {createImageReadConnection} from './image-read-connection.js';

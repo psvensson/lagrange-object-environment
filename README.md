@@ -102,6 +102,11 @@ npm test
 
 ## Where to read next
 
+The [authorized read-service host](hosts/image-read-service/README.md) provides
+authenticated Project and object reads through an operator-supplied deployment.
+The service contract is tested; native executable and real-cluster acceptance are
+tracked separately in Bead 8dh.
+
 1. [Architecture](docs/architecture.md)
 2. [Core concepts](docs/concepts.md)
 3. [Projects and collaborative work](docs/projects-and-collaboration.md)

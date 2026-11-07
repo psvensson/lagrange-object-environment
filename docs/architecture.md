@@ -234,6 +234,14 @@ The absence of Workspace is architectural, not merely a naming decision. If futu
 
 ## Authority boundary
 
+Remote Project/object reads use the closed application service described in
+[ADR 0017](decisions/0017-authorized-read-service.md). `ImageClientAdapter` remains
+the Environment-to-Images owner; its remote variant exposes read-only capabilities.
+The host authenticates each request using trusted deployment providers and passes
+an actual server-local context into the existing authorized Images operations.
+The network carries no AuthorityContext or grant policy. Runtime/bootstrap is
+deployment-owned and separate from client startup and read requests.
+
 The environment does not own grants and should not persist authorization tokens in a Project, Perspective, Theme, EnvironmentProfile or Session.
 
 `lagrange-images` ADR 0037 makes authority execution context rather than program data. A trusted host/control plane issues and revokes root authority; image execution receives only a checkable per-call context and enforces concrete operations. The environment drives user-facing sharing intent through those lower APIs.
