@@ -243,6 +243,38 @@ function refToEdgeString(ref, imageId) {
   return `pin:${ref.objectId}@${ref.revision}`;
 }
 
+/**
+ * Trusted installation capability, separate from the ordinary client adapter.
+ * The host supplies Images' public graph operations; their admission, CAS and
+ * conflict semantics remain unchanged. This adapter owns no installed schema.
+ * Supplying these dependencies requires the host's service capability; knowing
+ * an image or object id never constructs one. No raw service escapes the port.
+ */
+function createImageProvisioningPort(client) {
+  if (!client || typeof client !== 'object' || !client.images || typeof client.images !== 'object') {
+    throw new TypeError('image provisioning requires a trusted Images service');
+  }
+  const {images, provisionShape, provisionObject, objectRef, textValue, integerValue} = client;
+  for (const [name, helper] of Object.entries({
+    provisionShape, provisionObject, objectRef, textValue, integerValue,
+  })) {
+    if (typeof helper !== 'function') {
+      throw new TypeError(`image provisioning requires public Images helper: ${name}`);
+    }
+  }
+  return Object.freeze({
+    provisionShape({imageId, shape} = {}) {
+      return provisionShape({images, imageId, shape});
+    },
+    provisionObject({imageId, object, seed = false} = {}) {
+      return provisionObject({images, imageId, object, seed});
+    },
+    objectRef,
+    textValue,
+    integerValue,
+  });
+}
+
 function createImageClientAdapter(client) {
   if (!client || typeof client !== 'object') {
     throw new TypeError('createImageClientAdapter requires the lagrange-images public surface');
@@ -1382,6 +1414,7 @@ export {
   PROBE_SHAPE_SLOTS,
   PROBE_TYPE_DECLARATIONS,
   createImageClientAdapter,
+  createImageProvisioningPort,
   createRemoteImageClientAdapter,
   refToEdgeString,
 };

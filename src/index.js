@@ -29,6 +29,8 @@ export {
 
 export {createPresentationRegistry} from './presentation-registry.js';
 
+export {createEnvironmentProvisioner} from './environment-provisioner.js';
+
 export {createCommandRegistry} from './command-registry.js';
 
 export {UNAVAILABLE_REF_KIND, UNAUTHORIZED_REF_KIND, createObjectNavigator} from './object-navigator.js';
@@ -88,6 +90,7 @@ export {
   PROBE_SHAPE_SLOTS,
   PROBE_TYPE_DECLARATIONS,
   createImageClientAdapter,
+  createImageProvisioningPort,
   createRemoteImageClientAdapter,
   refToEdgeString,
 } from './image-client-adapter.js';
