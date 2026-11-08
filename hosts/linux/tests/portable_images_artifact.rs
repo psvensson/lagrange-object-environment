@@ -18,9 +18,9 @@ use sha2::{Digest, Sha256};
 fn embedded_portable_runtime_artifact_is_the_pinned_canonical_material() {
     assert_eq!(
         PORTABLE_RUNTIME_SOURCE_REVISION,
-        "caf72f26d6a28a6901aea876a49d22311e29cf21"
+        "dc4266c664002e69ad5ca0b67dd0b7f094c8d8e7"
     );
-    assert_eq!(PORTABLE_RUNTIME_ARTIFACT_BYTES.len(), 1555650);
+    assert_eq!(PORTABLE_RUNTIME_ARTIFACT_BYTES.len(), 2450032);
     assert_eq!(PORTABLE_RUNTIME_ARTIFACT_BYTES.last(), Some(&b'}'));
 
     let digest = Sha256::digest(PORTABLE_RUNTIME_ARTIFACT_BYTES);
@@ -33,7 +33,7 @@ fn embedded_portable_runtime_artifact_is_the_pinned_canonical_material() {
         serde_json::from_slice(PORTABLE_RUNTIME_ARTIFACT_BYTES).expect("pinned artifact is JSON");
     assert_eq!(artifact["format"], PORTABLE_RUNTIME_ARTIFACT_FORMAT);
     assert_eq!(artifact["entry"], PORTABLE_RUNTIME_ARTIFACT_ENTRY);
-    assert_eq!(artifact["modules"].as_array().map(Vec::len), Some(138));
+    assert_eq!(artifact["modules"].as_array().map(Vec::len), Some(157));
     assert!(
         artifact.get("provenance").is_none(),
         "canonical material must not contain the external source provenance"
@@ -206,6 +206,12 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
                 // Both the JS integration lane and native application parity use
                 // this vocabulary to read and replace a real imported selector.
                 'smalltalkMethodPositionResource',
+                // Bead u4k (Native E5): portable mutation-binding helpers consumed by
+                // ImageClientAdapter.bindTextSlotMutation and trusted native parity setup.
+                'instanceVariableBindings',
+                'parseImageMutationBindingArtifact',
+                'resolveCallableInterface',
+                'resolveDeclaredType',
               ];
               // A CONSTANT, not a function, so it needs its own kind check: the list above is
               // filtered on `typeof !== 'function'` and would report a perfectly present string
@@ -266,6 +272,13 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
                 'SMALLTALK_METHOD_READ_OPERATION',
                 'smalltalkMethodPositionResource',
               ];
+              const consumedStateEditingSeamOwners = [
+                ['instanceVariableBindings', 'src/language/smalltalk-instance-variables.js'],
+                ['parseImageMutationBindingArtifact', 'src/callable/image-mutation-binding.js'],
+                ['resolveCallableInterface', 'src/callable/binding-artifacts.js'],
+                ['resolveDeclaredType', 'src/callable/type-grammar.js'],
+              ];
+              const consumedStateEditingSeams = consumedStateEditingSeamOwners.map(([name]) => name);
               const forbiddenPrivateOwners = [
                 'smalltalkMethodPositionToken',
                 'parseSmalltalkMethodPositionToken',
@@ -374,6 +387,27 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
                 exposedPrivateOwners: forbiddenPrivateOwners.filter(
                   (name) => alias[name] !== undefined,
                 ),
+                consumedStateEditingSeamNames: consumedStateEditingSeams,
+                uncallableStateEditingSeams: consumedStateEditingSeams.filter(
+                  (name) => typeof alias[name] !== 'function',
+                ),
+                unrequiredStateEditingSeams: consumedStateEditingSeams.filter(
+                  (name) => !requiredEnvironmentExports.includes(name),
+                ),
+                stateEditingSeamsAreOwnerFunctions: await (async () => {
+                  for (const [name, modulePath] of consumedStateEditingSeamOwners) {
+                    let owner = null;
+                    try {
+                      owner = await import(modulePath);
+                    } catch {
+                      return false;
+                    }
+                    if (typeof owner[name] !== 'function' || owner[name] !== alias[name]) {
+                      return false;
+                    }
+                  }
+                  return true;
+                })(),
               };
             })()"#,
         )
@@ -385,7 +419,7 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
     assert_eq!(report["exportedCreate"], "function");
     // A NON-VACUITY / closure check only: it catches the requirement list silently
     // shrinking. The semantic contract is the by-name assertions below.
-    assert_eq!(report["requiredEnvironmentExportCount"], 29);
+    assert_eq!(report["requiredEnvironmentExportCount"], 33);
     assert_eq!(
         report["missingEnvironmentExports"],
         serde_json::json!([]),
@@ -474,6 +508,29 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
          This is a REGRESSION DETECTOR on the public barrel, not enforcement -- the block comment \
          at the list says why, and a deep import still reaches every one of them. Enforcement over \
          the Environment's OWN source belongs with the E3 slice that adds the adapter (Bead 04f)"
+    );
+    assert_eq!(
+        report["consumedStateEditingSeamNames"],
+        serde_json::json!([
+            "instanceVariableBindings",
+            "parseImageMutationBindingArtifact",
+            "resolveCallableInterface",
+            "resolveDeclaredType"
+        ])
+    );
+    assert_eq!(
+        report["uncallableStateEditingSeams"],
+        serde_json::json!([]),
+        "the pinned revision must LINK and expose all four Native E5 state-editing helpers through the public alias"
+    );
+    assert_eq!(
+        report["unrequiredStateEditingSeams"],
+        serde_json::json!([]),
+        "the Environment's requirement list must NAME each consumed state-editing seam"
+    );
+    assert_eq!(
+        report["stateEditingSeamsAreOwnerFunctions"], true,
+        "the alias must expose each state-editing seam as the exact function its owner module defines"
     );
 
     actor.shutdown().await;
