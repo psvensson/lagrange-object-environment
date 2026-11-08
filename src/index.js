@@ -96,3 +96,5 @@ export {
 } from './image-client-adapter.js';
 
 export {createImageReadConnection} from './image-read-connection.js';
+
+export {createThemeResolver, ThemeResolutionError} from './theme-resolver.js';

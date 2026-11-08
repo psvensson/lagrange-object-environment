@@ -1,12 +1,14 @@
 // ADR 0015: trusted installation policy, never Session startup or user mutation.
 // Images owns exact/seed admission. This owner supplies only Environment schema,
 // stock identity/order and the catalog's domain check through the trusted port.
+import {ENVIRONMENT_LAYOUT} from './theme-layout.js';
+
 const CATALOG_ID = 'environment/catalog';
-const CATALOG_SHAPE = 'environment/shapes/catalog/v1';
-const ROOT_SHAPE = 'environment/shapes/root-theme/v1';
-const TOKEN_SHAPE = 'environment/shapes/design-token/v1';
+const CATALOG_SHAPE = ENVIRONMENT_LAYOUT.catalog.id;
+const ROOT_SHAPE = ENVIRONMENT_LAYOUT.root.id;
+const TOKEN_SHAPE = ENVIRONMENT_LAYOUT.token.id;
 const THEME_ID = 'environment/themes/smalltalk-workbench/v1';
-const CATALOG_FORMAT = 'environment-catalog/v1';
+const CATALOG_FORMAT = ENVIRONMENT_LAYOUT.catalog.format;
 
 // Release v1 data, not a runtime fallback palette. Colors are opaque 8-bit sRGB;
 // dimensions/font sizes are integer logical layout units before device scaling.
@@ -29,7 +31,7 @@ const STOCK_TOKENS = [
   ['typography.ui.size', 'fontSize', 13],
 ];
 
-function shape(id, names, indexed) {
+function shape({id, names, indexed}) {
   return {id, slots: names.map(name => ({id: name, name})), indexed};
 }
 
@@ -66,12 +68,8 @@ function createEnvironmentProvisioner(port) {
   async function provision({imageId} = {}) {
     // Canonical constructors validate identity before any installation write.
     const catalogRef = objectRef(imageId, CATALOG_ID);
-    for (const schema of [
-      shape(CATALOG_SHAPE, ['format', 'defaultTheme'], 'values'),
-      shape(ROOT_SHAPE, ['format', 'name'], 'values'),
-      shape(TOKEN_SHAPE, ['format', 'path', 'type', 'value'], 'none'),
-    ]) {
-      await provisionShape({imageId, shape: schema});
+    for (const schema of Object.values(ENVIRONMENT_LAYOUT)) {
+      await provisionShape({imageId, shape: shape(schema)});
     }
     const tokens = [];
     for (const [path, type, value] of [...STOCK_TOKENS].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
@@ -79,7 +77,7 @@ function createEnvironmentProvisioner(port) {
       await provisionObject({imageId, object: {
         id, shape: objectRef(imageId, TOKEN_SHAPE),
         slots: {
-          format: textValue('environment-design-token/v1'), path: textValue(path), type: textValue(type),
+          format: textValue(ENVIRONMENT_LAYOUT.token.format), path: textValue(path), type: textValue(type),
           value: typeof value === 'number' ? integerValue(value) : textValue(value),
         },
       }});
@@ -87,7 +85,7 @@ function createEnvironmentProvisioner(port) {
     }
     await provisionObject({imageId, object: {
       id: THEME_ID, shape: objectRef(imageId, ROOT_SHAPE),
-      slots: {format: textValue('environment-theme/root/v1'), name: textValue('Smalltalk Workbench')},
+      slots: {format: textValue(ENVIRONMENT_LAYOUT.root.format), name: textValue('Smalltalk Workbench')},
       indexed: tokens,
     }});
     const catalog = await provisionObject({imageId, seed: true, object: {

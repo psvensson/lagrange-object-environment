@@ -28,15 +28,19 @@ stock release. There are no classes, Behaviors, JSON blobs or kernel nil refs.
 | --- | --- | --- |
 | `environment/shapes/catalog/v1` | `format`, `defaultTheme` | stock Theme refs |
 | `environment/shapes/root-theme/v1` | `format`, `name` | DesignToken refs in lexical path order |
+| `environment/shapes/derived-theme/v1` | `format`, `name`, `baseTheme` | DesignToken refs |
 | `environment/shapes/design-token/v1` | `format`, `path`, `type`, `value` | none |
 
 The catalog id is `environment/catalog`, with format `environment-catalog/v1`.
 Its initial default and stock list refer to
 `environment/themes/smalltalk-workbench/v1`, named `Smalltalk Workbench` with
-format `environment-theme/root/v1`. A root has no base slot. Derived layouts and
-authorized creation require a separate resolution/creation design; classless
-trusted installation does not establish that the authorized creation lane can
-create these graphs.
+format `environment-theme/root/v1`. A root has no base slot. A derived Theme has
+format `environment-theme/derived/v1` and one same-image, unpinned `baseTheme` ref.
+Its tokens override paths in its base. The derived Shape is installed before the
+stock graph, but no derived object is created by installation. Upgrading a T1
+installation adds this one Shape without rewriting any existing record.
+Authorized creation remains separate: classless trusted installation does not
+establish that the authorized creation lane can create these graphs.
 
 Each token id is the stock Theme id followed by `/tokens/` and its semantic path.
 Its format is `environment-design-token/v1`; path and type are text Values and
@@ -63,8 +67,8 @@ value is one text or integer Value.
 Colors are lowercase `#rrggbb`, 8-bit sRGB with full opacity. Dimensions are
 nonnegative integers and font sizes positive integers in logical layout units
 before device scaling. Generic families are `monospace` or `sans-serif`.
-EnvironmentProvisioner defines this release's stock data; future ThemeResolver
-owns validation of user token semantics. Classic Smalltalk `←` assignment and
+EnvironmentProvisioner defines this release's stock data; [ThemeResolver](theme-resolution.md)
+owns validation of token semantics. Classic Smalltalk `←` assignment and
 `↑` return rendering is a separate syntax-aware source projection requirement
 (Bead 0k7.3), not a token, font substitution or parser change in T1.
 
@@ -95,6 +99,7 @@ per-object authorized reads of catalog/root/every token, child denial, stock
 conflicts, partial resume, catalog preservation/refusal and ordinary startup
 without provisioning. The generic read binding is installed directly; no
 kernel or probe class is introduced for these proofs. These are direct reads,
-not ThemeResolver traversal or DOM/GTK appearance acceptance. Portable
-provisioning, effective selection, derivation, observation and renderer
-realization remain separate work.
+not DOM/GTK appearance acceptance. Explicit inheritance and authorized traversal
+are now proven separately by ThemeResolver. Portable provisioning, effective
+selection, authorized creation, observation and renderer realization remain
+separate work.
