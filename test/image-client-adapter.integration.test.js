@@ -124,6 +124,8 @@ function readAuthorityProvider(runtime, {deny = new Set()} = {}) {
 test('image-client-adapter integration', {skip: !available && 'lagrange-images sibling runtime not available'}, async (t) => {
   await t.test('schema provisions idempotently with a kernel precondition', async () => {
     const {adapter} = await setup();
+    assert.deepEqual(Object.keys(adapter).filter((name) => /provision/i.test(name)), [],
+      'the ordinary adapter never acquires the trusted installation port');
     const again = await adapter.ensureSchema(IMAGE, IDS);
     assert.ok(again.classRecord);
 

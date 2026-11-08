@@ -84,8 +84,13 @@ test('04f: the three authorized seams are the ENTIRE native method surface the a
   const adapter = readFileSync(resolve(SRC, 'image-client-adapter.js'), 'utf8');
   // Every `authorized*` Images function this module destructures from the client.
   // An exhaustive list, so a fourth native seam cannot appear without appearing here.
-  const destructured = adapter.slice(adapter.indexOf('  const {\n    images,'), adapter.indexOf('} = client;'));
-  assert.ok(destructured.length > 0, 'the client destructuring block must be found');
+  // The separate installation port also captures a client. Locate the ordinary
+  // adapter's block and its own end, never an earlier factory's destructuring.
+  const factory = adapter.indexOf('function createImageClientAdapter(client) {');
+  const start = adapter.indexOf('  const {\n    images,', factory);
+  const end = adapter.indexOf('} = client;', start);
+  assert.ok(factory >= 0 && start > factory && end > start, 'the client destructuring block must be found');
+  const destructured = adapter.slice(start, end);
   const consumed = [...destructured.matchAll(/^\s{4}(authorized[A-Za-z]+),$/gm)].map((m) => m[1]).sort();
   assert.deepEqual(consumed, [
     'authorizedDescribeSmalltalkClass',

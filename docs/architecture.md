@@ -47,7 +47,7 @@ The split is semantic rather than based on durability: Lagrange Images can defin
 
 ## Durable environment state is object state
 
-Every durable semantic thing owned by this repository is represented as ordinary Lagrange image objects and refs between them. Perspective persistence is the first implemented example; ADR 0015 generalizes the rule to Themes, design tokens, environment profiles/preferences and future durable environment defaults.
+Every durable semantic thing owned by this repository is represented as ordinary Lagrange image objects and refs between them. Perspective persistence and trusted Node installation of the stock Theme graph are implemented examples; ADR 0015 also covers planned environment profiles/preferences and future durable environment defaults. [Theme installation](theme-installation.md) describes the classless schema, exact/seed admission and remaining resolution/renderer work.
 
 There is no second durable settings/configuration world beside the image. CSS files, GTK style data, DTCG documents, browser storage or identity-provider account settings may be transient realizations or interchange mechanisms, but none is the durable authority for environment semantics.
 
