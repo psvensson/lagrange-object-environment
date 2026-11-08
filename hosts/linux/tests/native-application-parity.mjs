@@ -11,7 +11,8 @@ import {createCommandRegistry} from 'command-registry';
 import {createCommandRouter} from 'command-router';
 import {createSelectionModel} from 'selection-model';
 import {createPresentationRegistry} from 'presentation-registry';
-import {createObjectInspectorProvider, createUnavailableRefProvider, createUnauthorizedRefProvider}
+import {createObjectInspectorProvider, createUnavailableRefProvider, createUnauthorizedRefProvider,
+  createTextSlotMutationCommand}
   from 'object-presentation-providers';
 import {createProjectBrowser, createProjectSubject, createProjectPresentationProvider}
   from 'project-browser';
@@ -23,6 +24,8 @@ const IMAGE = 'native-yaxo-parity';
 const PROJECT = 'yaxo-application';
 const MEMBER = 'application/root';
 const READ = 'parity-read-block';
+const MUTATION = 'parity-text-mutation';
+const EDIT = 'edit-text';
 const SELECTOR = 'string';
 const XML = '<note lang="en"><to>Tove</to></note>';
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -40,9 +43,9 @@ export async function setup() {
   check(runtime.toolchainProviders === undefined && runtime.foreignRuntimeProviders === undefined,
     'the portable runtime has no foreign-runtime or toolchain provider lane');
   await runtime.images.createImage({id: IMAGE});
-  let imported, stream, expected, classRef;
-  let adapter, compositor, shell, selection, browser, nativeBrowser, commandRouter;
-  let unsubscribe, projectAuthority, rootRef, rootIndex, pending;
+  let imported, stream, expected, classRef, stringSlot, originalTextRecord, graphBefore;
+  let adapter, compositor, shell, selection, browser, nativeBrowser, commandRouter, mutation;
+  let unsubscribe, projectAuthority, rootRef, rootIndex, pending, afterCommitHook = null;
   let deniedWrite = false;
   const attemptedReads = [];
   const expectedAttempts = [];
@@ -51,11 +54,15 @@ export async function setup() {
   const writeDemands = [];
   const activationErrors = [];
   const replacementErrors = [];
+  const stateEdits = [];
   const send = async (receiver, selector, args = []) => runtime.executor.execute(
     await runtime.invocations.sendMessage({languageId: 'symmetric-smalltalk', receiver,
       message: imagesApi.textValue(selector), arguments: args}, {dispatchImage: IMAGE}));
   const grantFor = (ref) => runtime.authority.issue({principal: 'parity-reader', grants: [
     {operation: 'object/read', resource: imagesApi.objectResource(ref.imageId, ref.objectId)},
+  ]});
+  const objectWriteAuthorityFor = (ref) => runtime.authority.issue({principal: 'parity-writer', grants: [
+    {operation: 'object/write', resource: imagesApi.objectResource(ref.imageId, ref.objectId)},
   ]});
   const authorityFor = (subject) => {
     const grants = [{operation: 'object/read', resource:
@@ -85,8 +92,27 @@ export async function setup() {
   };
   function bind(authority) {
     unsubscribe?.();
-    unsubscribe = shell.bindIntents({adapter: intentAdapter, inspectorNavigation: true,
-      authority, readBlockId: READ, commandRouter,
+    unsubscribe = shell.bindIntents({adapter: intentAdapter, inspector: true, inspectorNavigation: true,
+      commandId: EDIT, authority, readBlockId: READ, commandRouter,
+      onEdited: async (receipt) => {
+        const subject = selection.selectedSubject();
+        let competing = null;
+        if (afterCommitHook) {
+          const hook = afterCommitHook;
+          afterCommitHook = null;
+          competing = await hook(receipt, subject);
+        }
+        expectedAttempts.push(subject);
+        await shell.inspectSelected({authority: grantFor(subject), readBlockId: READ});
+        stateEdits.push({ok: true, receipt, competing});
+      },
+      onEditError: async (error, {reread} = {}) => {
+        if (error.name === 'CommandConflictError' && reread) {
+          expectedAttempts.push(selection.selectedSubject());
+          await reread();
+        }
+        stateEdits.push({ok: false, error: error.name});
+      },
       activationBindings: [
         {viewId: browser.viewId, resolveItem: browser.resolveItem},
         nativeBrowser.activationBinding({authorityFor}),
@@ -114,6 +140,24 @@ export async function setup() {
         check(entry, 'import returned native class ' + name);
         return entry.classRef;
       };
+      const setter = manifest.methods.find(({identity}) =>
+        identity === 'cuis-method/YAXO/XMLStringNode/instance/string:');
+      equal(setter?.source, 'string: aString\n\tstring _ aString',
+        'this declared scalar edit is equivalent only to the pinned pure setter');
+      const bindings = await imagesApi.instanceVariableBindings({images: runtime.images,
+        imageId: IMAGE, classRef: classRef('XMLStringNode')});
+      check(typeof bindings.string === 'string' && bindings.string.length > 0,
+        'XMLStringNode declares string instance variable slot');
+      stringSlot = bindings.string;
+      await imagesApi.installCallableInterfaceV2({images: runtime.images, imageId: IMAGE,
+        interfaceId: MUTATION + '-interface', functionName: EDIT,
+        parameters: ['string', 'string', 'text-edit'], result: 'string',
+        types: {'text-edit': {kind: 'record', fields: [{name: 'content', type: 'string'}]}},
+      });
+      await imagesApi.installImageMutationBinding({images: runtime.images, imageId: IMAGE,
+        callableInterface: imagesApi.objectRef(IMAGE, MUTATION + '-interface'),
+        fields: [{name: 'content', slot: stringSlot}],
+        bindingId: MUTATION + '-binding', blockId: MUTATION});
       return {imported: true};
     },
     async initializeTokenizer() {
@@ -135,6 +179,9 @@ export async function setup() {
       equal(await send(root, 'attributeAt:', [imagesApi.textValue('lang')]),
         imagesApi.textValue('en'), 'native parser attribute result');
       expected = {document, documentElements, root, child, text};
+      originalTextRecord = await runtime.images.getObject(IMAGE, text.objectId);
+      graphBefore = await Promise.all([document, documentElements, root, child]
+        .map((ref) => runtime.images.getObject(IMAGE, ref.objectId)));
       // Independent public semantic oracle; none of these refs seeds navigation.
       for (const [ref, name] of [[document, 'XMLDocument'], [root, 'XMLElement'],
         [child, 'XMLElement'], [text, 'XMLStringNode']]) {
@@ -175,17 +222,24 @@ export async function setup() {
         createUnauthorizedRefProvider(), createUnavailableRefProvider(),
         createNativeClassPresentationProvider(), createNativeMethodPresentationProvider()]) registry.register(provider);
       const commands = createCommandRegistry();
+      mutation = await adapter.bindTextSlotMutation({imageId: IMAGE, blockId: MUTATION});
+      equal(mutation.writableSlots, [stringSlot], 'mutation binding owns single writable slot');
+      commands.register(createTextSlotMutationCommand({id: EDIT, title: 'Edit text', mutation}));
       commands.register(createReplaceNativeMethodCommand());
       const navigator = createObjectNavigator({adapter: recordingAdapter, presentationRegistry: registry,
         commandRegistry: commands, referencesOfValue: imagesApi.referencesOfValue});
       compositor = createCompositor({rendererAdapter: globalThis.rendererAdapter});
       selection = createSelectionModel();
-      shell = createEnvironmentShell({navigator, selectionModel: selection, compositor});
+      shell = createEnvironmentShell({navigator, selectionModel: selection, compositor,
+        writableSlots: mutation.writableSlots});
       browser = createProjectBrowser({adapter: recordingAdapter, presentationRegistry: registry, compositor});
       nativeBrowser = createNativeSmalltalkBrowser({adapter: recordingAdapter, presentationRegistry: registry, compositor});
       commandRouter = createCommandRouter({compositor, commandRegistry: commands, dispatch: adapter.dispatch,
         authorityProvider: async (demand) => {
           writeDemands.push(demand);
+          if (demand.subject?.kind === 'ref') {
+            return deniedWrite ? grantFor(demand.subject) : objectWriteAuthorityFor(demand.subject);
+          }
           return deniedWrite ? authorityFor(demand.subject) : writeAuthorityFor(demand.subject);
         }});
       await compositor.openView({viewId: shell.inspectorViewId,
@@ -243,6 +297,100 @@ export async function setup() {
       'inspector displays native XMLStringNode text');
       equal(attemptedReads, expectedAttempts, 'whole graph attempted-read trace');
       return {objects: seen.size, attempts: attemptedReads.length};
+    },
+    async prepareStateEdit(deny, afterCommitText = null) {
+      deniedWrite = deny;
+      const frontierBefore = await runtime.images.frontier(IMAGE);
+      const readBefore = await adapter.readObject({imageId: IMAGE, objectId: expected.text.objectId,
+        authority: grantFor(expected.text), blockId: READ});
+      afterCommitHook = afterCommitText === null ? null : async (receipt, subject) => {
+        const outside = await mutation.mutate({subject, field: {slot: stringSlot}, text: afterCommitText,
+          versionToken: receipt.versionToken, authority: objectWriteAuthorityFor(subject)});
+        return {outside};
+      };
+      pending = {before: descriptor(), tokenBefore: shell._inspectorToken().token,
+        frontierBefore, readBefore, edits: stateEdits.length,
+        demands: writeDemands.length, attempts: attemptedReads.length};
+      return {prepared: true};
+    },
+    async stateEditState(submittedText, expectedText, expectedError = null) {
+      const outcomes = stateEdits.slice(pending.edits);
+      if (!outcomes.length) return {done: false};
+      equal(outcomes.length, 1, 'single state-edit outcome');
+      const outcome = outcomes[0];
+      equal(writeDemands.length, pending.demands + 1, 'one Command invocation per GTK field edit');
+      const demand = writeDemands[writeDemands.length - 1];
+      equal(demand.commandId, EDIT, 'ordinary text-slot mutation Command');
+      equal(demand.subject, expected.text, 'Command targets current inspector subject');
+      equal(demand.intent, {kind: 'edit-field', key: 0}, 'authority demand omits raw edit text and token');
+      check(!JSON.stringify(demand).includes(submittedText), 'submitted text must not leak into authority demand');
+      if (expectedError) {
+        equal(outcome, {ok: false, error: expectedError}, 'exact state-edit failure classification');
+        const frontierNow = await runtime.images.frontier(IMAGE);
+        equal(frontierNow, pending.frontierBefore, 'denied/stale state edit preserves history frontier');
+        const readNow = await adapter.readObject({imageId: IMAGE, objectId: expected.text.objectId,
+          authority: grantFor(expected.text), blockId: READ});
+        equal(readNow, pending.readBefore, 'denied/stale state edit preserves stored record and version token');
+        if (expectedError === 'CommandAuthorizationError') {
+          check(descriptor() === pending.before, 'denied state edit leaves displayed descriptor unchanged');
+          equal(shell._inspectorToken().token, pending.tokenBefore, 'denied state edit preserves paired inspector token');
+          equal(attemptedReads.length, pending.attempts, 'denied state edit does not spuriously reread');
+        } else {
+          check(descriptor() !== pending.before, 'conflict triggers fresh authorized inspector reread');
+          equal(shell._inspectorToken().token, pending.readBefore.versionToken,
+            'conflict reread pairs winning version token');
+          equal(attemptedReads.length, pending.attempts + 1, 'conflict performs one fresh authorized read');
+        }
+      } else {
+        equal(outcome.ok, true, 'state edit succeeds');
+        check(descriptor() !== pending.before, 'successful state edit re-presents fresh authorized read');
+        equal(attemptedReads.length, pending.attempts + 1, 'successful state edit performs one fresh authorized read');
+        const readNow = await adapter.readObject({imageId: IMAGE, objectId: expected.text.objectId,
+          authority: grantFor(expected.text), blockId: READ});
+        equal(shell._inspectorToken().token, readNow.versionToken, 'reread pairs current read version token');
+        if (outcome.competing) {
+          check(outcome.receipt.versionToken !== readNow.versionToken,
+            'post-commit outside write supersedes receipt token');
+          check(shell._inspectorToken().token !== outcome.receipt.versionToken,
+            'inspector pairs reread token, never receipt token');
+        }
+      }
+      equal(descriptor().subject, expected.text, 'inspector stays on XMLStringNode');
+      equal(descriptor().parameters.fields[stringSlot], imagesApi.textValue(expectedText),
+        'inspector displays authoritative slot text');
+      equal(await send(expected.text, SELECTOR), imagesApi.textValue(expectedText),
+        'native getter answers authoritative text');
+      equal(await send(await send(expected.child, 'contents'), 'first'), expected.text,
+        'parent element still points to same XMLStringNode');
+      equal(await send(expected.root, 'attributeAt:', [imagesApi.textValue('lang')]),
+        imagesApi.textValue('en'), 'sibling/root attributes unchanged');
+      const currentRecord = await runtime.images.getObject(IMAGE, expected.text.objectId);
+      equal(currentRecord.slots, {...originalTextRecord.slots, [stringSlot]: imagesApi.textValue(expectedText)},
+        'only the mapped string slot changed');
+      for (const key of ['id', 'shape', 'behavior', 'indexed', 'metadata']) {
+        equal(currentRecord[key], originalTextRecord[key],
+          'object identity/shape/behavior/indexed/metadata preserved');
+      }
+      const graphNow = await Promise.all([expected.document, expected.documentElements, expected.root, expected.child]
+        .map((ref) => runtime.images.getObject(IMAGE, ref.objectId)));
+      equal(graphNow, graphBefore, 'ancestor application objects unchanged');
+      equal(attemptedReads, expectedAttempts, 'every attempted read accounted for');
+      return {done: true, descriptor: descriptor()};
+    },
+    async mutateStateOutside(text) {
+      const before = await adapter.readObject({imageId: IMAGE, objectId: expected.text.objectId,
+        authority: grantFor(expected.text), blockId: READ});
+      const shown = descriptor();
+      const tokenBefore = shell._inspectorToken().token;
+      equal(tokenBefore, before.versionToken, 'inspector starts paired with current version token');
+      const outside = await mutation.mutate({subject: expected.text, field: {slot: stringSlot}, text,
+        versionToken: before.versionToken, authority: objectWriteAuthorityFor(expected.text)});
+      check(outside.versionToken !== tokenBefore, 'outside state write advances version token');
+      check(descriptor() === shown && shell._inspectorToken().token === tokenBefore,
+        'outside write leaves inspector observation stale until conflict/reread');
+      equal(await send(expected.text, SELECTOR), imagesApi.textValue(text),
+        'outside write immediately visible to native getter');
+      return {value: text};
     },
     async openNativeClass() {
       bind(null);
@@ -329,8 +477,9 @@ export async function setup() {
       await runtime.close();
       // close() stops storage; it does not discard executor caches/pools. Drop
       // every owning composition reference before the host checks GC disposal.
-      runtime = adapter = compositor = shell = selection = browser = nativeBrowser = commandRouter = null;
-      imported = stream = expected = classRef = pending = unsubscribe = null;
+      runtime = adapter = compositor = shell = selection = browser = nativeBrowser = commandRouter = mutation = null;
+      imported = stream = expected = classRef = stringSlot = originalTextRecord = graphBefore = null;
+      pending = afterCommitHook = unsubscribe = null;
       globalThis.__parity = null;
       globalThis.__parityIntentHandler = null;
       globalThis.__jsenv_on_push = null;

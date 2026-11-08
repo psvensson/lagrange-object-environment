@@ -325,6 +325,68 @@ fn submit(
     result["descriptor"].clone()
 }
 
+fn edit_state(
+    runtime: &tokio::runtime::Runtime,
+    actor: &JsEnvActor,
+    host: &mut RendererPortHost,
+    handle: &str,
+    submitted: &str,
+    expected_text: &str,
+    denied: bool,
+    after_commit: Option<&str>,
+    error: Option<&str>,
+) -> Value {
+    run_js(
+        runtime,
+        actor,
+        host,
+        &format!(
+            "__parity.prepareStateEdit({}, {})",
+            denied,
+            json!(after_commit)
+        ),
+    );
+    let intent = host
+        .adapter()
+        .edit_gtk_field(handle, 0, submitted)
+        .unwrap()
+        .expect("current GTK editable field");
+    let intent = serde_json::to_value(intent).unwrap();
+    assert_eq!(
+        intent,
+        json!({"kind": "edit-field", "key": 0, "text": submitted}),
+        "field edit traverses real GTK Entry and activate commit unchanged"
+    );
+    push(runtime, actor, handle, intent);
+    let result = poll(
+        runtime,
+        actor,
+        host,
+        &format!(
+            "__parity.stateEditState({}, {}, {})",
+            json!(submitted),
+            json!(expected_text),
+            json!(error)
+        ),
+    );
+    assert_eq!(
+        host.adapter().gtk_descriptor(handle).unwrap().unwrap(),
+        result["descriptor"],
+        "the authoritative guest inspector descriptor was realized on the same GTK surface"
+    );
+    let expected_entry_text = if error == Some("CommandAuthorizationError") {
+        submitted
+    } else {
+        expected_text
+    };
+    assert_eq!(
+        host.adapter().gtk_editable_texts(handle).unwrap(),
+        vec![(0, expected_entry_text.to_string())],
+        "GTK Entry reflects authoritative post-edit/reread text (or un-reread buffer on denied write)"
+    );
+    result["descriptor"].clone()
+}
+
 const CHILD_ENV: &str = "LOE_NATIVE_PARITY_CHILD";
 const CHILD_TEST: &str = "imported_yaxo_executes_navigates_and_replaces_through_native_gtk";
 
@@ -389,6 +451,11 @@ fn child_command(executable: &std::path::Path, mode: &str) -> Command {
     let mut command = Command::new(executable);
     command
         .args([CHILD_TEST, "--exact", "--nocapture", "--test-threads=1"])
+        // gtk4::init() calls setlocale(LC_ALL, ""); keep LC_NUMERIC=C so QuickJS
+        // strtod-backed JSON.parse does not treat ',' as a decimal separator on
+        // comma-decimal locales (e.g. sv_SE.UTF-8) when parsing wasm-module/v2
+        // (host-wide follow-up: Bead pon).
+        .env("LC_NUMERIC", "C")
         .env(CHILD_ENV, mode);
     command
 }
@@ -563,6 +630,7 @@ fn run_native_parity() {
         let mut queue = VecDeque::from([Vec::<usize>::new()]);
         let mut seen = HashSet::new();
         let mut descriptors = Vec::new();
+        let mut editable_path: Option<Vec<usize>> = None;
         let mut paths = 0;
         while let Some(path) = queue.pop_front() {
             paths += 1;
@@ -587,6 +655,10 @@ fn run_native_parity() {
             if !seen.insert(descriptor["subject"].to_string()) {
                 continue;
             }
+            let editable_texts = host
+                .adapter()
+                .gtk_editable_texts(inspector_handle)
+                .unwrap();
             if descriptor["parameters"]["fields"]
                 .as_object()
                 .unwrap()
@@ -600,6 +672,18 @@ fn run_native_parity() {
                         .iter()
                         .any(|text| text.contains("Tove")),
                     "the parsed value is visible in native controls"
+                );
+                assert_eq!(
+                    editable_texts,
+                    vec![(0, "Tove".to_string())],
+                    "XMLStringNode realizes one editable GTK Entry with initial text"
+                );
+                editable_path = Some(path.clone());
+            } else {
+                assert_eq!(
+                    editable_texts,
+                    Vec::<(i64, String)>::new(),
+                    "non-editable application objects realize no editable GTK Entry"
                 );
             }
             for index in 0..descriptor["parameters"]["references"]
@@ -625,6 +709,127 @@ fn run_native_parity() {
             ),
         );
         assert!(traversal["objects"].as_u64().unwrap() >= 5);
+
+        // Native E5 (Bead u4k): navigate to the discovered editable XMLStringNode
+        // solely via displayed GTK actions, then drive real GTK Entry state edits.
+        let editable_path = editable_path.expect("discovered editable XMLStringNode via GTK actions");
+        let mut editable_descriptor =
+            activate(&runtime, &actor, &mut host, "project", root_index, "target");
+        for index in editable_path.iter().copied() {
+            editable_descriptor =
+                activate(&runtime, &actor, &mut host, "inspector", index, "target");
+        }
+        assert_eq!(
+            host.adapter()
+                .gtk_descriptor(inspector_handle)
+                .unwrap()
+                .unwrap(),
+            editable_descriptor
+        );
+        assert_eq!(
+            host.adapter()
+                .gtk_editable_texts(inspector_handle)
+                .unwrap(),
+            vec![(0, "Tove".to_string())]
+        );
+        assert!(host
+            .adapter()
+            .edit_gtk_field(inspector_handle, 999, "missing key")
+            .unwrap()
+            .is_none());
+
+        edit_state(
+            &runtime,
+            &actor,
+            &mut host,
+            inspector_handle,
+            "Ada",
+            "Ada",
+            false,
+            None,
+            None,
+        );
+        // Post-commit competing write before reread: the fresh authorized reread
+        // displays the winning value ("Grace") and pairs its token, never the
+        // submitted text ("Hopper") or the mutation receipt.
+        edit_state(
+            &runtime,
+            &actor,
+            &mut host,
+            inspector_handle,
+            "Hopper",
+            "Grace",
+            false,
+            Some("Grace"),
+            None,
+        );
+        // Follow-up edit succeeds because the reread paired "Grace"'s token.
+        let lin_descriptor = edit_state(
+            &runtime,
+            &actor,
+            &mut host,
+            inspector_handle,
+            "Lin",
+            "Lin",
+            false,
+            None,
+            None,
+        );
+        let denied_state = edit_state(
+            &runtime,
+            &actor,
+            &mut host,
+            inspector_handle,
+            "Denied state",
+            "Lin",
+            true,
+            None,
+            Some("CommandAuthorizationError"),
+        );
+        assert_eq!(
+            denied_state, lin_descriptor,
+            "denied state edit does not change displayed inspector descriptor"
+        );
+        let outside_state = stage(
+            &runtime,
+            &actor,
+            &mut host,
+            "real intervening state mutation",
+            "__parity.mutateStateOutside(\"External state\")",
+        );
+        assert_eq!(outside_state["value"], "External state");
+        assert_eq!(
+            host.adapter()
+                .gtk_descriptor(inspector_handle)
+                .unwrap()
+                .unwrap(),
+            lin_descriptor,
+            "intervening outside write leaves realized inspector descriptor at \"Lin\" until conflict reread"
+        );
+        edit_state(
+            &runtime,
+            &actor,
+            &mut host,
+            inspector_handle,
+            "Lost state",
+            "External state",
+            false,
+            None,
+            Some("CommandConflictError"),
+        );
+        // Retry after conflict reread pairs the current token and restores "Tove"
+        // before the E3 native method replacement stages.
+        edit_state(
+            &runtime,
+            &actor,
+            &mut host,
+            inspector_handle,
+            "Tove",
+            "Tove",
+            false,
+            None,
+            None,
+        );
 
         let native = stage(
             &runtime,
@@ -771,7 +976,7 @@ fn run_native_parity() {
         );
 
         // Helper negatives stay on transient host surfaces; no renderer contract op
-        // is added, and a stale handle never routes a source submission.
+        // is added, and a stale handle never routes a source submission or field edit.
         let empty_handle = host
             .adapter()
             .create_surface(&json!({"kind":"surface","width":10,"height":10}))
@@ -779,6 +984,11 @@ fn run_native_parity() {
         assert!(host
             .adapter()
             .submit_gtk_input(&empty_handle, 0, "empty")
+            .unwrap()
+            .is_none());
+        assert!(host
+            .adapter()
+            .edit_gtk_field(&empty_handle, 0, "empty")
             .unwrap()
             .is_none());
         host.adapter()
@@ -790,10 +1000,20 @@ fn run_native_parity() {
             .submit_gtk_input(&empty_handle, 0, "detached")
             .unwrap()
             .is_none());
+        assert!(host
+            .adapter()
+            .edit_gtk_field(&empty_handle, 0, "detached")
+            .unwrap()
+            .is_none());
         host.adapter().destroy_surface(&empty_handle).unwrap();
         assert!(host
             .adapter()
             .submit_gtk_input(&empty_handle, 0, "destroyed")
+            .unwrap_err()
+            .contains("unknown/destroyed"));
+        assert!(host
+            .adapter()
+            .edit_gtk_field(&empty_handle, 0, "destroyed")
             .unwrap_err()
             .contains("unknown/destroyed"));
 

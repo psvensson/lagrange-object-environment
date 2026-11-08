@@ -48,13 +48,20 @@ with its LagrangeBackend over the test-only SQLite Application Database driver.
 missing tokens, wrong subjects and unsupported bindings. E4 remains independently
 proved after its unchanged navigation harness is moved to shared test support.
 
-This is E5 Environment consumer acceptance, not native-host E5 acceptance. The
-portable root at `caf72f2` lacks `instanceVariableBindings`,
+Both the Node consumer lane (`test/yaxo-state.integration.test.js`) and the
+native Linux GTK lane (`hosts/linux/tests/native_application_parity.rs`, Bead
+`u4k`) prove E5 application-state editing end-to-end. At admitted Images
+`dc4266c664002e69ad5ca0b67dd0b7f094c8d8e7`, `src/portable-runtime.js` re-exports
+the exact owner functions `instanceVariableBindings`,
 `parseImageMutationBindingArtifact`, `resolveCallableInterface` and
-`resolveDeclaredType`. The adapter refuses unavailable helpers rather than
-importing private modules. Bead `u4k` tracks portable exposure/admission and the
-actual native GTK E5 proof. Existing browser/native regression suites establish
-the shared editing route, not execution of this application-state workflow there.
+`resolveDeclaredType`, verified in `hosts/linux/tests/portable_images_artifact.rs`.
+`hosts/linux/tests/native_application_parity.rs` navigates to the parsed
+`XMLStringNode` solely via displayed GTK actions, drives real `gtk4::Entry`
+edits (`edit_gtk_field`), and verifies positive state mutation, post-commit
+competing write before reread, denied write (`CommandAuthorizationError`),
+intervening outside write + stale conflict (`CommandConflictError`) + fresh
+authorized reread, retry after reread, native getter agreement, and unchanged
+ancestor records.
 
 E6 proves durable reacquisition with fresh runtime and Environment resources
 as described below; an in-memory successful edit is not restart evidence.
@@ -94,4 +101,4 @@ the SQL driver and demonstrates that the closed runtime cannot read.
 This is durable Node consumer acceptance with a test-only SQLite Application
 Database driver. It is not a distributed-cluster recovery, native-host durable
 backend, launchable-product restoration or durable Perspective proof. Native
-E5/E6 integration remains tracked in `u4k`.
+durable E6 host assembly remains separate.
