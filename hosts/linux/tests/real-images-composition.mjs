@@ -12,11 +12,12 @@
 // filesystem fallback or Node personality. All Images helpers come through the
 // one public `portable-runtime` entry.
 
-import {createImageClientAdapter, classIdFor} from 'image-client-adapter';
+import {createImageClientAdapter} from 'image-client-adapter';
 import {
   createPortableRuntime,
   installSmalltalkKernel,
   findSmalltalkKernel,
+  smalltalkClassObjectId,
   defineClass,
   installCallableInterfaceV2,
   installImageCreationBinding,
@@ -68,6 +69,7 @@ async function setup({imageId, ids}) {
     installImageObjectReadBinding,
     installImageObservationBinding,
     findSmalltalkKernel,
+    smalltalkClassObjectId,
     objectRef,
     objectResource,
     parseObjectResource,
@@ -124,12 +126,12 @@ async function setup({imageId, ids}) {
 
   return Object.freeze({
     adapter,
-    classId: classIdFor(ids.className),
+    classId: smalltalkClassObjectId(ids.className),
     reference: (objectId) => objectRef(imageId, objectId),
     authorities: Object.freeze({
       none: () => issue('mallory', []),
       create: (subjectObjectId) => issue('alice', [
-        grant('object/create', classIdFor(ids.className)),
+        grant('object/create', smalltalkClassObjectId(ids.className)),
         grant('object/edge-write', subjectObjectId),
       ]),
       read: (objectId) => issue('alice', [grant('object/read', objectId)]),

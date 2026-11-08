@@ -212,6 +212,10 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
                 'parseImageMutationBindingArtifact',
                 'resolveCallableInterface',
                 'resolveDeclaredType',
+                // Bead c9v: Images-owned Smalltalk class object-id seam consumed by
+                // ImageClientAdapter's control-plane schema provisioning so the
+                // Environment spells no class id.
+                'smalltalkClassObjectId',
               ];
               // A CONSTANT, not a function, so it needs its own kind check: the list above is
               // filtered on `typeof !== 'function'` and would report a perfectly present string
@@ -419,7 +423,7 @@ async fn loader_links_the_artifact_and_preserves_alias_identity() {
     assert_eq!(report["exportedCreate"], "function");
     // A NON-VACUITY / closure check only: it catches the requirement list silently
     // shrinking. The semantic contract is the by-name assertions below.
-    assert_eq!(report["requiredEnvironmentExportCount"], 33);
+    assert_eq!(report["requiredEnvironmentExportCount"], 34);
     assert_eq!(
         report["missingEnvironmentExports"],
         serde_json::json!([]),

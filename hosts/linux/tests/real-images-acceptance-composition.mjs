@@ -18,7 +18,7 @@ import {
   createUnauthorizedRefProvider,
 } from 'object-presentation-providers';
 import {createSelectionModel} from 'selection-model';
-import {createImageClientAdapter, classIdFor} from 'image-client-adapter';
+import {createImageClientAdapter} from 'image-client-adapter';
 import {createNativeClassPresentationProvider, createNativeClassSubject, createNativeMethodPresentationProvider, createNativeSmalltalkBrowser} from 'native-smalltalk-browser';
 import {createProjectBrowser, createProjectPresentationProvider, createProjectSubject} from 'project-browser';
 import {observeChanges} from 'image-observation';
@@ -26,6 +26,7 @@ import {
   createPortableRuntime,
   installSmalltalkKernel,
   findSmalltalkKernel,
+  smalltalkClassObjectId,
   defineClass,
   installCallableInterfaceV2,
   installImageCreationBinding,
@@ -77,6 +78,7 @@ async function setup({imageId, ids}) {
     installImageObjectReadBinding,
     installImageObservationBinding,
     findSmalltalkKernel,
+    smalltalkClassObjectId,
     objectRef,
     objectResource,
     parseObjectResource,
@@ -100,7 +102,7 @@ async function setup({imageId, ids}) {
   const authorities = Object.freeze({
     none: () => issue('mallory', []),
     create: (subjectObjectId) => issue('alice', [
-      grant('object/create', classIdFor(ids.className)),
+      grant('object/create', smalltalkClassObjectId(ids.className)),
       grant('object/edge-write', subjectObjectId),
     ]),
     read: (objectId) => issue('alice', [grant('object/read', objectId)]),
@@ -111,7 +113,7 @@ async function setup({imageId, ids}) {
     ]),
   });
   const ref = (objectId) => objectRef(imageId, objectId);
-  const classId = classIdFor(ids.className);
+  const classId = smalltalkClassObjectId(ids.className);
 
   const primary = await adapter.createObject({
     imageId,
@@ -259,7 +261,7 @@ async function setup({imageId, ids}) {
   // Native imported methods and replacement are exercised separately by
   // native_application_parity against the real portable compiler/executor.
   const nativeBrowser = createNativeSmalltalkBrowser({adapter, presentationRegistry, compositor});
-  const nativeClassRef = objectRef(imageId, classIdFor(ids.className));
+  const nativeClassRef = objectRef(imageId, smalltalkClassObjectId(ids.className));
   session.openNativeClass = async () => {
     await nativeBrowser.open(createNativeClassSubject({imageId, classRef: nativeClassRef}), {
       authority: authorities.read(nativeClassRef.objectId),

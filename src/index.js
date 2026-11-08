@@ -87,7 +87,6 @@ export {createFakeRendererAdapter} from './fake-renderer-adapter.js';
 export {
   PROBE_SHAPE_SLOTS,
   PROBE_TYPE_DECLARATIONS,
-  classIdFor,
   createImageClientAdapter,
   createRemoteImageClientAdapter,
   refToEdgeString,

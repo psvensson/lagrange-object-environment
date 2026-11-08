@@ -129,6 +129,7 @@ function adapterClients(runtime) {
     installImageObjectReadBinding: imagesApi.installImageObjectReadBinding,
     installImageObservationBinding: imagesApi.installImageObservationBinding,
     findSmalltalkKernel: imagesApi.findSmalltalkKernel,
+    smalltalkClassObjectId: imagesApi.smalltalkClassObjectId,
     objectRef: imagesApi.objectRef,
     objectResource: imagesApi.objectResource,
     parseObjectResource: imagesApi.parseObjectResource,
