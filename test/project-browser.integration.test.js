@@ -4,7 +4,6 @@ import {dirname, resolve} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 
 import {
-  classIdFor,
   createCompositor,
   createFakeRendererAdapter,
   createImageClientAdapter,
@@ -94,6 +93,7 @@ function adapterClients(runtime) {
     installImageObjectReadBinding: imagesApi.installImageObjectReadBinding,
     installImageObservationBinding: imagesApi.installImageObservationBinding,
     findSmalltalkKernel: imagesApi.findSmalltalkKernel,
+    smalltalkClassObjectId: imagesApi.smalltalkClassObjectId,
     objectRef: imagesApi.objectRef,
     objectResource: imagesApi.objectResource,
     parseObjectResource: imagesApi.parseObjectResource,
@@ -122,7 +122,7 @@ test('real durable Project browse -> canonical members -> separately-authorized 
   const adapter = createImageClientAdapter(adapterClients(runtime));
   for (const imageId of [IMAGE_A, IMAGE_B]) await adapter.ensureSchema(imageId, IDS);
 
-  const classId = classIdFor(IDS.className);
+  const classId = imagesApi.smalltalkClassObjectId(IDS.className);
   const ref = (imageId, objectId) => ({kind: 'ref', imageId, objectId});
   const issue = (grants) => runtime.authority.issue({principal: 'alice', grants});
   const readAuthority = (imageId, objectId) => issue([

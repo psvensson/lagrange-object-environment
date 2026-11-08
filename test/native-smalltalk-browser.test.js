@@ -655,25 +655,17 @@ test('the Environment composes NO Images object id anywhere in src/', async () =
   const walk = (dir) => readdirSync(dir, {withFileTypes: true}).flatMap((entry) => (
     entry.isDirectory() ? walk(join(dir, entry.name)) : [join(dir, entry.name)]
   ));
-  // Method and Block id fragments are forbidden OUTRIGHT: composing one would
-  // manufacture a method identity without an authorized read.
-  const forbiddenEverywhere = ['/method/', '/revision/', 'smalltalk/block/', 'smalltalk/metaclass/'];
-  // Class id composition has exactly ONE pre-existing site, `classIdFor` in the
-  // adapter, used only on the control-plane/schema path (`images.getObject` for
-  // the probe and Perspective classes, never a user-facing read). It predates
-  // native browsing and is pinned here rather than hidden, so a SECOND site —
-  // or any spread into the browsing lane — goes red. Bead lagrange-object-
-  // environment-c9v records the smell itself.
-  const classFragmentAllowance = new Set(['src/image-client-adapter.js']);
+  // Method, Block, Metaclass and Class id fragments are forbidden OUTRIGHT across
+  // all of src/ (Bead c9v removed the last pre-existing control-plane allowance
+  // in src/image-client-adapter.js by consuming Images' public
+  // smalltalkClassObjectId helper).
+  const forbiddenEverywhere = ['/method/', '/revision/', 'smalltalk/block/', 'smalltalk/metaclass/', 'smalltalk/class/'];
   const offenders = [];
   const root = new URL('../src', import.meta.url).pathname;
   for (const file of walk(root).filter((f) => f.endsWith('.js'))) {
     const relative = `src/${file.slice(root.length + 1)}`;
     const source = readFileSync(file, 'utf8');
-    const fragments = classFragmentAllowance.has(relative)
-      ? forbiddenEverywhere
-      : [...forbiddenEverywhere, 'smalltalk/class/'];
-    for (const fragment of fragments) {
+    for (const fragment of forbiddenEverywhere) {
       // A LITERAL id fragment in code, not the word in prose: the fragment
       // adjacent to a string/template delimiter.
       for (const quote of ['`', "'", '"']) {
@@ -684,8 +676,7 @@ test('the Environment composes NO Images object id anywhere in src/', async () =
     }
   }
   assert.deepEqual(offenders, [],
-    'no module under src/ may compose or parse an Images METHOD/Block id, and only the one '
-    + 'documented control-plane site may compose a class id; identity comes from Images');
+    'no module under src/ may compose or parse an Images class/method/Block/metaclass id; identity comes from Images');
   // The allowance is not a blank cheque: the browsing lane itself must be clean.
   assert.equal(
     readFileSync(new URL('../src/native-smalltalk-browser.js', import.meta.url), 'utf8').includes("'smalltalk/"),

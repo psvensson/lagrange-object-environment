@@ -271,6 +271,7 @@ function createImageClientAdapter(client) {
     installImageObjectReadBinding,
     installImageObservationBinding,
     findSmalltalkKernel,
+    smalltalkClassObjectId,
     objectRef,
     objectResource,
     parseObjectResource,
@@ -291,7 +292,7 @@ function createImageClientAdapter(client) {
     throw new TypeError('lagrange-images client authority service is missing required operation: require');
   }
 
-  for (const [name, fn] of Object.entries({defineClass, installCallableInterfaceV2, installImageCreationBinding, installImageMutationBinding, installImageObjectReadBinding, installImageObservationBinding, findSmalltalkKernel, objectRef, objectResource, parseObjectResource, objectVersionToken, textValue, packCompositeValue, unpackCompositeValue, normalizeTypeDeclarations, authorizedReadProject, authorizedRenameProject, authorizedDescribeSmalltalkClass, authorizedDescribeSmalltalkMethod, authorizedReadSmalltalkMethodForUpdate, authorizedReplaceSmalltalkMethod})) {
+  for (const [name, fn] of Object.entries({defineClass, installCallableInterfaceV2, installImageCreationBinding, installImageMutationBinding, installImageObjectReadBinding, installImageObservationBinding, findSmalltalkKernel, smalltalkClassObjectId, objectRef, objectResource, parseObjectResource, objectVersionToken, textValue, packCompositeValue, unpackCompositeValue, normalizeTypeDeclarations, authorizedReadProject, authorizedRenameProject, authorizedDescribeSmalltalkClass, authorizedDescribeSmalltalkMethod, authorizedReadSmalltalkMethodForUpdate, authorizedReplaceSmalltalkMethod})) {
     if (typeof fn !== 'function') {
       throw new TypeError(`lagrange-images client is missing required helper: ${name}`);
     }
@@ -602,7 +603,8 @@ function createImageClientAdapter(client) {
     }
 
     // Control-plane/schema read (trusted host), not a user-facing object read.
-    let classRecord = await images.getObject(imageId, classIdFor(className));
+    const classId = smalltalkClassObjectId(className);
+    let classRecord = await images.getObject(imageId, classId);
     if (!classRecord) {
       await defineClass({
         images,
@@ -611,7 +613,7 @@ function createImageClientAdapter(client) {
         instanceShapeRef: objectRef(imageId, shapeId),
       });
       // Control-plane/schema read (trusted host), not a user-facing object read.
-      classRecord = await images.getObject(imageId, classIdFor(className));
+      classRecord = await images.getObject(imageId, classId);
     }
 
     const interfaceRef = objectRef(imageId, interfaceId);
@@ -1002,11 +1004,12 @@ function createImageClientAdapter(client) {
       });
     }
     // Control-plane/schema read (trusted host), not a user-facing object read.
-    let perspectiveClass = await images.getObject(imageId, classIdFor(perspectiveClassName));
+    const perspectiveClassId = smalltalkClassObjectId(perspectiveClassName);
+    let perspectiveClass = await images.getObject(imageId, perspectiveClassId);
     if (!perspectiveClass) {
       await defineClass({images, imageId, name: perspectiveClassName, instanceShapeRef: objectRef(imageId, perspectiveShapeId)});
       // Control-plane/schema read (trusted host), not a user-facing object read.
-      perspectiveClass = await images.getObject(imageId, classIdFor(perspectiveClassName));
+      perspectiveClass = await images.getObject(imageId, perspectiveClassId);
     }
 
     let presentationShape = await images.getShape(imageId, presentationShapeId);
@@ -1014,11 +1017,12 @@ function createImageClientAdapter(client) {
       presentationShape = await images.putShape(imageId, {id: presentationShapeId, slots: PRESENTATION_SHAPE_SLOTS});
     }
     // Control-plane/schema read (trusted host), not a user-facing object read.
-    let presentationClass = await images.getObject(imageId, classIdFor(presentationClassName));
+    const presentationClassId = smalltalkClassObjectId(presentationClassName);
+    let presentationClass = await images.getObject(imageId, presentationClassId);
     if (!presentationClass) {
       await defineClass({images, imageId, name: presentationClassName, instanceShapeRef: objectRef(imageId, presentationShapeId)});
       // Control-plane/schema read (trusted host), not a user-facing object read.
-      presentationClass = await images.getObject(imageId, classIdFor(presentationClassName));
+      presentationClass = await images.getObject(imageId, presentationClassId);
     }
 
     if (!(await images.getCodeArtifact(imageId, perspectiveInterfaceId))) {
@@ -1048,8 +1052,8 @@ function createImageClientAdapter(client) {
     }
 
     return Object.freeze({
-      perspectiveClassId: classIdFor(perspectiveClassName),
-      presentationClassId: classIdFor(presentationClassName),
+      perspectiveClassId,
+      presentationClassId,
       perspectiveBlockRef: objectRef(imageId, perspectiveBlockId),
       presentationBlockRef: objectRef(imageId, presentationBlockId),
     });
@@ -1353,10 +1357,6 @@ function createRemoteImageClientAdapter({connection} = {}) {
   });
 }
 
-function classIdFor(className) {
-  return `smalltalk/class/${className}`;
-}
-
 // Decode the object id embedded in an object-scoped version token's scope, via
 // the public objectResource/parseObjectResource codec (never string-splitting,
 // which ADR 0039 forbids).
@@ -1381,7 +1381,6 @@ function makeObjectIdDecoder(objectResource, parseObjectResource) {
 export {
   PROBE_SHAPE_SLOTS,
   PROBE_TYPE_DECLARATIONS,
-  classIdFor,
   createImageClientAdapter,
   createRemoteImageClientAdapter,
   refToEdgeString,

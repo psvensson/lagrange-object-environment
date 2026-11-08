@@ -6,7 +6,7 @@ import {dirname, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
 import {Command} from '../src/index.js';
-import {createImageClientAdapter, classIdFor, refToEdgeString} from '../src/image-client-adapter.js';
+import {createImageClientAdapter, refToEdgeString} from '../src/image-client-adapter.js';
 import {presentation, split, stack, empty, leafViewIds as leafViewIdsImport} from '../src/composition-tree.js';
 import {encodeCompositionLayout, decodeCompositionLayout} from '../src/composition-persistence.js';
 import {
@@ -82,6 +82,7 @@ async function setup() {
     installImageObjectReadBinding: imagesApi.installImageObjectReadBinding,
     installImageObservationBinding: imagesApi.installImageObservationBinding,
     findSmalltalkKernel: imagesApi.findSmalltalkKernel,
+    smalltalkClassObjectId: imagesApi.smalltalkClassObjectId,
     objectRef: imagesApi.objectRef,
     objectResource: imagesApi.objectResource,
     parseObjectResource: imagesApi.parseObjectResource,
@@ -142,6 +143,7 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
         installImageObjectReadBinding: imagesApi.installImageObjectReadBinding,
         installImageObservationBinding: imagesApi.installImageObservationBinding,
         findSmalltalkKernel: imagesApi.findSmalltalkKernel,
+        smalltalkClassObjectId: imagesApi.smalltalkClassObjectId,
         objectRef: imagesApi.objectRef,
         objectResource: imagesApi.objectResource,
         parseObjectResource: imagesApi.parseObjectResource,
@@ -211,7 +213,7 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
 
   await t.test('create -> read back -> observe closes the live loop', async () => {
     const {runtime, adapter, schema} = await setup();
-    const classId = classIdFor(IDS.className);
+    const classId = imagesApi.smalltalkClassObjectId(IDS.className);
 
     // A durable target for the edge subject, created host-side.
     const targetShape = schema.shape.id;
@@ -367,7 +369,7 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
 
   await t.test('a foreign-image subject ref is rejected adapter-side', async () => {
     const {runtime, adapter} = await setup();
-    const classId = classIdFor(IDS.className);
+    const classId = imagesApi.smalltalkClassObjectId(IDS.className);
     const authority = grant(runtime, 'object/create', imagesApi.objectResource(IMAGE, classId));
 
     await assert.rejects(
@@ -385,7 +387,7 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
 
   await t.test('creation without the edge grant surfaces CommandAuthorizationError on dispatch', async () => {
     const {runtime, adapter} = await setup();
-    const classId = classIdFor(IDS.className);
+    const classId = imagesApi.smalltalkClassObjectId(IDS.className);
     // Only object/create, no object/edge-write on the target.
     const authority = grant(runtime, 'object/create', imagesApi.objectResource(IMAGE, classId));
 
@@ -616,7 +618,7 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
   // authorized-but-missing => a distinct not-found TypeError.
   await t.test('readObject crosses the authorized read lane; denied and missing are distinct', async () => {
     const {runtime, adapter, schema} = await setup();
-    const classId = classIdFor(IDS.className);
+    const classId = imagesApi.smalltalkClassObjectId(IDS.className);
     const shapeId = schema.shape.id;
 
     await runtime.images.putObject(IMAGE, {
@@ -671,7 +673,7 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
 
   await t.test('resolveAssetBytes resolves durable bytes per-ref under object/read; denied and invalid are distinct', async () => {
     const {runtime, adapter, schema} = await setup();
-    const classId = classIdFor(IDS.className);
+    const classId = imagesApi.smalltalkClassObjectId(IDS.className);
     const shapeId = schema.shape.id;
     const b64 = (bytes) => Buffer.from(bytes).toString('base64');
 
@@ -756,7 +758,7 @@ test('image-client-adapter integration', {skip: !available && 'lagrange-images s
   // images.history stream (which discloses every object's full record).
   await t.test('authorized observation: an unreadable object\'s change never appears; the consumer re-reads via readObject', async () => {
     const {runtime, adapter, schema} = await setup();
-    const classId = classIdFor(IDS.className);
+    const classId = imagesApi.smalltalkClassObjectId(IDS.className);
     const shapeId = schema.shape.id;
 
     // Seed two objects: 'readable' (alice may object/read) and 'secret'
@@ -954,13 +956,16 @@ test('createImageClientAdapter validates services and helpers (unit, no runtime)
   const good = {
     images: {}, invocations: {}, executor: {}, compilation: {}, authority: {require: () => {}},
     defineClass: () => {}, installCallableInterfaceV2: () => {}, installImageCreationBinding: () => {},
-    installImageMutationBinding: () => {}, installImageObjectReadBinding: () => {}, installImageObservationBinding: () => {}, findSmalltalkKernel: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
+    installImageMutationBinding: () => {}, installImageObjectReadBinding: () => {}, installImageObservationBinding: () => {}, findSmalltalkKernel: () => {}, smalltalkClassObjectId: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
     objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, unpackCompositeValue: () => {}, normalizeTypeDeclarations: () => {}, authorizedReadProject: () => {}, authorizedRenameProject: () => {}, authorizedDescribeSmalltalkClass: () => {}, authorizedDescribeSmalltalkMethod: () => {}, authorizedReadSmalltalkMethodForUpdate: () => {}, authorizedReplaceSmalltalkMethod: () => {},
   };
   assert.ok(createImageClientAdapter(good));
   const missing = {...good};
   delete missing.defineClass;
   assert.throws(() => createImageClientAdapter(missing), /missing required helper: defineClass/);
+  const noClassObjectId = {...good};
+  delete noClassObjectId.smalltalkClassObjectId;
+  assert.throws(() => createImageClientAdapter(noClassObjectId), /missing required helper: smalltalkClassObjectId/);
   const noObservation = {...good};
   delete noObservation.installImageObservationBinding;
   assert.throws(() => createImageClientAdapter(noObservation), /missing required helper: installImageObservationBinding/);
@@ -1013,7 +1018,7 @@ test('readProject delegates the Images-owned demand unchanged to the injected au
     images: {}, invocations: {}, executor: {}, compilation: {},
     authority: {require: (receivedContext, receivedDemand) => calls.push({receivedContext, receivedDemand})},
     defineClass: () => {}, installCallableInterfaceV2: () => {}, installImageCreationBinding: () => {},
-    installImageMutationBinding: () => {}, installImageObjectReadBinding: () => {}, installImageObservationBinding: () => {}, findSmalltalkKernel: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
+    installImageMutationBinding: () => {}, installImageObjectReadBinding: () => {}, installImageObservationBinding: () => {}, findSmalltalkKernel: () => {}, smalltalkClassObjectId: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
     objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, unpackCompositeValue: () => {}, normalizeTypeDeclarations: () => {},
     authorizedRenameProject: () => {},
     authorizedDescribeSmalltalkClass: () => {}, authorizedDescribeSmalltalkMethod: () => {}, authorizedReadSmalltalkMethodForUpdate: () => {}, authorizedReplaceSmalltalkMethod: () => {},
@@ -1041,7 +1046,7 @@ test('ensureSchema validates its ids eagerly (unit)', async () => {
   const good = {
     images: {}, invocations: {}, executor: {}, compilation: {}, authority: {require: () => {}},
     defineClass: () => {}, installCallableInterfaceV2: () => {}, installImageCreationBinding: () => {},
-    installImageMutationBinding: () => {}, installImageObjectReadBinding: () => {}, installImageObservationBinding: () => {}, findSmalltalkKernel: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
+    installImageMutationBinding: () => {}, installImageObjectReadBinding: () => {}, installImageObservationBinding: () => {}, findSmalltalkKernel: () => {}, smalltalkClassObjectId: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
     objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, unpackCompositeValue: () => {}, normalizeTypeDeclarations: () => {}, authorizedReadProject: () => {}, authorizedRenameProject: () => {}, authorizedDescribeSmalltalkClass: () => {}, authorizedDescribeSmalltalkMethod: () => {}, authorizedReadSmalltalkMethodForUpdate: () => {}, authorizedReplaceSmalltalkMethod: () => {},
   };
   const adapter = createImageClientAdapter(good);
@@ -1142,7 +1147,7 @@ test('renameProject delegates to authorizedRenameProject mapping ONLY the argume
     images, invocations: {}, executor: {}, compilation: {},
     authority: {require: (receivedContext, receivedDemand) => calls.push({receivedContext, receivedDemand})},
     defineClass: () => {}, installCallableInterfaceV2: () => {}, installImageCreationBinding: () => {},
-    installImageMutationBinding: () => {}, installImageObjectReadBinding: () => {}, installImageObservationBinding: () => {}, findSmalltalkKernel: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
+    installImageMutationBinding: () => {}, installImageObjectReadBinding: () => {}, installImageObservationBinding: () => {}, findSmalltalkKernel: () => {}, smalltalkClassObjectId: () => {}, objectRef: () => {}, objectResource: () => {}, parseObjectResource: () => {},
     objectVersionToken: () => {}, textValue: () => {}, packCompositeValue: () => {}, unpackCompositeValue: () => {}, normalizeTypeDeclarations: () => {},
     authorizedReadProject: () => {},
     authorizedDescribeSmalltalkClass: () => {}, authorizedDescribeSmalltalkMethod: () => {}, authorizedReadSmalltalkMethodForUpdate: () => {}, authorizedReplaceSmalltalkMethod: () => {},

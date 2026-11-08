@@ -6,7 +6,7 @@ import {fileURLToPath} from 'node:url';
 
 import {Command} from '../src/index.js';
 import {CommandAuthorizationError} from '../src/command-dispatcher.js';
-import {createImageClientAdapter, classIdFor} from '../src/image-client-adapter.js';
+import {createImageClientAdapter} from '../src/image-client-adapter.js';
 import {createPresentationRegistry} from '../src/presentation-registry.js';
 import {createCommandRegistry} from '../src/command-registry.js';
 import {createObjectNavigator} from '../src/object-navigator.js';
@@ -69,6 +69,7 @@ test('Phase 1 end-to-end: open -> present -> navigate -> command -> authorized m
     installImageObjectReadBinding: imagesApi.installImageObjectReadBinding,
     installImageObservationBinding: imagesApi.installImageObservationBinding,
     findSmalltalkKernel: imagesApi.findSmalltalkKernel,
+    smalltalkClassObjectId: imagesApi.smalltalkClassObjectId,
     objectRef: imagesApi.objectRef,
     objectResource: imagesApi.objectResource,
     parseObjectResource: imagesApi.parseObjectResource,
@@ -97,7 +98,7 @@ test('Phase 1 end-to-end: open -> present -> navigate -> command -> authorized m
     adapter, presentationRegistry, commandRegistry, referencesOfValue: imagesApi.referencesOfValue,
   });
 
-  const classId = classIdFor(IDS.className);
+  const classId = imagesApi.smalltalkClassObjectId(IDS.className);
   const ref = (objectId) => ({kind: 'ref', imageId: IMAGE, objectId});
   // A control-plane read authority: authorizes object/read on exactly one object.
   const readAuthority = (objectId) => runtime.authority.issue({

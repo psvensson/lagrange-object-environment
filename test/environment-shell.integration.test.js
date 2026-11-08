@@ -4,7 +4,7 @@ import {pathToFileURL} from 'node:url';
 import {dirname, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
-import {createImageClientAdapter, classIdFor} from '../src/image-client-adapter.js';
+import {createImageClientAdapter} from '../src/image-client-adapter.js';
 import {createEnvironmentShell} from '../src/environment-shell.js';
 import {createSelectionModel} from '../src/selection-model.js';
 import {createCompositor} from '../src/compositor.js';
@@ -63,6 +63,7 @@ test('EnvironmentShell end-to-end: select ref -> inspector; external mutation ->
     installImageObjectReadBinding: imagesApi.installImageObjectReadBinding,
     installImageObservationBinding: imagesApi.installImageObservationBinding,
     findSmalltalkKernel: imagesApi.findSmalltalkKernel,
+    smalltalkClassObjectId: imagesApi.smalltalkClassObjectId,
     objectRef: imagesApi.objectRef,
     objectResource: imagesApi.objectResource,
     parseObjectResource: imagesApi.parseObjectResource,
@@ -93,7 +94,7 @@ test('EnvironmentShell end-to-end: select ref -> inspector; external mutation ->
   const compositor = createCompositor({rendererAdapter});
   const shell = createEnvironmentShell({navigator, selectionModel, compositor});
 
-  const classId = classIdFor(IDS.className);
+  const classId = imagesApi.smalltalkClassObjectId(IDS.className);
   const ref = (objectId) => ({kind: 'ref', imageId: IMAGE, objectId});
   const readAuthority = (objectId) => runtime.authority.issue({
     principal: 'alice', grants: [{operation: 'object/read', resource: imagesApi.objectResource(IMAGE, objectId)}],
@@ -187,6 +188,7 @@ test('S4a: edit-field routes through CommandRouter to a REAL mutation; a stale t
     installImageObjectReadBinding: imagesApi.installImageObjectReadBinding,
     installImageObservationBinding: imagesApi.installImageObservationBinding,
     findSmalltalkKernel: imagesApi.findSmalltalkKernel,
+    smalltalkClassObjectId: imagesApi.smalltalkClassObjectId,
     objectRef: imagesApi.objectRef,
     objectResource: imagesApi.objectResource,
     parseObjectResource: imagesApi.parseObjectResource,
@@ -230,7 +232,7 @@ test('S4a: edit-field routes through CommandRouter to a REAL mutation; a stale t
   // The shell gets the writable-slot set from the adapter (the single owner).
   const shell = createEnvironmentShell({navigator, selectionModel, compositor, writableSlots: adapter.writableSlots});
 
-  const classId = classIdFor(IDS.className);
+  const classId = imagesApi.smalltalkClassObjectId(IDS.className);
   const ref = (objectId) => ({kind: 'ref', imageId: IMAGE, objectId});
   const readAuthority = (objectId) => runtime.authority.issue({
     principal: 'alice', grants: [{operation: 'object/read', resource: imagesApi.objectResource(IMAGE, objectId)}],
@@ -397,7 +399,7 @@ test('olm: edit-during-active-follow defers the self-observation reread; a secon
     installImageMutationBinding: imagesApi.installImageMutationBinding,
     installImageObjectReadBinding: imagesApi.installImageObjectReadBinding,
     installImageObservationBinding: imagesApi.installImageObservationBinding,
-    findSmalltalkKernel: imagesApi.findSmalltalkKernel, objectRef: imagesApi.objectRef,
+    findSmalltalkKernel: imagesApi.findSmalltalkKernel, smalltalkClassObjectId: imagesApi.smalltalkClassObjectId, objectRef: imagesApi.objectRef,
     objectResource: imagesApi.objectResource, parseObjectResource: imagesApi.parseObjectResource,
     objectVersionToken: imagesApi.objectVersionToken, textValue: imagesApi.textValue,
     packCompositeValue: imagesApi.packCompositeValue, unpackCompositeValue: imagesApi.unpackCompositeValue,
@@ -442,7 +444,7 @@ test('olm: edit-during-active-follow defers the self-observation reread; a secon
   const compositor = createCompositor({rendererAdapter});
   const shell = createEnvironmentShell({navigator, selectionModel, compositor, writableSlots: adapter.writableSlots});
 
-  const classId = classIdFor(IDS.className);
+  const classId = imagesApi.smalltalkClassObjectId(IDS.className);
   const ref = (objectId) => ({kind: 'ref', imageId: IMAGE, objectId});
   const readAuthority = (objectId) => runtime.authority.issue({
     principal: 'alice', grants: [{operation: 'object/read', resource: imagesApi.objectResource(IMAGE, objectId)}],
