@@ -27,7 +27,7 @@ async function credential(path) {
   } finally { await file.close(); }
 }
 
-export async function createDevelopmentDeployment(config, {stage = () => {}} = {}) {
+export async function createDevelopmentDeployment(config, {stage = () => {}, lagrangeRuntime = null, cleanupFailure = () => {}} = {}) {
   const expected = await credential(config.credentialFile);
   const pkg = JSON.parse(await readFile(new URL(import.meta.resolve('lagrange-server/package.json')), 'utf8'));
   assert.equal(pkg.version, '0.4.0');
@@ -37,7 +37,12 @@ export async function createDevelopmentDeployment(config, {stage = () => {}} = {
   assert(ports.every((port) => Number.isSafeInteger(port) && port > 0 && port <= 65535));
   assert.equal(new Set(ports).size, 3);
   stage('runtime-start');
-  const runtime = await api.createRuntime({backend: {
+  // A local demo worker may transfer its already-started seed into the public
+  // Images backend. That backend owns closure; the worker retains a raw-handle
+  // safety net for failures before a deployment can be returned.
+  const runtime = await api.createRuntime({backend: lagrangeRuntime
+    ? {instance: new api.LagrangeBackend({runtime: lagrangeRuntime})}
+    : {
     mode: 'lagrange', lagrangeSpecifier: import.meta.resolve('lagrange-server'),
     configuration: {
       logging: {level: 'error', prettyPrint: false},
@@ -113,7 +118,11 @@ export async function createDevelopmentDeployment(config, {stage = () => {}} = {
       close: () => runtime.close(),
     };
   } catch (error) {
-    try { await runtime.close(); } catch { /* Keep the first semantic failure. */ }
+    try { await runtime.close(); } catch (cleanupError) {
+      // The worker may retain secondary cleanup evidence; never replace the
+      // original semantic failure or alter the default deployment contract.
+      try { cleanupFailure(cleanupError); } catch { /* Recorder is sideband. */ }
+    }
     throw error;
   }
 }
