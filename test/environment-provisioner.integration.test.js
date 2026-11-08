@@ -37,6 +37,7 @@ const SHAPES = [
   ['environment/shapes/catalog/v1', ['format', 'defaultTheme'], 'values'],
   ['environment/shapes/root-theme/v1', ['format', 'name'], 'values'],
   ['environment/shapes/design-token/v1', ['format', 'path', 'type', 'value'], 'none'],
+  ['environment/shapes/derived-theme/v1', ['format', 'name', 'baseTheme'], 'values'],
 ];
 // Independent release oracle: no schema, stock list or ids imported from the SUT.
 const TOKENS = [
@@ -217,11 +218,29 @@ test('ordinary startup in an unprovisioned image leaves shared defaults absent',
   assert.equal(await runtime.images.getRecord(IMAGE, CATALOG), undefined);
 });
 
-for (const conflictKind of ['Shape', 'token']) {
+test('upgrading the T1 graph adds only the derived Shape and preserves all old records', integration, async t => {
+  const {runtime, port, provisioner} = await setup(t);
+  const derivedId = 'environment/shapes/derived-theme/v1';
+  // Reproduce the previous release through the same public installation port.
+  await createEnvironmentProvisioner({...port, provisionShape(request) {
+    return request.shape.id === derivedId ? undefined : port.provisionShape(request);
+  }}).provision({imageId: IMAGE});
+  const before = await snapshot(runtime.images);
+  assert.equal(before.some(record => record.id === derivedId), false);
+  await provisioner.provision({imageId: IMAGE});
+  const after = await snapshot(runtime.images);
+  assert.equal(after.length, before.length + 1);
+  for (const record of before) assert.deepEqual(after.find(item => item.id === record.id), record);
+  assertGraph(after);
+  await provisioner.provision({imageId: IMAGE});
+  assert.deepEqual(await snapshot(runtime.images), after);
+});
+
+for (const conflictKind of ['Shape', 'derived Shape', 'token']) {
   test(`a conflicting stock ${conflictKind} propagates the exact public conflict and preserves the occupant`, integration, async t => {
     const {runtime, port, provisioner} = await setup(t);
-    const id = conflictKind === 'Shape' ? SHAPES[2][0] : tokenId('accent');
-    if (conflictKind === 'Shape') {
+    const id = conflictKind === 'token' ? tokenId('accent') : SHAPES[conflictKind === 'Shape' ? 2 : 3][0];
+    if (conflictKind !== 'token') {
       // Shapes are immutable: create the conflicting layout before installation.
       for (const [shapeId, names, indexed] of SHAPES) {
         await runtime.images.putShape(IMAGE, {id: shapeId, indexed,
@@ -259,7 +278,7 @@ test('a pre-write interruption leaves a partial graph that resumes without rewri
   }});
   await assert.rejects(firstAttempt.provision({imageId: IMAGE}), error => error === interrupted);
   const partial = await snapshot(runtime.images);
-  assert.equal(partial.length, 7, 'three Shapes and four Tokens, no catalog or root');
+  assert.equal(partial.length, 8, 'four Shapes and four Tokens, no catalog or root');
   assert.equal(await runtime.images.getRecord(IMAGE, CATALOG), undefined);
   assert.equal(await runtime.images.getRecord(IMAGE, THEME), undefined);
   await provisioner.provision({imageId: IMAGE});
