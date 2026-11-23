@@ -910,7 +910,7 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
         // it. Reported EXACTLY ONCE, and a throwing reporter is swallowed rather
         // than starting a second reporting loop. Without the hook the historical
         // best-effort swallow is preserved, so existing callers are unchanged.
-        activateOnView({view, binding, key: intent.key, authority, readBlockId}).catch((error) => {
+        return activateOnView({view, binding, key: intent.key, authority, readBlockId}).catch((error) => {
           if (!onActivateError) return;
           try {
             onActivateError(error, Object.freeze({viewId: view.viewId}));
@@ -918,7 +918,6 @@ function createEnvironmentShell({navigator, selectionModel, compositor, writable
             // A reporter that itself fails must not re-enter this path.
           }
         });
-        return;
       }
       if (kind === 'submit-input') {
         // NO INPUT BINDING FOR THIS LIVE VIEW = an explicit, silent no-op. The

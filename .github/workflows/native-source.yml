@@ -1,0 +1,97 @@
+name: Native source development
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  native-source-development:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: lagrange-object-environment
+      - uses: actions/checkout@v5
+        with:
+          repository: psvensson/lagrange
+          ref: 234f478e034b738328c63900e74b6bea3ee63bb8
+          path: lagrange-source
+      - uses: actions/checkout@v5
+        with:
+          repository: psvensson/lagrange-images
+          ref: dc4266c664002e69ad5ca0b67dd0b7f094c8d8e7
+          path: lagrange-images
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.98.0'
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libudev-dev \
+            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libssl-dev mesa-vulkan-drivers libgl1-mesa-dri \
+            libgtk-4-dev xvfb
+      - name: Install locked source dependencies
+        working-directory: lagrange-source
+        run: npm ci --no-audit --no-fund
+      - name: Prove the published package is absent from the demo
+        working-directory: lagrange-object-environment
+        run: |
+          node --input-type=module -e '
+            import {createRequire} from "node:module";
+            import {resolve} from "node:path";
+            const require = createRequire(resolve("examples/native-cluster/package.json"));
+            try {
+              require.resolve("lagrange-server/package.json");
+              throw new Error("Source acceptance must not depend on the published package");
+            } catch (error) {
+              if (error.code !== "MODULE_NOT_FOUND") throw error;
+            }
+          '
+      - name: Compile native artifacts before starting source processes
+        working-directory: lagrange-object-environment
+        run: |
+          cargo build --manifest-path hosts/linux/Cargo.toml --locked --bin lagrange-host-linux
+          cargo test --manifest-path hosts/linux/Cargo.toml --locked \
+            --test native_cluster --no-run --message-format=json > /tmp/native-source-build.jsonl
+          node --input-type=module -e '
+            import {readFileSync, writeFileSync} from "node:fs";
+            const rows = readFileSync("/tmp/native-source-build.jsonl", "utf8").trim().split("\n").map(JSON.parse);
+            const binaries = rows.filter(r => r.reason === "compiler-artifact" && r.target.name === "native_cluster" && r.executable);
+            if (binaries.length !== 1) throw new Error("missing native action test");
+            writeFileSync("/tmp/native-source-test-path", binaries[0].executable);
+          '
+      - name: Native source executable and GTK acceptance
+        timeout-minutes: 10
+        working-directory: lagrange-object-environment
+        env:
+          OE_SOURCE_EVIDENCE_DIR: ${{ runner.temp }}/native-source-evidence
+        # One real host, three guarded runtime processes, and the ordinary
+        # launcher/cohort. Source success does not accept the published package.
+        # Startup remains 160s including the mapped CLI; total proof is 500s.
+        run: |
+          xvfb-run -a -s "-screen 0 1280x1024x24" node test/native-cluster/run-source.js \
+            "$(cat /tmp/native-source-test-path)" \
+            --lagrange-checkout "$GITHUB_WORKSPACE/lagrange-source" \
+            --host-id "$(hostname)" \
+            --images-checkout "$GITHUB_WORKSPACE/lagrange-images" \
+            --native-binary "$GITHUB_WORKSPACE/lagrange-object-environment/hosts/linux/target/debug/lagrange-host-linux"
+      - name: Retain bounded source evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: native-source-evidence-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/native-source-evidence/manifest.json
+            ${{ runner.temp }}/native-source-evidence/diagnostics.json
+            ${{ runner.temp }}/native-source-evidence/receipts.json
+            ${{ runner.temp }}/native-source-evidence/snapshot-1.json
+            ${{ runner.temp }}/native-source-evidence/snapshot-2.json
+          if-no-files-found: error
+          retention-days: 7

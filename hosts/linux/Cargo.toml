@@ -20,6 +20,10 @@ futures = "0.3"
 raw-window-handle = "0.6"
 env_logger = "0.11"
 log = "0.4"
+# Native read-service transport. TLS stays verified; the host disables redirects,
+# retries, implicit proxies and compression and bounds the complete response.
+reqwest = { version = "=0.13.5", default-features = false, features = ["native-tls"] }
+libc = "0.2"
 
 # 3zb-A bounded Environment-side rquickjs embed (ADR 0014 fallback; JS WASM
 # Component/WIT is preferred; its asynchronous acceptance path is not yet proven
@@ -126,6 +130,9 @@ rquickjs = { git = "https://github.com/psvensson/rquickjs-pin.git", rev = "810b2
 rquickjs-core = { git = "https://github.com/psvensson/rquickjs-pin.git", rev = "810b2b661ebee5f632e664fc93084f0f21258341" }
 rquickjs-sys = { git = "https://github.com/psvensson/rquickjs-pin.git", rev = "810b2b661ebee5f632e664fc93084f0f21258341" }
 rquickjs-macro = { git = "https://github.com/psvensson/rquickjs-pin.git", rev = "810b2b661ebee5f632e664fc93084f0f21258341" }
+
+[dev-dependencies]
+native-tls = "0.2"
 
 [workspace]
 

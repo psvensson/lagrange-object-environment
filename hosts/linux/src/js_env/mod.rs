@@ -283,8 +283,10 @@ impl JsEnvOwner {
 /// sites (environment-shell.js ~L202, image-observation.js ~L166-167) register
 /// plain arrow listeners that read no event argument and no `this`, and the
 /// shell's `throwIfAborted` (image-observation.js ~L139) is the Environment's
-/// OWN local helper reading only `signal?.aborted`. OMITTED on purpose:
-/// `signal.reason`, `signal.throwIfAborted()`, the `AbortSignal.abort()`/
+/// OWN local helper reading only `signal?.aborted`. The read connection also
+/// needs the exact first cancellation reason, so `reason` is supported. Its
+/// undefined default is an Error named AbortError, not a DOMException.
+/// OMITTED on purpose: `signal.throwIfAborted()`, the `AbortSignal.abort()`/
 /// `.timeout()`/`.any()` statics, EventTarget inheritance, and the listener
 /// event-argument/`this` binding. If a future Env module needs one of those,
 /// add it here deliberately — do not assume full DOM semantics.
@@ -293,9 +295,11 @@ fn install_abort_controller(ctx: &Ctx) -> Result<()> {
         r#"
 globalThis.AbortSignal = class AbortSignal {
   #aborted = false;
+  #reason = undefined;
   #listeners = new Set();
   constructor() {}
   get aborted() { return this.#aborted; }
+  get reason() { return this.#reason; }
   addEventListener(type, fn, opts) {
     if (type !== 'abort' || typeof fn !== 'function') return;
     this.#listeners.add({ fn, once: Boolean(opts && opts.once) });
@@ -307,8 +311,13 @@ globalThis.AbortSignal = class AbortSignal {
     }
   }
   // Internal: fire the abort, honoring {once:true} and listener removal.
-  _fire() {
+  _fire(reason) {
     if (this.#aborted) return;
+    if (reason === undefined) {
+      reason = new Error('The operation was aborted.');
+      reason.name = 'AbortError';
+    }
+    this.#reason = reason;
     this.#aborted = true;
     for (const entry of [...this.#listeners]) {
       if (entry.once) this.#listeners.delete(entry);
@@ -320,7 +329,7 @@ globalThis.AbortSignal = class AbortSignal {
 };
 globalThis.AbortController = class AbortController {
   constructor() { this.signal = AbortSignal._make(); }
-  abort() { this.signal._fire(); }
+  abort(reason) { this.signal._fire(reason); }
 };
 "#,
     )?;

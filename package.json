@@ -9,6 +9,7 @@
     ".": "./src/index.js"
   },
   "scripts": {
+    "demo:native": "node examples/native-cluster/launch.js",
     "test": "node --test test/*.test.js",
     "test:browser": "node --test --test-concurrency=1 --test-timeout=120000 test/browser/browser-proof.test.js test/browser/glb-proof.test.js test/browser/intent-proof.test.js test/browser/dom-coexistence.test.js",
     "test:browser:canvas": "node --test test/browser/browser-proof.canvas.manual.test.js",

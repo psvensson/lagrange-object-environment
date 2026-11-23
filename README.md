@@ -16,6 +16,24 @@ image objects -> presentations -> commands -> authorized image operations
 
 A rendered thing retains the identity of the object it presents. The same object may have many presentations: a list row, source fragment, inspector, graph node, topology view or domain-specific editor. Operations are commands on semantic objects rather than arbitrary widget callbacks.
 
+## Native viewer
+
+The Linux executable can open a Project and inspect its members through the
+[authorized read service](docs/decisions/0017-authorized-read-service.md). It uses
+the ordinary Environment core and native GTK controls, with explicit refresh and
+no desktop Node process. See [build and launch instructions](hosts/linux/README.md)
+and the [current scope](docs/architecture/native-cluster-viewer.md). Service
+bootstrap, authentication and actual cluster acceptance are separate from the
+native transport/window proofs.
+
+The [local source-development launcher](examples/native-cluster/README.md)
+explicitly selects Lagrange `234f478e` with Images `dc4266c` and starts three
+processes on one declared physical host. Its implementation awaits exact-head
+live acceptance; no successful source cluster result is claimed yet. The
+automatic PR/main source gate and the separately invoked published-package
+proof have distinct identities. The historical `lagrange-server@0.4.0` startup
+failure remains open in `llh`; see [the acceptance contract](docs/architecture/native-cluster-acceptance.md).
+
 ## System boundary
 
 ```text
@@ -104,8 +122,11 @@ npm test
 
 The [authorized read-service host](hosts/image-read-service/README.md) provides
 authenticated Project and object reads through an operator-supplied deployment.
-The service contract is tested; native executable and real-cluster acceptance are
-tracked separately in Bead 8dh.
+The service contract is tested. The native source journey now has an explicit
+automatic development gate, with exact-head live acceptance still pending;
+published-package acceptance remains a separate manual proof and an open
+dependency. See [the native acceptance record](docs/architecture/native-cluster-acceptance.md)
+for the two identity pairs, bounded proof and preserved first failure.
 
 1. [Architecture](docs/architecture.md)
 2. [Core concepts](docs/concepts.md)

@@ -1,0 +1,1 @@
+{"state":"unavailable","digest":null,"reason":"ENOENT: no such file or directory, open '/mnt/data/peter/projects/lagrange-object-environment/examples/native-cluster/node_modules/lagrange-server/package-lock.json'"}
