@@ -58,11 +58,16 @@ pub fn css_for_resolved_tokens(tokens: &Value) -> Result<String, String> {
                 family.to_string()
             }
             "dimension" | "fontSize" => {
-                let number = value.as_u64().ok_or("GTK Theme dimension must be an unsigned integer")?;
-                if number > 9_007_199_254_740_991 || (kind == "fontSize" && number == 0) {
+                // Mirror JS Number.isSafeInteger, not serde_json::as_u64:
+                // 13, 13.0, 1.3e1 and -0 are the SAME valid dimension,
+                // including when a JSON parser stores an integral float.
+                let number = value.as_f64().ok_or("GTK Theme dimension must be a JSON number")?;
+                if !number.is_finite() || number.fract() != 0.0 || number < 0.0
+                    || number > 9_007_199_254_740_991.0
+                    || (kind == "fontSize" && number == 0.0) {
                     return Err("GTK Theme dimension/font size is out of range".into());
                 }
-                format!("{number}px")
+                format!("{}px", number as u64)
             }
             _ => return Err("GTK Theme unsupported token type".into()),
         };

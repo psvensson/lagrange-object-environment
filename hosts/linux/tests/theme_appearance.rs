@@ -81,10 +81,29 @@ fn native_renderer_materializes_two_independent_resolved_themes_without_a_defaul
         "references":[{"kind":"ref","imageId":"img","objectId":"obj-b"}]}
     });
     adapter.attach_presentation(&handle, &descriptor).unwrap();
+    assert_eq!(adapter.gtk_foreground_rgb(&handle).unwrap(), Some((240, 243, 247)),
+        "computed Theme foreground must be visible through the PRODUCTION adapter attach path");
     assert!(adapter.gtk_visible_text(&handle).unwrap().contains(&"Navigator: obj-root".to_string()));
     assert_eq!(adapter.activate_gtk_action(&handle, 0).unwrap().unwrap().key(), 0);
     adapter.detach_presentation(&handle).unwrap();
     adapter.destroy_surface(&handle).unwrap();
+}
+
+#[test]
+fn gtk_theme_accepts_the_same_safe_integral_json_numbers_as_the_browser() {
+    let mut values = tokens("stock");
+    // Rust serde_json stores 13.0 and 1.3e1 as floats; JavaScript's
+    // Number.isSafeInteger accepts them as the integer 13. -0.0 is zero.
+    values[12]["value"] = serde_json::from_str("1.3e1").unwrap();
+    values[14]["value"] = serde_json::from_str("13.0").unwrap();
+    values[2]["value"] = serde_json::from_str("-0.0").unwrap();
+    let css = css_for_resolved_tokens(&values).expect("integral floats are legal resolved dimensions");
+    assert!(css.contains("font-size: 13px"));
+    assert!(css.contains("border-radius: 0px"));
+    values[12]["value"] = serde_json::from_str("13.5").unwrap();
+    assert!(css_for_resolved_tokens(&values).is_err(), "fractional font sizes are not integers");
+    values[12]["value"] = serde_json::from_str("9.007199254740992e15").unwrap();
+    assert!(css_for_resolved_tokens(&values).is_err(), "unsafe integers are refused");
 }
 
 #[test]

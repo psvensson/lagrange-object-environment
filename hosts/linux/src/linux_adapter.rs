@@ -282,6 +282,20 @@ impl LinuxRendererAdapter {
         })
     }
 
+    /// Data-only native appearance inspection for the L3/Theme tests. This is
+    /// NOT a seventh RendererAdapter op and exposes no GTK object or style.
+    pub fn gtk_foreground_rgb(&self, handle: &str) -> Result<Option<(u8, u8, u8)>, String> {
+        let entry = self.require_live(handle, "gtk_foreground_rgb")?;
+        Ok(match &entry.realization {
+            Some(Realization::Gtk { realization, .. }) => {
+                let rgba = realization.root.style_context().color();
+                let byte = |v: f32| (v * 255.0).round() as u8;
+                Some((byte(rgba.red()), byte(rgba.green()), byte(rgba.blue())))
+            }
+            _ => None,
+        })
+    }
+
     /// The action-button labels of a GTK surface's realization (host-side;
     /// NOT a contract op). Empty for a GLB handle.
     pub fn gtk_action_labels(&self, handle: &str) -> Result<Vec<String>, String> {
