@@ -30,7 +30,9 @@ try {
 
 `done` reports terminal follow completion/failure. `close` additionally awaits
 renderer destruction and preserves prior Theme, withdrawal, reporting and
-teardown failures. Theme failure withdraws its styles and preserves panes until
+teardown failures. Close invokes Compositor destruction immediately to reject
+new view operations; only actual renderer teardown waits for follow retirement.
+Theme failure withdraws its styles and preserves panes until
 the host closes them. The Session and adapter identities cannot be claimed by a
 second lifecycle, and a closed lifecycle cannot restart. See the
 [Session composition contract](architecture/session-theme-composition.md) for

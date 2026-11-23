@@ -1,5 +1,5 @@
 import {Session} from './model.js';
-import {createCompositor} from './compositor.js';
+import {createCompositor, RENDERER_ADAPTER_METHODS} from './compositor.js';
 
 // Custody belongs to this interaction owner, not Session.state or a host's
 // convention. Weak identities neither retain clients nor map principals.
@@ -42,7 +42,8 @@ function observedRejection(error) {
  */
 function createSessionThemeLifecycle({session, rendererAdapter, themeResolver, onThemeError} = {}) {
   if (!(session instanceof Session)) throw new TypeError('SessionThemeLifecycle requires a Session');
-  if (!rendererAdapter || typeof rendererAdapter.setResolvedTokens !== 'function') {
+  if (!rendererAdapter || typeof rendererAdapter !== 'object'
+      || typeof rendererAdapter.setResolvedTokens !== 'function') {
     throw new TypeError('SessionThemeLifecycle requires a synchronous renderer setResolvedTokens');
   }
   if (!themeResolver || typeof themeResolver.followTheme !== 'function'
@@ -53,7 +54,27 @@ function createSessionThemeLifecycle({session, rendererAdapter, themeResolver, o
   if (claimedSessions.has(session) || claimedAdapters.has(rendererAdapter)) {
     throw new TypeError('Session or renderer adapter already belongs to a Theme lifecycle');
   }
-  const rawCompositor = createCompositor({rendererAdapter}); // validates all six operations before claim
+  // Logical destruction must fence admissions synchronously. Defer only the
+  // concrete renderer teardown, inside this interaction owner's six-op port.
+  // Other methods preserve the actual adapter as receiver and add no await.
+  const rendererPort = Object.fromEntries(RENDERER_ADAPTER_METHODS.map(method => {
+    const operation = rendererAdapter[method];
+    // Do not let our barrier disguise a missing/nonfunction actual operation:
+    // the canonical Compositor constructor still validates all six methods.
+    if (typeof operation !== 'function') return [method, operation];
+    if (method !== 'destroyAll') return [method, operation.bind(rendererAdapter)];
+    return [method, async function destroyRendererAfterFollow() {
+      // rawCompositor.destroy has ALREADY closed admissions before this can
+      // invoke abort listeners or wait for any pending follow work.
+      controller.abort();
+      if (retirement) await retirement;
+      else settleFollow();
+      // Retirement records follow failures without throwing them through the
+      // renderer's error boundary. Only actual renderer failures cross here.
+      await operation.call(rendererAdapter);
+    }];
+  }));
+  const rawCompositor = createCompositor({rendererAdapter: rendererPort});
   const setResolvedTokens = rendererAdapter.setResolvedTokens.bind(rendererAdapter);
   claimedSessions.add(session);
   claimedAdapters.add(rendererAdapter);
@@ -176,23 +197,14 @@ function createSessionThemeLifecycle({session, rendererAdapter, themeResolver, o
     // A synchronous reporter may call close without returning/awaiting it.
     // Observe rejection immediately while returning the original Promise.
     closePromise.catch(() => {});
-    controller.abort();
-    const closing = (async () => {
-      if (retirement) await retirement;
-      else settleFollow();
-      let teardownError;
-      let teardownFailed = false;
-      try {
-        await rawCompositor.destroy();
-      } catch (error) {
-        teardownFailed = true;
-        teardownError = error; // Compositor owns its existing typed mapping
-      }
-      if (!teardownFailed && failureErrors) throw followFailure;
-      if (teardownFailed) {
-        throw failureResult([...(failureErrors ?? []), teardownError], 'Session Theme teardown failed');
-      }
-    })();
+    // Call immediately, not from a later continuation: Compositor is the sole
+    // admission owner and must reject same-turn post-close view requests.
+    const closing = rawCompositor.destroy().then(() => {
+      if (failureErrors) throw followFailure;
+    }, teardownError => {
+      // Compositor retains the existing typed renderer-error mapping.
+      throw failureResult([...(failureErrors ?? []), teardownError], 'Session Theme teardown failed');
+    });
     closing.then(resolveClose, rejectClose);
     return closePromise;
   }

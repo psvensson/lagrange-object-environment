@@ -39,7 +39,7 @@ async function bounded(promise) {
   }
 }
 
-function fixture() {
+function fixture({directDestroy = false} = {}) {
   const records = new Map(STOCK.map(token => [`token/${token.path}`, {
     slots: {format: text('environment-design-token/v1'), path: text(token.path), type: text(token.type),
       value: typeof token.value === 'number' ? {kind: 'integer', value: String(token.value)} : text(token.value)},
@@ -68,12 +68,12 @@ function fixture() {
       styles.push(tokens);
       return hooks.style?.(tokens);
     },
-    async destroyAll() {
+    ...(directDestroy ? {} : {async destroyAll() {
       destroyCount++;
       order.push('destroy');
       await hooks.destroy?.();
       await fake.destroyAll();
-    },
+    }}),
   });
   const resolver = createThemeResolver({
     async readObject(request) {
@@ -174,6 +174,75 @@ test('T6 claims actual Session and adapter identities across factory instances',
   assert.throws(() => createSessionThemeLifecycle({...common, session: f.session,
     rendererAdapter: {...createFakeRendererAdapter(), setResolvedTokens() {}}}), /already belongs/);
 });
+
+test('T6 teardown delegation cannot disguise an invalid actual renderer or consume its identity', async () => {
+  const f = fixture();
+  const session = new Session({principal: 'valid after correction'});
+  const fake = createFakeRendererAdapter();
+  const rendererAdapter = {...fake, setResolvedTokens() {}, destroyAll: undefined};
+  const options = {session, rendererAdapter, themeResolver: f.resolver, onThemeError() {}};
+  assert.throws(() => createSessionThemeLifecycle(options), /missing required method: destroyAll/);
+  rendererAdapter.destroyAll = fake.destroyAll;
+  const valid = createSessionThemeLifecycle(options);
+  await valid.close();
+  assert.equal(fake.calls().filter(call => call.method === 'destroyAll').length, 1);
+  await f.lifecycle.close();
+});
+
+for (const failed of [false, true]) {
+  test(`T6 close fences same-turn view requests with ${failed ? 'retired failed' : 'active'} following`, async () => {
+    // The fake's REAL destroyAll runs synchronously until its returned Promise;
+    // an async instrumentation wrapper would mask the old microtask race.
+    const f = fixture({directDestroy: true});
+    const view = await f.lifecycle.compositor.openView(VIEW);
+    const original = new Error('initial Theme read denied');
+    if (failed) {
+      f.hooks.read = () => { throw original; };
+      await assert.rejects(f.lifecycle.start(f.options), error => error === original);
+      await assert.rejects(f.lifecycle.done, error => error === original);
+    } else await f.lifecycle.start(f.options);
+    let abortOperations;
+    let abortFocusFailure;
+    if (!failed) {
+      f.observations[0].options.signal.addEventListener('abort', () => {
+        // Abort invokes external listeners synchronously. Compositor must have
+        // closed admissions before one of those listeners can reenter it.
+        abortOperations = Promise.allSettled([
+          f.lifecycle.compositor.openView(VIEW),
+          f.lifecycle.compositor.presentOn(view, VIEW.presentationDescriptor),
+        ]);
+        try { f.lifecycle.compositor.focusView(view); } catch (error) { abortFocusFailure = error; }
+      }, {once: true});
+    }
+    const before = f.fake.calls().length;
+    const closing = f.lifecycle.close();
+    // These requests begin AFTER close but in the SAME turn, before retirement
+    // can yield. Rejection alone is insufficient: old code could dispatch a
+    // create, then fail attaching and resurrect a lost view after map clearing.
+    const opening = f.lifecycle.compositor.openView(VIEW);
+    const presenting = f.lifecycle.compositor.presentOn(view, VIEW.presentationDescriptor);
+    assert.throws(() => f.lifecycle.compositor.focusView(view), RendererResourceLostError);
+    const [closed, opened, presented] = await Promise.allSettled([closing, opening, presenting]);
+    assert.equal(closed.status, failed ? 'rejected' : 'fulfilled');
+    if (failed) assert.equal(closed.reason, original);
+    for (const result of [opened, presented]) {
+      assert.equal(result.status, 'rejected');
+      assert.ok(result.reason instanceof RendererResourceLostError);
+    }
+    if (!failed) {
+      assert.ok(abortOperations, 'close synchronously reaches the observation abort listener');
+      assert.ok(abortFocusFailure instanceof RendererResourceLostError);
+      for (const result of await abortOperations) {
+        assert.equal(result.status, 'rejected');
+        assert.ok(result.reason instanceof RendererResourceLostError);
+      }
+    }
+    assert.deepEqual(f.fake.calls().slice(before).map(call => call.method), ['destroyAll'],
+      'no post-close createSurface, detachPresentation or attachPresentation may reach the adapter');
+    assert.equal(f.fake.liveResourceCount(), 0);
+    assert.deepEqual(f.lifecycle.compositor.durableIntent(), [], 'no lost view is reinserted after teardown');
+  });
+}
 
 test('T6 duplicate start is inert and close-before-start cannot dispatch a follow', async () => {
   const f = fixture();

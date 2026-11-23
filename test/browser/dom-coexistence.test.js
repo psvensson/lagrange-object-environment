@@ -55,10 +55,19 @@ function assertThemePanePreserved(sample) {
 function assertThemeCompositionRetired(result) {
   assert.equal(result.destroyIsClose, true, 'the published Compositor destroy is the lifecycle close');
   assert.equal(result.singleFlight, true, 'concurrent and repeated facade shutdown share the same Promise');
+  assert.equal(result.postCloseOpenRejected, true, 'same-turn post-close opening rejects through canonical admission');
+  assert.equal(result.postClosePresentRejected, true, 'same-turn post-close presentation rejects through canonical admission');
+  assert.equal(result.postCloseFocusRejected, true, 'same-turn post-close focus rejects through canonical admission');
+  assert.deepEqual(result.rendererCallsAfterClose, ['destroyAll'],
+    'no post-close createSurface, detachPresentation or attachPresentation may reach the actual adapter');
+  assert.equal(result.destructionSawRetiredFollow, true, 'actual renderer destruction waits for follow retirement');
   assert.equal(result.observationAborted, true, 'facade shutdown aborts the canonical follow');
   assert.equal(result.iteratorReturned, true);
   assert.equal(result.disconnected, true, 'facade shutdown destroys the actual DOM pane');
   assert.equal(result.viewRetired, true);
+  assert.equal(result.mountEmpty, true, 'post-close requests cannot mount another pane');
+  assert.equal(result.lateViewStatus, null, 'post-close opening cannot reinsert a lost view after teardown');
+  assert.deepEqual(result.durableIntentAfterClose, [], 'all requests have settled with no resurrected durable intent');
   assert.equal(result.noReadsAfterClose, true, 'a late event cannot issue another Theme read');
   assert.deepEqual(result.sessionState, {selection: 'retained'});
   assert.equal(result.sessionPerspective, null);

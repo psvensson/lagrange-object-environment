@@ -13,7 +13,7 @@ state. It has no renderer resources, grants, subscriptions or close routine.
 `Compositor` owns logical views and renderer destruction. `ThemeResolver`
 owns authorized reads, inheritance, dependency tracking, observation and stop
 fencing. The browser and GTK adapters already expose in-place style controls.
-Nothing currently couples one Session's follow to its Compositor's teardown.
+Before T6, no owner coupled one Session's follow to its Compositor's teardown.
 
 The native JS renderer port exposes only six lifecycle operations, while
 `LinuxRendererAdapter.set_resolved_tokens` must run on the GTK-owning thread.
@@ -36,6 +36,13 @@ that raw object private. It publishes a frozen forwarding facade with the same
 view methods and **`compositor.destroy === lifecycle.close`**. It does not
 copy view state or replace any Compositor admission, focus or error policy.
 There is no separately exposed raw `destroy` that can bypass follow retirement.
+
+The private Compositor receives a mechanical delegation of the canonical six
+renderer operations. The five ordinary operations retain the actual adapter as
+their receiver and add no asynchronous boundary. Only `destroyAll` waits for
+follow retirement before invoking the actual adapter's teardown. Compositor
+still validates every actual operation before either identity is claimed;
+the delegate cannot disguise a missing or nonfunction `destroyAll`.
 
 Private module WeakSets claim the Session and actual renderer-adapter identities
 once. A second factory using either already-claimed identity rejects before
@@ -114,7 +121,7 @@ without a replacement Theme. No fallback, retry or second polling loop appears.
   including close before start.
 - It rejects when following has retired because of a startup/refresh failure,
   including failed withdrawal or reporting as defined below.
-- It does not wait for or include the Compositor's later destruction. `close`
+- It does not wait for or include the concrete renderer's later destruction. `close`
   is the complete resource-teardown result.
 
 The owner attaches rejection observers immediately to every background promise,
@@ -153,13 +160,21 @@ state **before** aborting the follow or invoking any external code. Every close
 caller, including reentrant calls through the published Compositor, receives that
 same Promise and eventually the same fulfillment or rejection.
 
-Close immediately aborts the already-owned signal. It waits for the canonical
-follow start/worker to retire, without waiting for uncancellable lower reads or
-for invalid callback thenables, then attempts the private Compositor's `destroy`
-exactly once. Compositor teardown is attempted **even if** startup, follow
-settlement, withdrawal or reporting failed. No subsequent supported callback can
-publish styling. A held renderer teardown remains awaited; prompt follow
-cancellation is not a promise that arbitrary renderer destruction is instantaneous.
+Close immediately invokes the private Compositor's `destroy`, whose existing
+synchronous admission fence rejects new view operations before any abort listener
+or follow-retirement continuation runs. Its delegated `destroyAll` then aborts
+the already-owned signal and waits for the canonical follow start/worker to
+retire, without waiting for uncancellable lower reads or invalid callback
+thenables. Only concrete renderer destruction is delayed by that barrier.
+
+Actual adapter teardown is attempted exactly once **even if** startup, follow
+settlement, withdrawal or reporting failed. Internal retirement records those
+failures without throwing them through Compositor's renderer-error mapper;
+only actual adapter teardown failures cross that boundary. No subsequent
+supported callback can publish styling. A held renderer teardown remains
+awaited; prompt follow cancellation does not make renderer destruction
+instantaneous. Compositor's liveness-query snapshots retain their canonical
+behavior, and its view map is cleared in teardown's `finally` block.
 
 `close` preserves any recorded follow failures and appends the Compositor's
 existing typed teardown error if destruction fails. With only one error it
@@ -182,6 +197,13 @@ Direct lifecycle proof (`test/session-theme-lifecycle.test.js`) distinguishes:
 - Destruction through the published Compositor is exactly `close`, stops the
   follow before the one adapter teardown, and concurrent/reentrant closes share
   one Promise. Hold teardown to prove a second close does not return early.
+- After close begins, same-turn open/present requests reject through Compositor
+  before any renderer create, detach or attach. Focus rejects synchronously.
+  Exercise both active and already-failed follows with the fake adapter's
+  unwrapped teardown; after all results settle, resources and durable intent
+  are empty. Missing actual `destroyAll` must reject construction without
+  consuming the Session or adapter identity. Reentrant view operations from a
+  synchronous abort listener must also be rejected before renderer dispatch.
 - Hold the initial observation anchor, initial Theme read and refresh read in
   separate cases. Close retires the follow before releasing each lower operation.
   Late release/rejection launches no additional reads or supported style callback.
@@ -203,10 +225,12 @@ unrelated metadata is ignored. Closing either leaves the other independent.
 
 Browser proof (`test/browser/dom-coexistence.test.js` and its existing proof page)
 instantiates the public lifecycle with the actual BrowserRendererAdapter,
-open a real semantic pane through its published Compositor, and drive the
+opens a real semantic pane through its published Compositor, and drives the
 canonical follow. A style change preserves the same pane, typed field and focus.
 Failure withdraws the Theme without replacing those controls. Destroy via the
 published Compositor proves lifecycle wiring, not a separate handwritten stop.
+Both active and failed-follow close paths also reject same-turn view operations
+before renderer dispatch and leave no DOM or durable intent after teardown.
 The six `RENDERER_ADAPTER_METHODS` remain unchanged.
 
 ## Deferred boundaries and rejected alternatives
@@ -226,6 +250,11 @@ bypass follow retirement); a new Theme-aware Compositor state machine (duplicate
 interaction policy); host-only uniqueness by convention (two owners can claim a
 Session); a seventh renderer op; per-widget observers; global CSS/GTK state;
 async style dispatch disguised as synchronous; a second poller or token cache.
+Also rejected: waiting for follow retirement before invoking Compositor destroy,
+because that delays its canonical admission fence. The barrier belongs only
+around actual renderer teardown. Operations already admitted before close are
+outside this correction and remain tracked by existing Compositor Bead
+`lagrange-object-environment-3zx`; it adds no competing liveness policy.
 
 ## Verification and delivery
 

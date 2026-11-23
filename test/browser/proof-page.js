@@ -13,7 +13,7 @@ import {createEnvironmentShell} from '../../src/environment-shell.js';
 import {renderSemanticUiToDom} from '../../src/browser-renderer/dom-realizer.js';
 import {validateSemanticUi} from '../../src/semantic-ui.js';
 import {createThemeResolver} from '../../src/theme-resolver.js';
-import {Session, createSessionThemeLifecycle, RENDERER_ADAPTER_METHODS} from '../../src/index.js';
+import {Session, createSessionThemeLifecycle, RENDERER_ADAPTER_METHODS, RendererResourceLostError} from '../../src/index.js';
 
 // The PR B browser proof harness. Drives the BrowserRendererAdapter through
 // the full lifecycle against real Chrome WebGPU with the triangle Component.
@@ -593,9 +593,27 @@ window.__lagrangeProof = {
       },
     });
     const adapter = makeAdapter();
+    const rendererCalls = [];
+    let terminal;
+    let destructionSawRetiredFollow = false;
+    // Observe the REAL adapter without changing its Promise or suspension
+    // timing. An async destroyAll wrapper could mask a lost-view race.
+    const observedAdapter = Object.freeze({...adapter,
+      ...Object.fromEntries(RENDERER_ADAPTER_METHODS.map(method => {
+        const operation = adapter[method].bind(adapter);
+        return [method, (...args) => {
+          rendererCalls.push(method);
+          if (method === 'destroyAll') {
+            destructionSawRetiredFollow = terminal !== undefined && iteratorReturned
+              && observationSignal?.aborted === true;
+          }
+          return operation(...args);
+        }];
+      })),
+    });
     const session = new Session({principal: 'descriptive-browser-principal', state: {selection: 'retained'}});
     const errors = [];
-    const lifecycle = createSessionThemeLifecycle({session, rendererAdapter: adapter, themeResolver: resolver,
+    const lifecycle = createSessionThemeLifecycle({session, rendererAdapter: observedAdapter, themeResolver: resolver,
       onThemeError(error) { errors.push(error); },
     });
     const {compositor} = lifecycle;
@@ -604,7 +622,6 @@ window.__lagrangeProof = {
       subject: ref('view'),
       parameters: {fields: {name: txt('User text')}, writable: ['name']},
     };
-    let terminal;
     lifecycle.done.then(() => {terminal = {status: 'fulfilled'};}, error => {
       terminal = {status: 'rejected', error};
     });
@@ -660,10 +677,20 @@ window.__lagrangeProof = {
       const activeBeforeClose = terminal === undefined && observationSignal?.aborted === false;
       const pendingEventBeforeClose = waiting.length > 0;
       const destroyIsClose = compositor.destroy === lifecycle.close;
+      const callsBeforeClose = rendererCalls.length;
       const closing = compositor.destroy();
+      // These new requests begin AFTER close in the SAME synchronous turn.
+      // Eventual rejection alone is not enough: none may reach the renderer.
+      const lateViewId = 'post-close-view';
+      const opening = compositor.openView({viewId: lateViewId,
+        viewDescriptor: {kind: 'tool-pane'}, presentationDescriptor: descriptor});
+      const presenting = compositor.presentOn(viewId, descriptor);
+      const outcomes = Promise.allSettled([closing, opening, presenting]);
+      let focusFailure;
+      try { compositor.focusView(viewId); } catch (error) { focusFailure = error; }
       const concurrent = lifecycle.close();
-      let closeFailure;
-      try { await closing; } catch (error) { closeFailure = error; }
+      const [closed, opened, presented] = await outcomes;
+      const closeFailure = closed.status === 'rejected' ? closed.reason : undefined;
       if (closeFailure !== expectedFailure) throw closeFailure ?? new Error('close lost the recorded Theme failure');
       await awaitCount(() => terminal !== undefined, 'closed follow result');
       const readsAtClose = reads.length;
@@ -682,6 +709,12 @@ window.__lagrangeProof = {
         sameFailureOnClose: failTheme && closeFailure === terminal.error && repeatedFailure === terminal.error,
         activeBeforeClose, pendingEventBeforeClose,
         destroyIsClose, singleFlight: closing === concurrent && closing === repeated,
+        postCloseOpenRejected: opened.status === 'rejected' && opened.reason instanceof RendererResourceLostError,
+        postClosePresentRejected: presented.status === 'rejected' && presented.reason instanceof RendererResourceLostError,
+        postCloseFocusRejected: focusFailure instanceof RendererResourceLostError,
+        rendererCallsAfterClose: rendererCalls.slice(callsBeforeClose), destructionSawRetiredFollow,
+        durableIntentAfterClose: compositor.durableIntent(), lateViewStatus: compositor.viewStatus(lateViewId),
+        mountEmpty: mount.childElementCount === 0,
         observationAborted: observationSignal?.aborted === true, iteratorReturned,
         disconnected: !root.isConnected, viewRetired: compositor.liveView(viewId) === null,
         noReadsAfterClose: reads.length === readsAtClose,
