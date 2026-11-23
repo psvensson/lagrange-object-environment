@@ -260,6 +260,23 @@ function valueText(value) {
  * the reference rows -> action(key) mapping, and the durable Project summary +
  * member rows (display strings plus descriptor-local keys only).
  */
+// Metadata is supplied by Images ONLY after the authorized class/method read.
+// It is display-only and confers no new authority or editable field binding.
+// An absent provenance association is not a blank provenance record.
+function appendSmalltalkProvenanceFields(children, provenance) {
+  if (provenance === null || typeof provenance !== 'object' || Array.isArray(provenance)) return;
+  const knownLabels = {category: 'Category', file: 'File', package: 'Package'};
+  for (const key of Object.keys(provenance).sort()) {
+    const value = provenance[key];
+    if (typeof value !== 'string') continue;
+    children.push({
+      kind: 'field',
+      label: Object.hasOwn(knownLabels, key) ? knownLabels[key] : `Provenance: ${key}`,
+      text: value,
+    });
+  }
+}
+
 function semanticUiForPresentation(presentationDescriptor) {
   const kind = presentationDescriptor?.kind;
   const params = presentationDescriptor?.parameters ?? {};
@@ -341,6 +358,7 @@ function semanticUiForPresentation(presentationDescriptor) {
       children.push({kind: 'field', label: 'Instance variables', text: instanceVariables.join(', ')});
       children.push({kind: 'field', label: 'Indexed', text: valueText(layout.indexed)});
     }
+    appendSmalltalkProvenanceFields(children, smalltalkClass.provenance);
     // ACTIONS OVER THE ONE BROWSER-OWNED TARGET ARRAY.
     //
     // A class shows two visually separate groups — its own selectors and its
@@ -371,9 +389,6 @@ function semanticUiForPresentation(presentationDescriptor) {
       if (items.length === 0) continue;
       children.push({kind: 'collection', label: bucketLabel[group], items});
     }
-    // `provenance` is deliberately NOT rendered. Images owns no durable
-    // native-class provenance today and truthfully answers null; an empty
-    // Provenance row would imply a field that does not exist (Images jtz.1).
   } else if (kind === 'native-method') {
     // The authorized native Smalltalk METHOD description (Images ADR 0087).
     // Only what Images truthfully owns: the selector, the side, the DECLARING
@@ -384,11 +399,14 @@ function semanticUiForPresentation(presentationDescriptor) {
     // The class that DECLARES this method, not a receiver a send started from.
     children.push({kind: 'field', label: 'Declaring class', text: valueText(smalltalkMethod.class)});
     children.push({kind: 'field', label: 'Method', text: valueText(smalltalkMethod.method)});
-    // `source` and `provenance` are truthful ABSENCES, not empty strings: Images
-    // keeps no text a method was compiled from and owns no durable Cuis
-    // association. An empty row would suggest a durable field exists, so the
-    // rows are OMITTED entirely until Images owns something to put in them
-    // (Images jtz.1). Rendering them when non-null is E3's business, not E2's.
+    // Images ADR 0096 can retain the exact source and metadata of this
+    // authorized method revision. Absence is still truthful for non-retained
+    // methods; never reconstruct source from compiled artifacts or provenance.
+    appendSmalltalkProvenanceFields(children, smalltalkMethod.provenance);
+    if (typeof smalltalkMethod.source === 'string') {
+      children.push({kind: 'text', role: 'heading', text: 'Source'});
+      children.push({kind: 'text', role: 'source', text: smalltalkMethod.source});
+    }
   } else if (kind === 'unavailable-reference' || kind === 'unauthorized-reference') {
     // An explicit reason, nothing else.
     const reason = `${kind === 'unauthorized-reference' ? 'Not authorized' : 'Unavailable'}: ${objectId}${params.reason ? ` (${params.reason})` : ''}`;

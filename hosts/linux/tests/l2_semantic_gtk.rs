@@ -12,6 +12,7 @@
 //! Headless: gtk4::init() runs under Xvfb (GDK X11 backend, Cairo renderer).
 //! GTK4 init() is once-per-process, so all GTK tests share one init via Once.
 
+use gtk4::prelude::*;
 use lagrange_host_linux::semantic_gtk::{realize, Intent};
 use lagrange_host_linux::semantic_ui::{action_keys, parse_semantic_ui};
 use std::path::Path;
@@ -292,6 +293,40 @@ fn fixtures_drive_real_gtk_controls_and_identical_intents() {
         Some(Intent::submit_input(0, "[ ^42 ]".to_string())),
         "the native host emits the realized key and the RAW text"
     );
+
+    // ADR 0096: the SAME retained source and provenance fixture as DOM.
+    let retained_class = realize(&parse_semantic_ui(&read_fixture("native-class-retained.json")).unwrap());
+    let class_text = retained_class.visible_text();
+    for value in ["Category", "accessing", "File", "YAXO.pck.st", "Package", "YAXO"] {
+        assert!(class_text.iter().any(|v| v == value), "missing retained class metadata {value}: {class_text:?}");
+    }
+    assert!(retained_class.editable_texts().is_empty());
+    assert!(retained_class.action_labels().is_empty(), "provenance is display, not authority");
+
+    let retained = realize(&parse_semantic_ui(&read_fixture("native-method-retained.json")).unwrap());
+    let visible = retained.visible_text();
+    for value in ["Category", "accessing", "File", "YAXO.pck.st", "Package", "YAXO", "Source"] {
+        assert!(visible.iter().any(|v| v == value), "missing retained method metadata {value}: {visible:?}");
+    }
+    let mut cursor = retained.root.first_child();
+    let mut source = None;
+    while let Some(widget) = cursor {
+        cursor = widget.next_sibling();
+        if widget.widget_name() == "lagrange-tool-source" {
+            source = Some(widget.downcast::<gtk4::TextView>().expect("read-only source must be a TextView"));
+        }
+    }
+    let source = source.expect("the native GTK realizer must show retained source");
+    let buffer = source.buffer();
+    let (start, end) = buffer.bounds();
+    assert_eq!(buffer.text(&start, &end, false).as_str(), "childFirst\n  ^ '<tag> & data'\n");
+    assert!(!source.is_editable(), "source display cannot mutate image state");
+    assert!(!source.is_cursor_visible());
+    assert!(source.is_monospace());
+    assert!(retained.editable_texts().is_empty(), "source is not an editable field");
+    assert_eq!(retained.input_widget_kinds(), vec!["GtkTextView"], "the separate transient input remains");
+    assert_eq!(retained.submit_input(0, "replacement"),
+        Some(Intent::submit_input(0, "replacement".to_string())));
 
     // --- unavailable + unauthorized: reason lines, no refs/actions.
     let un = realize(&parse_semantic_ui(&read_fixture("unavailable.json")).unwrap());

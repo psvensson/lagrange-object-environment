@@ -593,6 +593,55 @@ test('class-read authority alone does not yield the Block; the method grant does
   }
 });
 
+test('ADR 0096: retained native source and provenance travel only through authorized Images descriptors', {skip}, async () => {
+  const t = await setup();
+  try {
+    const source = '[ ^ 42 ]';
+    const classRecord = await imagesApi.ensureClassFromDeclaration({
+      images: t.runtime.images, imageId: IMAGE, name: 'BrowseRetained',
+      instanceVariables: [],
+      provenance: {package: 'Fixture', file: 'Fixture.pck.st'},
+    });
+    const classRef = classRecord.classRef;
+    await imagesApi.defineMethodsFromSource({
+      images: t.runtime.images, compilation: t.runtime.compilation, imageId: IMAGE,
+      classRef, retainSource: true,
+      methods: [{selector: 'answer', source, category: 'accessing',
+        provenance: {package: 'Fixture', file: 'Fixture.pck.st'}}],
+    });
+    const klass = await t.browser.browse(
+      createNativeClassSubject({imageId: IMAGE, classRef}),
+      {authority: t.authorityFor(classRef.objectId)},
+    );
+    assert.equal(klass.context.smalltalkClass.provenance.package, 'Fixture');
+    const classDocument = semanticUiForPresentation(t.browser.toPresentationDescriptor(klass));
+    assert.ok(classDocument.root.children.some(node => node.label === 'Package' && node.text === 'Fixture'));
+
+    const subject = createNativeMethodSubject({imageId: IMAGE, classRef, selector: 'answer'});
+    const denied = await t.browser.browseMethod(subject, {authority: t.authorityFor(classRef.objectId)});
+    assert.equal(denied.kind, 'unauthorized-reference');
+    assert.equal(JSON.stringify(denied).includes(source), false, 'class-read alone reveals no method source');
+    const granted = await t.browser.browseMethod(subject, {
+      authority: t.authorityForMethod({classRef, selector: 'answer', objectIds: [classRef.objectId]}),
+    });
+    assert.equal(granted.kind, NATIVE_METHOD_PRESENTATION_KIND);
+    assert.equal(granted.context.smalltalkMethod.source, source);
+    assert.deepEqual(granted.context.smalltalkMethod.provenance,
+      {category: 'accessing', file: 'Fixture.pck.st', package: 'Fixture'});
+    const descriptor = t.browser.toPresentationDescriptor(granted);
+    assert.equal(descriptor.parameters.smalltalkMethod, granted.context.smalltalkMethod,
+      'do not manufacture or copy the Images-owned authorized description');
+    const document = semanticUiForPresentation(descriptor);
+    assert.ok(document.root.children.some(node => node.kind === 'text' && node.role === 'source' && node.text === source));
+    assert.ok(document.root.children.some(node => node.label === 'Category' && node.text === 'accessing'));
+    assert.equal(document.root.children.filter(node => node.kind === 'input').length, 1,
+      'the existing replacement binding stays separate from retained source');
+    assert.equal(document.root.children.filter(node => node.kind === 'field' && node.editable).length, 0);
+  } finally {
+    await t.runtime.close();
+  }
+});
+
 test('the Block ref comes from Images and is NOT derivable from the class ref and selector', {skip}, async () => {
   const t = await setup();
   try {

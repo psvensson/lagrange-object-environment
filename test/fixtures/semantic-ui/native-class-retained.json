@@ -1,0 +1,50 @@
+{
+  "kind": "semantic-ui",
+  "version": 1,
+  "root": {
+    "kind": "group",
+    "title": "Class: BrowseChild",
+    "children": [
+      {
+        "kind": "text",
+        "role": "heading",
+        "text": "Class: BrowseChild"
+      },
+      {
+        "kind": "field",
+        "label": "Name",
+        "text": "BrowseChild"
+      },
+      {
+        "kind": "field",
+        "label": "Side",
+        "text": "instance"
+      },
+      {
+        "kind": "field",
+        "label": "Class",
+        "text": "-> smalltalk/class/BrowseChild"
+      },
+      {
+        "kind": "field",
+        "label": "Layout",
+        "text": "(no declared instance layout)"
+      },
+      {
+        "kind": "field",
+        "label": "Category",
+        "text": "accessing"
+      },
+      {
+        "kind": "field",
+        "label": "File",
+        "text": "YAXO.pck.st"
+      },
+      {
+        "kind": "field",
+        "label": "Package",
+        "text": "YAXO"
+      }
+    ]
+  }
+}

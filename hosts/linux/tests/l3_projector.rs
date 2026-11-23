@@ -26,6 +26,12 @@ fn rust_projector_matches_the_checked_in_fixtures() {
         ("project.json", json!({"kind":"project","subject":{"kind":"project","imageId":"image-a","projectId":"project-alpha"},"parameters":{"project":{"format":"lagrange-project/v1","projectId":"project-alpha","name":"Alpha","namespace":{"kind":"ref","imageId":"image-a","objectId":"workspace"},"members":[{"key":"member/a","role":"source","target":{"kind":"ref","imageId":"image-a","objectId":"obj-a"}},{"key":"member/b","role":"dependency","target":{"kind":"ref","imageId":"image-b","objectId":"obj-b"}}]}}})),
         ("project-editable.json", json!({"kind":"project","subject":{"kind":"project","imageId":"image-a","projectId":"project-alpha"},"parameters":{"project":{"format":"lagrange-project/v1","projectId":"project-alpha","name":"Alpha","namespace":{"kind":"ref","imageId":"image-a","objectId":"workspace"},"members":[{"key":"member/a","role":"source","target":{"kind":"ref","imageId":"image-a","objectId":"obj-a"}},{"key":"member/b","role":"dependency","target":{"kind":"ref","imageId":"image-b","objectId":"obj-b"}}]},"writable":["name"]}})),
         ("native-class.json", json!({"kind":"native-class","subject":{"kind":"native-class","imageId":"img","classRef":ref_("smalltalk/class/BrowseChild")},"parameters":{"smalltalkClass":{"format":"smalltalk-class-description/v1","class":ref_("smalltalk/class/BrowseChild"),"name":"BrowseChild","side":"instance","superclass":ref_("smalltalk/class/BrowseBase"),"classSide":ref_("smalltalk/metaclass/BrowseChild"),"layout":{"instanceVariables":["baseValue","childFirst"],"indexed":"none"},"selectors":["childFirst","childSecond"],"provenance":null},"targets":[{"target":{"kind":"native-method","imageId":"img","classRef":ref_("smalltalk/class/BrowseChild"),"selector":"childFirst"},"group":"selector","label":"childFirst"},{"target":{"kind":"native-method","imageId":"img","classRef":ref_("smalltalk/class/BrowseChild"),"selector":"childSecond"},"group":"selector","label":"childSecond"},{"target":{"kind":"native-class","imageId":"img","classRef":ref_("smalltalk/class/BrowseBase")},"group":"relation","label":"superclass -> img/smalltalk/class/BrowseBase"},{"target":{"kind":"native-class","imageId":"img","classRef":ref_("smalltalk/metaclass/BrowseChild")},"group":"relation","label":"class-side -> img/smalltalk/metaclass/BrowseChild"}]}})),
+        // ADR 0096 retained metadata: same semantic class identity and ordinary
+        // descriptor; metadata is only displayed after the authorized read.
+        ("native-class-retained.json", json!({"kind":"native-class","subject":{"kind":"native-class","imageId":"img","classRef":ref_("smalltalk/class/BrowseChild")},"parameters":{"smalltalkClass":{"format":"smalltalk-class-description/v1","class":ref_("smalltalk/class/BrowseChild"),"name":"BrowseChild","side":"instance","layout":null,"selectors":[],"provenance":{"package":"YAXO","category":"accessing","file":"YAXO.pck.st"}},"targets":[]}})),
+        // The same retained method's source remains read-only while its
+        // independently supplied replacement input remains transient.
+        ("native-method-retained.json", json!({"kind":"native-method","subject":{"kind":"native-method","imageId":"img","classRef":ref_("smalltalk/class/BrowseChild"),"selector":"childFirst"},"parameters":{"smalltalkMethod":{"format":"smalltalk-method-description/v1","class":ref_("smalltalk/class/BrowseChild"),"side":"instance","selector":"childFirst","method":ref_("smalltalk/class/BrowseChild/method/Y2hpbGRGaXJzdA"),"source":"childFirst\n  ^ '<tag> & data'\n","provenance":{"package":"YAXO","category":"accessing","file":"YAXO.pck.st"}},"inputs":[{"role":"native-method-source","label":"New source","submitLabel":"Replace"}]}})),
         ("native-method.json", json!({"kind":"native-method","subject":{"kind":"native-method","imageId":"img","classRef":ref_("smalltalk/class/BrowseChild"),"selector":"childFirst"},"parameters":{"smalltalkMethod":{"format":"smalltalk-method-description/v1","class":ref_("smalltalk/class/BrowseChild"),"side":"instance","selector":"childFirst","method":ref_("smalltalk/class/BrowseChild/method/Y2hpbGRGaXJzdA"),"source":null,"provenance":null}}})),
         // The SAME method as the browser DISPLAYS it (E3, Bead eij.3): identical
         // Images description plus the ONE transient input NativeSmalltalkBrowser
@@ -74,6 +80,37 @@ fn rust_projector_matches_the_checked_in_fixtures() {
         let projected = project(&descriptor).unwrap_or_else(|e| panic!("project({fixture}): {e}"));
         assert_eq!(projected, expected, "Rust projector must match {fixture} exactly");
     }
+}
+
+#[test]
+fn retained_provenance_keys_follow_images_js_utf16_order() {
+    use lagrange_host_linux::semantic_ui::Node;
+
+    // serde_json's map sorts by Unicode scalar value; Images and the JS
+    // projector sort JS UTF-16 code units. These two keys reverse order.
+    // A native sort without explicit UTF-16 comparison must fail this test.
+    let descriptor = json!({
+        "kind": "native-class",
+        "parameters": {"smalltalkClass": {
+            "name": "UnicodeKeys", "provenance": {
+                "\u{e000}": "bmp-private", "\u{10000}": "supplementary", "category": "accessing"
+            }
+        }}
+    });
+    let doc = project(&descriptor).expect("native class projection");
+    let fields: Vec<(String, String)> = match doc.root {
+        Node::Group { children, .. } => children.into_iter().filter_map(|node| match node {
+            Node::Field { label, text, .. } if label == "Category" || label.starts_with("Provenance: ") =>
+                Some((label, text)),
+            _ => None,
+        }).collect(),
+        other => panic!("expected group, got {other:?}"),
+    };
+    assert_eq!(fields, vec![
+        ("Category".to_string(), "accessing".to_string()),
+        ("Provenance: \u{10000}".to_string(), "supplementary".to_string()),
+        ("Provenance: \u{e000}".to_string(), "bmp-private".to_string()),
+    ]);
 }
 
 /// The rules most easily collapsed by an independent port, checked directly

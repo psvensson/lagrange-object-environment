@@ -38,6 +38,21 @@ const CASES = {
     {target: {kind: 'native-class', imageId: 'img', classRef: ref('smalltalk/class/BrowseBase')}, group: 'relation', label: 'superclass -> img/smalltalk/class/BrowseBase'},
     {target: {kind: 'native-class', imageId: 'img', classRef: ref('smalltalk/metaclass/BrowseChild')}, group: 'relation', label: 'class-side -> img/smalltalk/metaclass/BrowseChild'},
   ]}},
+  // Images ADR 0096: optional retained metadata is already authorized; it must
+  // be visible without changing class identity, selector navigation or grants.
+  'native-class-retained': {kind: 'native-class', subject: {kind: 'native-class', imageId: 'img', classRef: ref('smalltalk/class/BrowseChild')}, parameters: {smalltalkClass: {
+    format: 'smalltalk-class-description/v1', class: ref('smalltalk/class/BrowseChild'),
+    name: 'BrowseChild', side: 'instance', layout: null, selectors: [],
+    provenance: {package: 'YAXO', category: 'accessing', file: 'YAXO.pck.st'},
+  }, targets: []}},
+  // Retained source is DISPLAY, never the writable value of the separate
+  // transient replacement input, and must preserve multiline/raw text.
+  'native-method-retained': {kind: 'native-method', subject: {kind: 'native-method', imageId: 'img', classRef: ref('smalltalk/class/BrowseChild'), selector: 'childFirst'}, parameters: {smalltalkMethod: {
+    format: 'smalltalk-method-description/v1', class: ref('smalltalk/class/BrowseChild'), side: 'instance',
+    selector: 'childFirst', method: ref('smalltalk/class/BrowseChild/method/Y2hpbGRGaXJzdA'),
+    source: "childFirst\n  ^ '<tag> & data'\n",
+    provenance: {package: 'YAXO', category: 'accessing', file: 'YAXO.pck.st'},
+  }, inputs: [{role: 'native-method-source', label: 'New source', submitLabel: 'Replace'}]}},
   // The authorized native METHOD description (Images ADR 0087). source and
   // provenance are null, so neither row is emitted at all.
   'native-method': {kind: 'native-method', subject: {kind: 'native-method', imageId: 'img', classRef: ref('smalltalk/class/BrowseChild'), selector: 'childFirst'}, parameters: {smalltalkMethod: {format: 'smalltalk-method-description/v1', class: ref('smalltalk/class/BrowseChild'), side: 'instance', selector: 'childFirst', method: ref('smalltalk/class/BrowseChild/method/Y2hpbGRGaXJzdA'), source: null, provenance: null}}},
@@ -84,6 +99,43 @@ test('the projector reproduces each checked-in green fixture exactly', async () 
       `semanticUiForPresentation(${name}) must deep-equal the checked-in fixture`,
     );
   }
+});
+
+test('retained source remains literal read-only display and never becomes the replacement input', () => {
+  const doc = semanticUiForPresentation(CASES['native-method-retained']);
+  const nodes = doc.root.children;
+  const source = nodes.find(n => n.role === 'source');
+  assert.deepEqual(source, {kind: 'text', role: 'source', text: "childFirst\n  ^ '<tag> & data'\n"});
+  assert.equal(nodes.filter(n => n.kind === 'input').length, 1);
+  assert.equal(nodes.filter(n => n.kind === 'field' && n.editable !== undefined).length, 0);
+  assert.equal(nodes.find(n => n.kind === 'input').key, 0);
+  assert.deepEqual(nodes.filter(n => n.kind === 'field' && ['Category', 'File', 'Package'].includes(n.label))
+    .map(n => [n.label, n.text]), [
+      ['Category', 'accessing'], ['File', 'YAXO.pck.st'], ['Package', 'YAXO'],
+    ]);
+  for (const absent of ['native-class', 'native-method', 'native-method-editable']) {
+    const base = semanticUiForPresentation(CASES[absent]);
+    assert.ok(!base.root.children.some(n => n.role === 'source' || n.label === 'Category' || n.label === 'File' || n.label === 'Package'),
+      `${absent} must omit absent metadata rather than invent it`);
+  }
+});
+
+test('native provenance keys retain the Images JavaScript UTF-16 order across ports', () => {
+  // A supplementary-plane key sorts BEFORE a high-BMP key in JS but AFTER
+  // it under Rust's Unicode-scalar String ordering. This is a genuine input
+  // Images' public normalizeProvenance permits, not an invented storage shape.
+  const input = {...CASES['native-class-retained'], parameters: {
+    smalltalkClass: {...CASES['native-class-retained'].parameters.smalltalkClass,
+      provenance: {'\uE000': 'bmp-private', '\u{10000}': 'supplementary', category: 'accessing'}},
+    targets: [],
+  }};
+  const fields = semanticUiForPresentation(input).root.children
+    .filter(node => node.kind === 'field' && (node.label === 'Category' || node.label.startsWith('Provenance: ')))
+    .map(node => [node.label, node.text]);
+  assert.deepEqual(fields, [
+    ['Category', 'accessing'], ['Provenance: \u{10000}', 'supplementary'],
+    ['Provenance: \uE000', 'bmp-private'],
+  ]);
 });
 
 test('the validator accepts every checked-in green fixture', async () => {
