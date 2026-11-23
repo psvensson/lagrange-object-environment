@@ -32,7 +32,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use serde_json::Value;
+use gtk4::prelude::*;
 
+use crate::gtk_theme::{apply_native_tool_css, css_for_resolved_tokens};
 use crate::projector::project;
 use crate::semantic_gtk::{realize, GtkRealization, Intent};
 use crate::{GlbHost, GlbInstance};
@@ -156,6 +158,7 @@ pub struct LinuxRendererAdapter {
     glb_host: Arc<GlbHost>,
     glb_runner: GlbRunner,
     surfaces: HashMap<String, SurfaceEntry>,
+    theme_css: Option<String>, // host-only, never a durable Theme or adapter op
 }
 
 impl LinuxRendererAdapter {
@@ -164,7 +167,17 @@ impl LinuxRendererAdapter {
             glb_host: Arc::new(GlbHost::new()),
             glb_runner,
             surfaces: HashMap::new(),
+            theme_css: None,
         }
+    }
+
+    /// Host composition injects ThemeResolver's complete resolved token set.
+    /// No Theme refs, grants, catalog reads or default stylesheet are owned here.
+    pub fn with_resolved_tokens(glb_runner: GlbRunner, tokens: &Value) -> Result<Self, String> {
+        let css = css_for_resolved_tokens(tokens)?;
+        let mut adapter = Self::new(glb_runner);
+        adapter.theme_css = Some(css);
+        Ok(adapter)
     }
 
     fn require_live(&self, handle: &str, method: &str) -> Result<&SurfaceEntry, String> {
@@ -266,6 +279,20 @@ impl LinuxRendererAdapter {
         Ok(match &entry.realization {
             Some(Realization::Gtk { realization, .. }) => realization.visible_text(),
             _ => Vec::new(),
+        })
+    }
+
+    /// Data-only native appearance inspection for the L3/Theme tests. This is
+    /// NOT a seventh RendererAdapter op and exposes no GTK object or style.
+    pub fn gtk_foreground_rgb(&self, handle: &str) -> Result<Option<(u8, u8, u8)>, String> {
+        let entry = self.require_live(handle, "gtk_foreground_rgb")?;
+        Ok(match &entry.realization {
+            Some(Realization::Gtk { realization, .. }) => {
+                let rgba = realization.root.style_context().color();
+                let byte = |v: f32| (v * 255.0).round() as u8;
+                Some((byte(rgba.red()), byte(rgba.green()), byte(rgba.blue())))
+            }
+            _ => None,
         })
     }
 
@@ -396,8 +423,12 @@ impl RendererAdapterOps for LinuxRendererAdapter {
         let realization = if is_tool_kind(kind) {
             let doc = project(presentation_descriptor)
                 .map_err(|e| format!("linux renderer: project({kind}): {e}"))?;
+            let realization = realize(&doc);
+            if let Some(css) = self.theme_css.as_ref() {
+                apply_native_tool_css(realization.root.upcast_ref(), css);
+            }
             Realization::Gtk {
-                realization: realize(&doc),
+                realization,
                 descriptor: presentation_descriptor.clone(),
             }
         } else if kind == "glb" {

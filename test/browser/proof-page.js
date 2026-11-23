@@ -100,10 +100,10 @@ async function fetchBigBoxGlb() {
   return new Uint8Array(await res.arrayBuffer());
 }
 
-function makeAdapter({texture = false, glb = false, assets = null} = {}) {
+function makeAdapter({texture = false, glb = false, assets = null, resolvedTokens = null} = {}) {
   return createBrowserRendererAdapter({
     loadComponent: glb ? makeGlbLoadComponent() : makeLoadComponent(startTriangle),
-    mount,
+    mount, resolvedTokens,
     ...(texture
       ? {createRenderTarget: ({width, height}) => new TextureRenderTarget(width, height)}
       : {}),
@@ -374,6 +374,66 @@ window.__lagrangeProof = {
       frameA1, frameA2, frameB,
       destroy: async () => { await adapterA.destroyAll(); await adapterB.destroyAll(); },
     };
+  },
+
+  // T4: attach three actual DOM tool presentations through the production
+  // BrowserRendererAdapter: two different resolved Themes and one unthemed
+  // pane. They share one mount but must not share or leak stylesheet state.
+  async compareThemedToolRealizations() {
+    const fetchTokens = async name => {
+      const response = await fetch(`../fixtures/theme/${name}-tokens.json`);
+      if (!response.ok) throw new Error('missing resolved token fixture '+name);
+      return response.json();
+    };
+    const [stockTokens, derivedTokens] = await Promise.all([
+      fetchTokens('stock'), fetchTokens('derived'),
+    ]);
+    mount.innerHTML = '';
+    const descriptor = {
+      kind: 'navigator',
+      subject: {kind: 'ref', imageId: 'img', objectId: 'root'},
+      parameters: {fields: {'title': {kind: 'text', value: 'Theme sample'}},
+        references: [{kind: 'ref', imageId: 'img', objectId: 'target'}]},
+    };
+    const attach = async tokens => {
+      const adapter = makeAdapter({resolvedTokens: tokens});
+      const intents = [];
+      adapter.onIntent(intent => intents.push(intent));
+      const handle = await adapter.createSurface({kind: 'tool-pane'});
+      await adapter.attachPresentation(handle, descriptor);
+      return {adapter, root: mount.lastElementChild, intents};
+    };
+    const a = await attach(stockTokens);
+    const b = await attach(derivedTokens);
+    const c = await attach(null);
+    const sample = ({root}) => {
+      const rootCss = getComputedStyle(root);
+      const button = root.querySelector('.lagrange-tool-references button');
+      const buttonCss = getComputedStyle(button);
+      return {
+        themed: root.classList.contains('lagrange-tool-themed'),
+        baseVariable: root.style.getPropertyValue('--lagrange-surface-base'),
+        accentVariable: root.style.getPropertyValue('--lagrange-accent'),
+        background: rootCss.backgroundColor,
+        foreground: rootCss.color,
+        fontSize: rootCss.fontSize,
+        padding: rootCss.paddingTop,
+        buttonBackground: buttonCss.backgroundColor,
+        buttonColor: buttonCss.color,
+        hasStyleElement: root.querySelectorAll('style').length,
+      };
+    };
+    try {
+      const before = [sample(a), sample(b), sample(c)];
+      b.root.querySelector('.lagrange-tool-references button').click();
+      const intents = [a.intents.slice(), b.intents.slice(), c.intents.slice()];
+      await a.adapter.destroyAll();
+      const afterFirstTeardown = {aConnected: a.root.isConnected, bConnected: b.root.isConnected,
+        b: sample(b), c: sample(c)};
+      return {before, intents, afterFirstTeardown};
+    } finally {
+      await Promise.all([a.adapter.destroyAll(), b.adapter.destroyAll(), c.adapter.destroyAll()]);
+    }
   },
 
   // --- L2 cross-host identity: drive the browser SemanticUi->DOM rendering

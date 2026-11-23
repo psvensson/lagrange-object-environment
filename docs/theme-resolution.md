@@ -72,6 +72,8 @@ the same caller-supplied authority. No code palette, mock backend or
 read-then-provision fallback exists here. Catalog stock refs are validated,
 but not dereferenced as a side effect of choosing a default.
 
-This is catalog selection only. Per-principal `EnvironmentProfile` lookup,
-effective profile-over-catalog selection, observation-driven re-resolution
-and concrete DOM/GTK appearance are independent subsequent milestones.
+This section documents catalog selection only. Per-principal `EnvironmentProfile`
+lookup and observation-driven re-resolution remain independent future milestones.
+Static DOM/GTK appearance is implemented separately by
+[renderer-native Theme appearance](theme-appearance.md) (T4); `ThemeResolver`
+continues to know nothing about CSS or GTK.

@@ -10,7 +10,7 @@ const CATALOG_FORMAT = ENVIRONMENT_LAYOUT.catalog.format;
 
 // Release v1 data, not a runtime fallback palette. Colors are opaque 8-bit sRGB;
 // dimensions/font sizes are integer logical layout units before device scaling.
-// General user token validation belongs to the future ThemeResolver, not here.
+// General user token validation belongs to ThemeResolver, not installation.
 const STOCK_TOKENS = [
   ['accent', 'color', '#245a81'],
   ['focus', 'color', '#b45a16'],

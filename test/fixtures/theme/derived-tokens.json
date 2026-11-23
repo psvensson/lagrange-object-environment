@@ -1,0 +1,77 @@
+[
+  {
+    "path": "accent",
+    "type": "color",
+    "value": "#ac4f81"
+  },
+  {
+    "path": "focus",
+    "type": "color",
+    "value": "#edbb31"
+  },
+  {
+    "path": "radius.normal",
+    "type": "dimension",
+    "value": 9
+  },
+  {
+    "path": "selection.background",
+    "type": "color",
+    "value": "#ac4f81"
+  },
+  {
+    "path": "selection.text",
+    "type": "color",
+    "value": "#ffffff"
+  },
+  {
+    "path": "spacing.compact",
+    "type": "dimension",
+    "value": 3
+  },
+  {
+    "path": "spacing.normal",
+    "type": "dimension",
+    "value": 12
+  },
+  {
+    "path": "surface.base",
+    "type": "color",
+    "value": "#121922"
+  },
+  {
+    "path": "surface.raised",
+    "type": "color",
+    "value": "#253242"
+  },
+  {
+    "path": "text.muted",
+    "type": "color",
+    "value": "#b0bac6"
+  },
+  {
+    "path": "text.primary",
+    "type": "color",
+    "value": "#f0f3f7"
+  },
+  {
+    "path": "typography.code.family",
+    "type": "fontFamily",
+    "value": "monospace"
+  },
+  {
+    "path": "typography.code.size",
+    "type": "fontSize",
+    "value": 15
+  },
+  {
+    "path": "typography.ui.family",
+    "type": "fontFamily",
+    "value": "sans-serif"
+  },
+  {
+    "path": "typography.ui.size",
+    "type": "fontSize",
+    "value": 16
+  }
+]

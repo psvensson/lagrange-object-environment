@@ -100,6 +100,7 @@ conflicts, partial resume, catalog preservation/refusal and ordinary startup
 without provisioning. The generic read binding is installed directly; no
 kernel or probe class is introduced for these proofs. These are direct reads,
 not DOM/GTK appearance acceptance. Explicit inheritance and authorized traversal
-are now proven separately by ThemeResolver. Portable provisioning, effective
-selection, authorized creation, observation and renderer realization remain
-separate work.
+are now proven separately by ThemeResolver. Portable provisioning, per-principal preference selection, authorized
+creation and live Theme observation remain separate work. T4 implements static
+renderer-native DOM/GTK appearance from resolved tokens independently of these
+provisioning tests (see [Theme appearance](theme-appearance.md)).
