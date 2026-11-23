@@ -116,6 +116,119 @@ test('stock resolution uses only authorized projections and produces complete im
   assert.deepEqual(Object.keys(resolved), ['themeRef', 'tokens']);
 });
 
+
+test('catalog default resolves through authorized catalog and preserves read-only output', integration, async t => {
+  const f = await setup(t);
+  const authority = await f.allAuthority();
+  const before = await f.snapshot();
+  const result = await f.resolver.resolveCatalogDefault({imageId: IMAGE, authority, blockId: BLOCK});
+  assert.deepEqual(result, {themeRef: ref(THEME), tokens: STOCK});
+  assert.deepEqual(f.calls.map(call => call.objectId),
+    ['environment/catalog', THEME, ...STOCK.map(token => stockToken(token.path))]);
+  assert.ok(f.calls.every(call => call.authority === authority && call.blockId === BLOCK && call.imageId === IMAGE));
+  assert.deepEqual(await f.snapshot(), before);
+  assert.ok(Object.isFrozen(result) && Object.isFrozen(result.themeRef) && Object.isFrozen(result.tokens));
+});
+
+test('catalog default can deliberately change without a code-palette fallback', integration, async t => {
+  const f = await setup(t);
+  const old = await f.resolver.resolveCatalogDefault({
+    imageId: IMAGE, authority: await f.allAuthority(), blockId: BLOCK,
+  });
+  await putToken(f.runtime, 'custom/accent', 'accent', 'color', text('#112233'));
+  await putTheme(f.runtime, 'custom', THEME, ['custom/accent']);
+  await f.runtime.images.putObject(IMAGE, {
+    id: 'environment/catalog', shape: ref('environment/shapes/catalog/v1'),
+    slots: {format: text('environment-catalog/v1'), defaultTheme: ref('custom')},
+    indexed: [ref(THEME), ref('custom')],
+  });
+  f.calls.length = 0;
+  const before = await f.snapshot();
+  const result = await f.resolver.resolveCatalogDefault({
+    imageId: IMAGE, authority: await f.allAuthority(), blockId: BLOCK,
+  });
+  assert.equal(result.themeRef.objectId, 'custom');
+  assert.equal(result.tokens.find(token => token.path === 'accent').value, '#112233');
+  assert.equal(old.tokens.find(token => token.path === 'accent').value, '#245a81');
+  assert.deepEqual(f.calls.slice(0, 3).map(call => call.objectId),
+    ['environment/catalog', 'custom', 'custom/accent']);
+  assert.deepEqual(await f.snapshot(), before);
+});
+
+for (const denied of ['environment/catalog', THEME, stockToken('accent')]) {
+  test('catalog selection denies '+denied+' without fallback', integration, async t => {
+    const f = await setup(t);
+    const before = await f.snapshot();
+    await assert.rejects(f.resolver.resolveCatalogDefault({
+      imageId: IMAGE, authority: await f.allAuthority([denied]), blockId: BLOCK,
+    }), error => {
+      assert.equal(error, f.errors.at(-1));
+      assert.equal(error.name, 'AuthorityError');
+      return true;
+    });
+    assert.equal(f.calls.at(-1).objectId, denied);
+    assert.deepEqual(await f.snapshot(), before);
+  });
+}
+
+test('missing catalog cannot select stock or provision defaults', integration, async t => {
+  const f = await setup(t, false);
+  const before = await f.snapshot();
+  await assert.rejects(f.resolver.resolveCatalogDefault({
+    imageId: IMAGE, authority: f.authorityFor(['environment/catalog']), blockId: BLOCK,
+  }), error => error === f.errors.at(-1));
+  assert.deepEqual(f.calls.map(call => call.objectId), ['environment/catalog']);
+  assert.deepEqual(await f.snapshot(), before);
+});
+
+test('catalog stock-list multiplicity does not invent a second default-selection policy', integration, async t => {
+  const f = await setup(t);
+  const authority = await f.allAuthority();
+  const calls = [];
+  const resolver = createThemeResolver({async readObject(request) {
+    calls.push(request.objectId);
+    const record = await f.adapter.readObject(request);
+    return request.objectId === 'environment/catalog'
+      ? {...record, indexed: [ref(THEME), ref(THEME)]} : record;
+  }});
+  const result = await resolver.resolveCatalogDefault({imageId: IMAGE, authority, blockId: BLOCK});
+  assert.equal(result.themeRef.objectId, THEME);
+  assert.deepEqual(calls.slice(0, 2), ['environment/catalog', THEME]);
+});
+
+test('malformed catalog fails before reading its default', integration, async t => {
+  const f = await setup(t);
+  const authority = await f.allAuthority();
+  const corruptions = [
+    v => ({...v, slots: {...v.slots, format: text('wrong')}}),
+    v => ({...v, slots: {...v.slots, defaultTheme: null}}),
+    v => ({...v, slots: {...v.slots, defaultTheme: {...ref(THEME), imageId: 'other'}}}),
+    v => ({...v, slots: {...v.slots, defaultTheme: {...ref(THEME), kind: 'pinned-ref'}}}),
+    v => ({...v, slots: {...v.slots, extra: text('unexpected')}}),
+    v => ({...v, indexed: [{...ref(THEME), revision: '1'}]}),
+  ];
+  for (const corrupt of corruptions) {
+    const reads = [];
+    const resolver = createThemeResolver({async readObject(request) {
+      reads.push(request.objectId);
+      const record = await f.adapter.readObject(request);
+      return request.objectId === 'environment/catalog' ? corrupt(record) : record;
+    }});
+    await assert.rejects(resolver.resolveCatalogDefault({imageId: IMAGE, authority, blockId: BLOCK}),
+      ThemeResolutionError);
+    assert.deepEqual(reads, ['environment/catalog']);
+  }
+});
+
+test('catalog selection rejects invalid image ids without reading', async () => {
+  let count = 0;
+  const resolver = createThemeResolver({readObject() {count++;}});
+  for (const imageId of [undefined, null, '', 1]) {
+    await assert.rejects(resolver.resolveCatalogDefault({imageId}), ThemeResolutionError);
+  }
+  assert.equal(count, 0);
+});
+
 test('nearest overrides win, unrelated paths survive, shared refs stay authorized and fresh calls reread', integration, async t => {
   const f = await setup(t);
   await putToken(f.runtime, 'base/accent', 'accent', 'color', text('#112233'));

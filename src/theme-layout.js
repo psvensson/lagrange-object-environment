@@ -4,6 +4,10 @@ function layout(id, format, names, indexed) {
   return Object.freeze({id, format, names: Object.freeze(names), indexed});
 }
 
+// Well-known EnvironmentCatalog object identity, installed by the sole
+// EnvironmentProvisioner owner and read by ThemeResolver under object/read.
+const ENVIRONMENT_CATALOG_OBJECT_ID = 'environment/catalog';
+
 const ENVIRONMENT_LAYOUT = Object.freeze({
   catalog: layout('environment/shapes/catalog/v1', 'environment-catalog/v1', ['format', 'defaultTheme'], 'values'),
   root: layout('environment/shapes/root-theme/v1', 'environment-theme/root/v1', ['format', 'name'], 'values'),
@@ -11,4 +15,4 @@ const ENVIRONMENT_LAYOUT = Object.freeze({
   derived: layout('environment/shapes/derived-theme/v1', 'environment-theme/derived/v1', ['format', 'name', 'baseTheme'], 'values'),
 });
 
-export {ENVIRONMENT_LAYOUT};
+export {ENVIRONMENT_CATALOG_OBJECT_ID, ENVIRONMENT_LAYOUT};

@@ -102,7 +102,9 @@ Images `9462476` proves chosen identities, write-free replay and divergent refus
 Node image (`test/images-provisioning-admission.integration.test.js`). T1 now provisions the compact
 Smalltalk stock graph; T2 resolves explicit authorized Theme refs with inheritance and complete
 token validation. See [installation](theme-installation.md) and [resolution](theme-resolution.md).
-Profiles, effective-default selection and visible DOM/GTK realization remain open.
+T3 now resolves the provisioned catalog's default through authorized reads, preserving
+legitimate default changes. Profile preference selection, observation and visible
+DOM/GTK realization remain open.
 
 - [ ] define the minimal ordinary-object Shapes/classes for `EnvironmentCatalog`, `Theme`, `DesignToken` and `EnvironmentProfile`; keep complete Theme authority graph-visible rather than one opaque DTCG/CSS blob
 - [ ] add one idempotent environment provisioner that installs those Shapes/classes and creates the single stable-id `EnvironmentCatalog` plus canonical stock/default Theme graph; normal Sessions never create shared defaults
