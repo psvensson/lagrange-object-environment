@@ -30,7 +30,8 @@ try {
 
 `done` reports terminal follow completion/failure. `close` additionally awaits
 renderer destruction and preserves prior Theme, withdrawal, reporting and
-teardown failures. Close invokes Compositor destruction immediately to reject
+teardown failures. Close aborts following independently of the Compositor's drain
+of already-admitted renderer operations. It invokes Compositor destruction immediately to reject
 new view operations; only actual renderer teardown waits for follow retirement.
 Theme failure withdraws its styles and preserves panes until
 the host closes them. The Session and adapter identities cannot be claimed by a
