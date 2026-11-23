@@ -84,12 +84,13 @@ pub fn css_for_resolved_tokens(tokens: &Value) -> Result<String, String> {
 #lagrange-tool-heading {{ color: {accent}; }}
 #lagrange-tool-reason {{ color: {muted}; }}
 button {{
+  background-image: none;
   background-color: {raised};
   color: {accent};
   padding: {compact};
   border-radius: {radius};
 }}
-entry, textview {{
+entry, textview, textview text {{
   background-color: {raised};
   color: {primary};
   padding: {compact};
@@ -99,7 +100,7 @@ entry, textview {{
   font-family: {code_family};
   font-size: {code_size};
 }}
-button:focus, entry:focus, textview:focus {{ outline: 2px solid {focus}; }}
+button:focus, entry:focus-within, textview:focus-within {{ outline: 2px solid {focus}; }}
 selection {{ background-color: {selection_bg}; color: {selection_text}; }}
 "#,
         base=at("surface.base"), primary=at("text.primary"),

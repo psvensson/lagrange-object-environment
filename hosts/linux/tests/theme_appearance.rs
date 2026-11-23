@@ -33,6 +33,18 @@ fn native_renderer_materializes_two_independent_resolved_themes_without_a_defaul
     let first_css = css_for_resolved_tokens(&stock).expect("stock is a complete validated Theme");
     let second_css = css_for_resolved_tokens(&derived).expect("derived is another complete Theme");
     assert_ne!(first_css, second_css);
+    // Cross-host T4 falsifiers from an independent GTK review: a background
+    // color hidden behind the toolkit button image, the missing internal
+    // GtkTextView text node, or an unmatched entry focus pseudo-class would
+    // all pass the old foreground-only assertion without styling the UI.
+    for css in [&first_css, &second_css] {
+        assert!(css.contains("button {\n  background-image: none;"),
+            "button background images must not obscure the resolved raised fill");
+        assert!(css.contains("entry, textview, textview text {"),
+            "multiline source/input text area must use the resolved colors");
+        assert!(css.contains("entry:focus-within"),
+            "GTK4 entries focus their internal GtkText child, not entry:focus");
+    }
     for (expected, css) in [
         (["#e6e6e2", "#245a81", "#f5f5f0", "13px", "6px"], &first_css),
         (["#121922", "#ac4f81", "#253242", "16px", "12px"], &second_css),
