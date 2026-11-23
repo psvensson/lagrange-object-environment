@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync, readdirSync} from 'node:fs';
 import {join, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {PUBLISHED_PACKAGE, SOURCE_DEVELOPMENT} from '../examples/native-cluster/runtime-selection.js';
 
 // CI configuration as EXECUTABLE POLICY for the browser proof lane (Bead vbe),
 // in the shape hosts/linux/tests/portable_images_artifact.rs already uses for
@@ -24,6 +25,84 @@ const PACKAGE = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')
 const BROWSER_DIR = join(REPO_ROOT, 'test', 'browser');
 const MANUAL_PROOF = 'browser-proof.canvas.manual.test.js'; // real display, not CI
 const BROWSER_STEP = '      - name: Browser WebGPU proof';
+
+test('ci policy: source native acceptance always runs on PR/main with exact source identities and bounded real proof', () => {
+  const workflow = readFileSync(join(REPO_ROOT, '.github/workflows/native-source.yml'), 'utf8').split('\n');
+  assert(workflow.includes('name: Native source development'));
+  assert(workflow.includes('  pull_request:'));
+  const push = windowOf(workflow, line => line === '  push:', /^  \S/, 'source push trigger');
+  assert(push.includes('    branches: [main]'));
+  assert(!workflow.some(line => isCode(line) && /continue-on-error|^\s+paths(?:-ignore)?:/.test(line)),
+    'the development proof cannot be skipped or tolerate a failed live run');
+  const artifact = windowOf(workflow, line => line.includes('- name: Retain bounded source evidence'),
+    /^      - /, 'source evidence retention');
+  assert.deepEqual(workflow.filter(line => isCode(line) && /^\s+if:/.test(line)), ['        if: always()']);
+  assert(artifact.includes('        if: always()'), 'only ancillary evidence retention may have a condition');
+  assert(artifact.some(line => line.trim() === 'uses: actions/upload-artifact@v7.0.2'));
+  const evidencePaths = artifact.filter(line => line.trim().startsWith('${{ runner.temp }}/'))
+    .map(line => line.trim().replace('${{ runner.temp }}/native-source-evidence/', ''));
+  assert.deepEqual(evidencePaths, ['manifest.json', 'diagnostics.json', 'receipts.json',
+    'snapshot-1.json', 'snapshot-2.json'], 'upload only explicit sanitized exports, never private run files');
+  assert(artifact.includes('          if-no-files-found: error'));
+  const job = windowOf(workflow, line => line === '  native-source-development:', /^  \S/, 'source native job');
+  exactlyOneTimeout(job, 4, 'source native job', 30);
+  for (const [repository, revision] of [['psvensson/lagrange', SOURCE_DEVELOPMENT.revision],
+    ['psvensson/lagrange-images', SOURCE_DEVELOPMENT.imagesRevision]]) {
+    const checkout = windowOf(workflow, line => line.trim() === `repository: ${repository}`,
+      /^      - /, `${repository} source checkout`);
+    assert.deepEqual(checkout.filter(line => line.trim().startsWith('ref:')).map(line => line.trim()),
+      [`ref: ${revision}`]);
+  }
+  const install = windowOf(workflow, line => line.includes('- name: Install locked source dependencies'),
+    /^      - /, 'locked source dependencies');
+  assert(install.includes('        working-directory: lagrange-source'));
+  assert(install.some(line => line.trim() === 'run: npm ci --no-audit --no-fund'));
+  assert(workflow.some(line => line.includes('- name: Prove the published package is absent')));
+  assert(!workflow.some(line => line.trim() === 'working-directory: lagrange-object-environment/examples/native-cluster'));
+  const compileIndex = workflow.findIndex(line => line.includes('- name: Compile native artifacts before starting source processes'));
+  const proofIndex = workflow.findIndex(line => line.includes('- name: Native source executable and GTK acceptance'));
+  assert(compileIndex >= 0 && compileIndex < proofIndex, 'compile both native artifacts before cohort acquisition');
+  assert(workflow.some(line => line.includes('--test native_cluster --no-run')));
+  assert(workflow.some(line => line.includes('--locked --bin lagrange-host-linux')));
+  const proof = windowOf(workflow, line => line.includes('- name: Native source executable and GTK acceptance'),
+    /^      - /, 'source native proof');
+  exactlyOneTimeout(proof, 8, 'source native proof', 10);
+  assert(proof.some(line => line.includes('node test/native-cluster/run-source.js')));
+  assert(proof.includes('          OE_SOURCE_EVIDENCE_DIR: ${{ runner.temp }}/native-source-evidence'));
+  for (const argument of ['--lagrange-checkout', '--images-checkout', '--native-binary']) {
+    assert(proof.some(line => line.includes(argument)), `the proof explicitly supplies ${argument}`);
+  }
+  assert(proof.some(line => line.includes('--host-id "$(hostname)"')),
+    'all local processes use the actual runner host identity');
+});
+
+test('ci policy: published acceptance is explicitly manual and retains the original locked identity and real failure behavior', () => {
+  const workflow = readFileSync(join(REPO_ROOT, '.github/workflows/native-cluster.yml'), 'utf8').split('\n');
+  assert(workflow.includes('name: Published package acceptance (manual)'));
+  assert(workflow.includes('  workflow_dispatch:'));
+  assert(!workflow.includes('  push:') && !workflow.includes('  pull_request:'),
+    'manual package acceptance must not be described as an automatic release interlock');
+  const job = windowOf(workflow, (line) => line === '  published-native-cluster:', /^  \S/, 'published native job');
+  exactlyOneTimeout(job, 4, 'published native job', 30);
+  const proof = windowOf(workflow, (line) => line.includes('- name: Native executable and GTK actions'), /^      - /, 'real native proof');
+  exactlyOneTimeout(proof, 8, 'real native proof', 10);
+  assert(proof.some((line) => line.includes('node test/native-cluster/run.js')));
+  assert(!workflow.some((line) => isCode(line) && /continue-on-error|^\s+if:/.test(line)), 'live gate cannot silently skip or tolerate failure');
+  assert(workflow.some((line) => line.includes('run: npm ci')));
+  assert(workflow.some((line) => line.includes('--test native_cluster --no-run')));
+  assert(!workflow.some(line => isCode(line) && /run-source\.js|--lagrange-checkout/.test(line)),
+    'the published proof must not silently execute a source checkout');
+  const checkout = windowOf(workflow, line => line.trim() === 'repository: psvensson/lagrange-images',
+    /^      - /, 'published Images checkout');
+  assert.deepEqual(checkout.filter(line => line.trim().startsWith('ref:')).map(line => line.trim()),
+    [`ref: ${PUBLISHED_PACKAGE.imagesRevision}`]);
+  const lock = JSON.parse(readFileSync(join(REPO_ROOT, 'examples/native-cluster/package-lock.json')));
+  const dependency = lock.packages['node_modules/lagrange-server'];
+  assert.equal(dependency.version, PUBLISHED_PACKAGE.version);
+  assert.equal(dependency.version, lock.packages[''].dependencies['lagrange-server']);
+  assert.match(dependency.resolved, /^https:\/\/registry.npmjs.org\/lagrange-server\/-\/lagrange-server-/);
+  assert.match(dependency.integrity, /^sha512-/);
+});
 
 const isCode = (line) => !line.trimStart().startsWith('#');
 

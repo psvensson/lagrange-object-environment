@@ -14,6 +14,10 @@ use lagrange_host_linux::{box_big_glb_bytes, box_glb_bytes, component_hash, mesh
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
     env_logger::init();
+    if std::env::args().nth(1).as_deref() == Some("view") {
+        return lagrange_host_linux::native_viewer::cli::run(
+            std::env::args().skip(2).collect(), tokio::runtime::Handle::current());
+    }
 
     let mut asset = "box".to_string();
     let mut frames = 5usize;

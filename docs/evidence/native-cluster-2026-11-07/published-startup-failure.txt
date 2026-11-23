@@ -1,0 +1,38 @@
+{"event":"evidence-directory","directory":"/tmp/oe-native-cluster-Il3VY0"}
+{"event":"stage","stage":"runtime-start"}
+{"event":"failure","stage":"runtime-start","error":"ApplicationDatabaseError: Embedded Lagrange runtime failed to start\n    at createApplicationDatabaseError (file:///mnt/data/peter/projects/lagrange-object-environment/examples/native-cluster/node_modules/lagrange-server/src/query/application-database-error.js:39:10)\n    at normalizeStartupFailure (file:///mnt/data/peter/projects/lagrange-object-environment/examples/native-cluster/node_modules/lagrange-server/src/embedded-lagrange.js:45:10)\n    at file:///mnt/data/peter/projects/lagrange-object-environment/examples/native-cluster/node_modules/lagrange-server/src/embedded-lagrange.js:137:15\n    at async LagrangeBackend.start (file:///tmp/oe-native-viewer-images-pinned/src/backend/lagrange-backend.js:229:7)\n    at async Module.createRuntime (file:///tmp/oe-native-viewer-images-pinned/src/runtime.js:46:3)\n    at async createDevelopmentDeployment (file:///mnt/data/peter/projects/lagrange-object-environment/examples/native-cluster/deployment.js:40:19)\n    at async file:///mnt/data/peter/projects/lagrange-object-environment/test/native-cluster/service-process.js:50:16","cause":"Error: original-allocation-observation-unavailable\n    at originalAllocationError (file:///mnt/data/peter/projects/lagrange-object-environment/examples/native-cluster/node_modules/lagrange-server/src/raft/raft-rs-original-allocation-constants.js:55:24)\n    at initializeOriginalSeedAttempt (file:///mnt/data/peter/projects/lagrange-object-environment/examples/native-cluster/node_modules/lagrange-server/src/bootstrap/seed-original-allocation-startup.js:91:11)\n    at async awaitStartupAcquisition (file:///mnt/data/peter/projects/lagrange-object-environment/examples/native-cluster/node_modules/lagrange-server/src/lagrange-runtime-startup.js:86:18)\n    at async startSeedNode (file:///mnt/data/peter/projects/lagrange-object-environment/examples/native-cluster/node_modules/lagrange-server/src/lagrange-runtime-startup.js:441:3)\n    at async acquireLagrangeRuntime (file:///mnt/data/peter/projects/lagrange-object-environment/examples/native-cluster/node_modules/lagrange-server/src/lagrange-runtime-startup.js:767:15)\n    at async runStartupWithCleanup (file:///mnt/data/peter/projects/lagrange-object-environment/examples/native-cluster/node_modules/lagrange-server/src/entrypoint-startup-acquisition-ledger.js:59:21)\n    at async file:///mnt/data/peter/projects/lagrange-object-environment/examples/native-cluster/node_modules/lagrange-server/src/embedded-lagrange.js:115:19\n    at async LagrangeBackend.start (file:///tmp/oe-native-viewer-images-pinned/src/backend/lagrange-backend.js:229:7)\n    at async Module.createRuntime (file:///tmp/oe-native-viewer-images-pinned/src/runtime.js:46:3)\n    at async createDevelopmentDeployment (file:///mnt/data/peter/projects/lagrange-object-environment/examples/native-cluster/deployment.js:40:19)"}
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: real cluster bootstrap failed at runtime-start: ApplicationDatabaseError: Embedded Lagrange runtime failed to start
+    at createApplicationDatabaseError (file:///mnt/data/peter/projects/lagrange-object-environment/examples/native-cluster/node_modules/lagrange-server/src/query/application-database-error.js:39:10)
+    at normalizeStartupFailure (file:///mnt/data/peter/projects/lagrange-object-environment/examples/native-cluster/node_modules/lagrange-server/src/embedded-lagrange.js:45:10)
+    at file:///mnt/data/peter/projects/lagrange-object-environment/examples/native-cluster/node_modules/lagrange-server/src/embedded-lagrange.js:137:15
+    at async LagrangeBackend.start (file:///tmp/oe-native-viewer-images-pinned/src/backend/lagrange-backend.js:229:7)
+    at async Module.createRuntime (file:///tmp/oe-native-viewer-images-pinned/src/runtime.js:46:3)
+    at async createDevelopmentDeployment (file:///mnt/data/peter/projects/lagrange-object-environment/examples/native-cluster/deployment.js:40:19)
+    at async file:///mnt/data/peter/projects/lagrange-object-environment/test/native-cluster/service-process.js:50:16; Error: original-allocation-observation-unavailable
+    at originalAllocationError (file:///mnt/data/peter/projects/lagrange-object-environment/examples/native-cluster/node_modules/lagrange-server/src/raft/raft-rs-original-allocation-constants.js:55:24)
+    at initializeOriginalSeedAttempt (file:///mnt/data/peter/projects/lagrange-object-environment/examples/native-cluster/node_modules/lagrange-server/src/bootstrap/seed-original-allocation-startup.js:91:11)
+    at async awaitStartupAcquisition (file:///mnt/data/peter/projects/lagrange-object-environment/examples/native-cluster/node_modules/lagrange-server/src/lagrange-runtime-startup.js:86:18)
+    at async startSeedNode (file:///mnt/data/peter/projects/lagrange-object-environment/examples/native-cluster/node_modules/lagrange-server/src/lagrange-runtime-startup.js:441:3)
+    at async acquireLagrangeRuntime (file:///mnt/data/peter/projects/lagrange-object-environment/examples/native-cluster/node_modules/lagrange-server/src/lagrange-runtime-startup.js:767:15)
+    at async runStartupWithCleanup (file:///mnt/data/peter/projects/lagrange-object-environment/examples/native-cluster/node_modules/lagrange-server/src/entrypoint-startup-acquisition-ledger.js:59:21)
+    at async file:///mnt/data/peter/projects/lagrange-object-environment/examples/native-cluster/node_modules/lagrange-server/src/embedded-lagrange.js:115:19
+    at async LagrangeBackend.start (file:///tmp/oe-native-viewer-images-pinned/src/backend/lagrange-backend.js:229:7)
+    at async Module.createRuntime (file:///tmp/oe-native-viewer-images-pinned/src/runtime.js:46:3)
+    at async createDevelopmentDeployment (file:///mnt/data/peter/projects/lagrange-object-environment/examples/native-cluster/deployment.js:40:19)
+
+'failure' !== 'ready'
+
+    at file:///mnt/data/peter/projects/lagrange-object-environment/test/native-cluster/run.js:41:10 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: 'failure',
+  expected: 'ready',
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v22.23.2
