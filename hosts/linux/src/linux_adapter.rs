@@ -34,7 +34,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use gtk4::prelude::*;
 
-use crate::gtk_theme::{apply_native_tool_css, css_for_resolved_tokens};
+use crate::gtk_theme::{apply_native_tool_css, css_for_resolved_tokens, remove_native_tool_css};
 use crate::projector::project;
 use crate::semantic_gtk::{realize, GtkRealization, Intent};
 use crate::{GlbHost, GlbInstance};
@@ -140,6 +140,7 @@ enum Realization {
     Gtk {
         realization: GtkRealization,
         descriptor: Value,
+        theme_provider: Option<gtk4::CssProvider>,
     },
     /// A live native GLB Component instance (held open across frames).
     Glb(GlbInstance),
@@ -178,6 +179,31 @@ impl LinuxRendererAdapter {
         let mut adapter = Self::new(glb_runner);
         adapter.theme_css = Some(css);
         Ok(adapter)
+    }
+
+    /// T5 host-only live style control (NOT a RendererAdapter contract op).
+    /// Validate the full next Theme before altering any current widget; reuse
+    /// the SAME CssProvider instance for each existing pane, preserving
+    /// widget identity, typed input, focus, and action listeners.
+    pub fn set_resolved_tokens(&mut self, tokens: Option<&Value>) -> Result<(), String> {
+        let next = tokens.map(css_for_resolved_tokens).transpose()?;
+        for entry in self.surfaces.values_mut() {
+            if let Some(Realization::Gtk { realization, theme_provider, .. }) = &mut entry.realization {
+                match (&next, theme_provider.as_ref()) {
+                    (Some(css), Some(provider)) => provider.load_from_data(css),
+                    (Some(css), None) => {
+                        *theme_provider = Some(apply_native_tool_css(realization.root.upcast_ref(), css));
+                    }
+                    (None, Some(provider)) => {
+                        remove_native_tool_css(realization.root.upcast_ref(), provider);
+                        *theme_provider = None;
+                    }
+                    (None, None) => {}
+                }
+            }
+        }
+        self.theme_css = next;
+        Ok(())
     }
 
     fn require_live(&self, handle: &str, method: &str) -> Result<&SurfaceEntry, String> {
@@ -424,12 +450,13 @@ impl RendererAdapterOps for LinuxRendererAdapter {
             let doc = project(presentation_descriptor)
                 .map_err(|e| format!("linux renderer: project({kind}): {e}"))?;
             let realization = realize(&doc);
-            if let Some(css) = self.theme_css.as_ref() {
-                apply_native_tool_css(realization.root.upcast_ref(), css);
-            }
+            let theme_provider = self.theme_css.as_ref().map(|css| {
+                apply_native_tool_css(realization.root.upcast_ref(), css)
+            });
             Realization::Gtk {
                 realization,
                 descriptor: presentation_descriptor.clone(),
+                theme_provider,
             }
         } else if kind == "glb" {
             // The attach-scoped asset allowlist from the descriptor's asset

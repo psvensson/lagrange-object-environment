@@ -201,7 +201,17 @@ function createDomRealizer({mountPoint, emitIntent, resolvedTokens = null}) {
   // Host composition supplies the already-resolved tokens; a Theme ref or
   // image service never crosses into the DOM realizer. Validate once, before
   // any surface can attach. Null means unstyled, never a fallback Theme.
-  const themeVars = resolvedTokens === null ? null : cssVarsForResolvedTokens(resolvedTokens);
+  let themeVars = resolvedTokens === null ? null : cssVarsForResolvedTokens(resolvedTokens);
+  const liveRoots = new Set(); // transient realized panes owned by THIS host
+
+  // A host-only appearance update, not a RendererAdapter lifecycle operation.
+  // Validate the WHOLE next token array first: a malformed Theme may not
+  // partially recolor panes or replace their current presentation/controls.
+  function setResolvedTokens(tokens) {
+    const next = tokens === null ? null : cssVarsForResolvedTokens(tokens);
+    for (const root of liveRoots) applyResolvedTokensToDom(root, next);
+    themeVars = next;
+  }
 
   // attach: project -> render -> mount. Returns the opaque Realization.
   async function attach({surfaceHandle, presentationDescriptor}) {
@@ -241,7 +251,11 @@ function createDomRealizer({mountPoint, emitIntent, resolvedTokens = null}) {
       kind: 'dom',
       start() {
         if (!mounted) {
+          // An update may have arrived AFTER attach built this root but BEFORE
+          // the lifecycle owner started it. Apply the current host Theme.
+          applyResolvedTokensToDom(root, themeVars);
           mountPoint.appendChild(root);
+          liveRoots.add(root);
           mounted = true;
         }
       },
@@ -255,6 +269,7 @@ function createDomRealizer({mountPoint, emitIntent, resolvedTokens = null}) {
         return null; // DOM panes are not GPU-readable.
       },
       dispose() {
+        liveRoots.delete(root);
         for (const [el, type, fn] of listeners) el.removeEventListener(type, fn);
         if (root.parentNode) root.parentNode.removeChild(root);
         mounted = false;
@@ -265,7 +280,7 @@ function createDomRealizer({mountPoint, emitIntent, resolvedTokens = null}) {
     };
   }
 
-  return {attach};
+  return {attach, setResolvedTokens};
 }
 
 export {createDomRealizer, renderSemanticUiToDom, isToolKind, TOOL_KINDS};

@@ -33,17 +33,12 @@ fn native_renderer_materializes_two_independent_resolved_themes_without_a_defaul
     let first_css = css_for_resolved_tokens(&stock).expect("stock is a complete validated Theme");
     let second_css = css_for_resolved_tokens(&derived).expect("derived is another complete Theme");
     assert_ne!(first_css, second_css);
-    // Cross-host T4 falsifiers from an independent GTK review: a background
-    // color hidden behind the toolkit button image, the missing internal
-    // GtkTextView text node, or an unmatched entry focus pseudo-class would
-    // all pass the old foreground-only assertion without styling the UI.
+    // GTK4 review falsifiers: clear button gradients, style the internal
+    // GtkTextView text node, and use focus-within for an entry's GtkText.
     for css in [&first_css, &second_css] {
-        assert!(css.contains("button {\n  background-image: none;"),
-            "button background images must not obscure the resolved raised fill");
-        assert!(css.contains("entry, textview, textview text {"),
-            "multiline source/input text area must use the resolved colors");
-        assert!(css.contains("entry:focus-within"),
-            "GTK4 entries focus their internal GtkText child, not entry:focus");
+        assert!(css.contains("button {\n  background-image: none;"));
+        assert!(css.contains("entry, textview, textview text {"));
+        assert!(css.contains("entry:focus-within"));
     }
     for (expected, css) in [
         (["#e6e6e2", "#245a81", "#f5f5f0", "13px", "6px"], &first_css),
@@ -76,15 +71,52 @@ fn native_renderer_materializes_two_independent_resolved_themes_without_a_defaul
         .expect("host may install the already-resolved tokens");
     let handle = adapter.create_surface(&json!({"kind":"tool-pane"})).unwrap();
     let descriptor = json!({
-      "kind":"navigator", "subject":{"kind":"ref","imageId":"img","objectId":"obj-root"},
+      "kind":"inspector", "subject":{"kind":"ref","imageId":"img","objectId":"obj-root"},
       "parameters":{"fields":{"slot-title":{"kind":"text","value":"Root"}},
+        "writable":["slot-title"],
         "references":[{"kind":"ref","imageId":"img","objectId":"obj-b"}]}
     });
     adapter.attach_presentation(&handle, &descriptor).unwrap();
-    assert_eq!(adapter.gtk_foreground_rgb(&handle).unwrap(), Some((240, 243, 247)),
-        "computed Theme foreground must be visible through the PRODUCTION adapter attach path");
-    assert!(adapter.gtk_visible_text(&handle).unwrap().contains(&"Navigator: obj-root".to_string()));
+    assert!(adapter.gtk_visible_text(&handle).unwrap().contains(&"Inspector: obj-root".to_string()));
     assert_eq!(adapter.activate_gtk_action(&handle, 0).unwrap().unwrap().key(), 0);
+    let typed = "This user edit is absent from the original descriptor";
+    assert_eq!(adapter.edit_gtk_field(&handle, 0, typed).unwrap().unwrap().kind(), "edit-field");
+    let user_edit = vec![(0_i64, typed.to_string())];
+    assert_eq!(adapter.gtk_editable_texts(&handle).unwrap(), user_edit,
+        "user editing must modify the real widget state, not the descriptor");
+
+    // T5: the production Linux adapter updates the SAME GtkRealization,
+    // without detach/re-attach or another renderer lifecycle operation.
+    let original_descriptor = adapter.gtk_descriptor(&handle).unwrap().unwrap();
+    assert_eq!(adapter.gtk_foreground_rgb(&handle).unwrap(), Some((240, 243, 247)));
+    adapter.set_resolved_tokens(Some(&stock)).unwrap();
+    assert_eq!(adapter.gtk_foreground_rgb(&handle).unwrap(), Some((28, 36, 40)));
+    assert_eq!(adapter.gtk_editable_texts(&handle).unwrap(), user_edit,
+        "Theme update/reapplication must preserve typed text");
+    adapter.set_resolved_tokens(Some(&derived)).unwrap();
+    assert_eq!(adapter.gtk_foreground_rgb(&handle).unwrap(), Some((240, 243, 247)));
+    assert_eq!(adapter.gtk_editable_texts(&handle).unwrap(), user_edit);
+    // A malformed incoming Theme fails BEFORE changing any existing pane.
+    let invalid = json!([]);
+    assert!(adapter.set_resolved_tokens(Some(&invalid)).is_err());
+    assert_eq!(adapter.gtk_foreground_rgb(&handle).unwrap(), Some((240, 243, 247)));
+    assert_eq!(adapter.gtk_editable_texts(&handle).unwrap(), user_edit,
+        "malformed incoming Theme must not reset a field");
+    assert_eq!(adapter.gtk_descriptor(&handle).unwrap().unwrap(), original_descriptor);
+    assert_eq!(adapter.activate_gtk_action(&handle, 0).unwrap().unwrap().key(), 0);
+
+    adapter.set_resolved_tokens(None).unwrap();
+    assert_eq!(adapter.gtk_foreground_rgb(&handle).unwrap(),
+        Some(rgb(plain.root.upcast_ref())), "unselecting the Theme restores unstyled GTK appearance");
+    assert_eq!(adapter.gtk_editable_texts(&handle).unwrap(), user_edit,
+        "withdrawing Theme must not discard user edits");
+    adapter.set_resolved_tokens(Some(&stock)).unwrap();
+    assert_eq!(adapter.gtk_foreground_rgb(&handle).unwrap(), Some((28, 36, 40)));
+    assert_eq!(adapter.gtk_editable_texts(&handle).unwrap(), user_edit,
+        "Theme update/reapplication must preserve typed text");
+    assert_eq!(adapter.gtk_descriptor(&handle).unwrap().unwrap(), original_descriptor);
+    assert_eq!(adapter.activate_gtk_action(&handle, 0).unwrap().unwrap().key(), 0);
+
     adapter.detach_presentation(&handle).unwrap();
     adapter.destroy_surface(&handle).unwrap();
 }
@@ -92,8 +124,6 @@ fn native_renderer_materializes_two_independent_resolved_themes_without_a_defaul
 #[test]
 fn gtk_theme_accepts_the_same_safe_integral_json_numbers_as_the_browser() {
     let mut values = tokens("stock");
-    // Rust serde_json stores 13.0 and 1.3e1 as floats; JavaScript's
-    // Number.isSafeInteger accepts them as the integer 13. -0.0 is zero.
     values[12]["value"] = serde_json::from_str("1.3e1").unwrap();
     values[14]["value"] = serde_json::from_str("13.0").unwrap();
     values[2]["value"] = serde_json::from_str("-0.0").unwrap();

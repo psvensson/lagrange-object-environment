@@ -89,13 +89,28 @@ const TOOL_CSS = `
   color: var(--lagrange-selection-text);
 }`;
 
+// The CSS property set is closed by the resolved-token contract; clearing a
+// Theme can remove only what we installed, leaving unrelated host CSS intact.
+const THEME_CSS_VARIABLES = Object.freeze(
+  Object.keys(TYPES).map(path => '--lagrange-' + path.replaceAll('.', '-')),
+);
+
 function applyResolvedTokensToDom(root, vars) {
-  if (vars === null) return root; // no Theme selected: NO code palette/default
+  let style = root.querySelector(':scope > style[data-lagrange-theme]');
+  if (vars === null) {
+    root.classList.remove('lagrange-tool-themed');
+    for (const name of THEME_CSS_VARIABLES) root.style.removeProperty(name);
+    style?.remove();
+    return root; // unthemed, NOT a stock-palette fallback
+  }
   root.classList.add('lagrange-tool-themed');
   for (const [name, value] of Object.entries(vars)) root.style.setProperty(name, value);
-  const style = document.createElement('style');
-  style.textContent = TOOL_CSS;
-  root.prepend(style);
+  if (!style) {
+    style = document.createElement('style');
+    style.dataset.lagrangeTheme = '';
+    style.textContent = TOOL_CSS; // static host-owned CSS, never user text
+    root.prepend(style);
+  }
   return root;
 }
 

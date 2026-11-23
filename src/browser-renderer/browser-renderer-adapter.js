@@ -226,6 +226,17 @@ function createBrowserRendererAdapter({loadComponent, mount = null, createRender
     return () => intentHandlers.delete(handler);
   }
 
+  // T5 host-only styling control, NOT a seventh RendererAdapter op. It
+  // updates existing DOM panes in place (no detach, lost focus or new handles).
+  // A missing/invalid Theme does not silently apply the stock palette.
+  function setResolvedTokens(tokens) {
+    requireAlive();
+    if (!domRealizer) {
+      throw new RendererResourceLostError('browser renderer: no DOM realizer for Theme styling');
+    }
+    domRealizer.setResolvedTokens(tokens);
+  }
+
   const intentHandlers = new Set();
 
   // Fan a semantic intent descriptor out to intent consumers. The intent is
@@ -255,6 +266,7 @@ function createBrowserRendererAdapter({loadComponent, mount = null, createRender
     readRenderedPixels,
     injectPointerEvent,
     onIntent,
+    setResolvedTokens, // concrete host control; six-op lifecycle contract unchanged
   });
 }
 

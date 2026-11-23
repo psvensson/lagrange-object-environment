@@ -45,6 +45,48 @@ test('CI: two resolved Themes style independent DOM panes and never style an unt
   });
 });
 
+test('CI: ThemeResolver observation drives the production DOM style update and explicit error withdrawal', {skip: !available && 'no Chrome available'}, async () => {
+  await withProofPage(async ({page}) => {
+    const r = await page.evaluate(() => window.__lagrangeProof.observeAndRecolorLiveDom());
+    assert.equal(r.initial, 'rgb(230, 230, 226)');
+    assert.equal(r.changed, 'rgb(18, 25, 34)',
+      'changed DesignToken must be reread, resolved, then rendered without reattach');
+    assert.deepEqual(r.updates, ['#e6e6e2', '#121922']);
+    assert.equal(r.nodeUnchanged, true, 'live Theme updates preserve DOM and typed input identity');
+    assert.equal(r.errors.length, 1);
+    assert.match(r.errors[0], /Theme color requires lowercase opaque/);
+    assert.deepEqual(r.afterError, {themed: false, styleCount: 0, base: ''},
+      'an explicitly handled invalid Theme withdraws styling, never invents a fallback');
+  });
+});
+
+test('CI: live resolved Theme updates change computed DOM style without replacing controls or intents', {skip: !available && 'no Chrome available'}, async () => {
+  await withProofPage(async ({page}) => {
+    const r = await page.evaluate(() => window.__lagrangeProof.updateLiveThemeOnRealDom());
+    assert.equal(r.before.themed, true);
+    assert.deepEqual([r.before.base, r.before.background, r.before.foreground, r.before.fontSize],
+      ['#e6e6e2', 'rgb(230, 230, 226)', 'rgb(28, 36, 40)', '13px']);
+    assert.deepEqual([r.after.base, r.after.background, r.after.foreground, r.after.fontSize],
+      ['#121922', 'rgb(18, 25, 34)', 'rgb(240, 243, 247)', '16px']);
+    assert.equal(r.stillSame, true, 'original DOM node, focused editable field and typed text survive');
+    assert.deepEqual(r.idempotent, r.after, 'repeated delivery never stacks Theme style nodes');
+    assert.equal(r.idempotent.styleCount, 1);
+    assert.equal(r.rejectedInvalid, true, 'an incomplete Theme is rejected BEFORE changing style');
+    assert.deepEqual(r.afterInvalid, r.after);
+    assert.deepEqual(r.intents, [
+      {intent: {kind: 'activate-item', key: 0}, handle: r.handle},
+      {intent: {kind: 'edit-field', key: 0, text: 'Text typed during a Theme change'}, handle: r.handle},
+    ], 'ordinary intent routing is identical before and after a live style change');
+    assert.equal(r.cleared.themed, false, 'explicit no Theme unstyles rather than selecting stock');
+    assert.equal(r.cleared.styleCount, 0);
+    assert.equal(r.cleared.base, '');
+    assert.equal(r.stillSameAfterClear, true);
+    assert.deepEqual(r.restored, r.before, 'a re-authorized Theme can be applied to the SAME pane');
+    assert.deepEqual(r.plainAfter, r.plainBefore, 'another adapter without Theme remains untouched');
+    assert.equal(r.rejectedAfterDestroy, true, 'retired renderers cannot be styled');
+  });
+});
+
 test('CI: DOM tool realizations + a GLB Component coexist behind one adapter (injected dispatch seam)', {skip: !available && 'no Chrome available'}, async () => {
   await withProofPage(async ({page}) => {
     const result = await page.evaluate(async () => {
