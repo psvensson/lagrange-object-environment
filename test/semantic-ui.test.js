@@ -120,6 +120,24 @@ test('retained source remains literal read-only display and never becomes the re
   }
 });
 
+test('native provenance keys retain the Images JavaScript UTF-16 order across ports', () => {
+  // A supplementary-plane key sorts BEFORE a high-BMP key in JS but AFTER
+  // it under Rust's Unicode-scalar String ordering. This is a genuine input
+  // Images' public normalizeProvenance permits, not an invented storage shape.
+  const input = {...CASES['native-class-retained'], parameters: {
+    smalltalkClass: {...CASES['native-class-retained'].parameters.smalltalkClass,
+      provenance: {'\uE000': 'bmp-private', '\u{10000}': 'supplementary', category: 'accessing'}},
+    targets: [],
+  }};
+  const fields = semanticUiForPresentation(input).root.children
+    .filter(node => node.kind === 'field' && (node.label === 'Category' || node.label.startsWith('Provenance: ')))
+    .map(node => [node.label, node.text]);
+  assert.deepEqual(fields, [
+    ['Category', 'accessing'], ['Provenance: \u{10000}', 'supplementary'],
+    ['Provenance: \uE000', 'bmp-private'],
+  ]);
+});
+
 test('the validator accepts every checked-in green fixture', async () => {
   for (const name of Object.keys(CASES)) {
     const doc = await readJson(join(FIXTURES, `${name}.json`));

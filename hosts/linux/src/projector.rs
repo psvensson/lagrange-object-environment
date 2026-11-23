@@ -58,7 +58,11 @@ fn append_smalltalk_provenance_fields(children: &mut Vec<Value>, provenance: Opt
         return;
     };
     let mut entries: Vec<_> = metadata.iter().collect();
-    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+    // Images normalizes provenance keys with JavaScript's UTF-16 lexical
+    // ordering. Rust String/serde_json compares Unicode scalars instead,
+    // which reverses supplementary-plane vs high-BMP key order. A native
+    // projector must render the SAME ordered document as SemanticUi JS.
+    entries.sort_by(|(left, _), (right, _)| left.encode_utf16().cmp(right.encode_utf16()));
     for (key, value) in entries {
         let Some(text) = value.as_str() else { continue };
         let label = match key.as_str() {

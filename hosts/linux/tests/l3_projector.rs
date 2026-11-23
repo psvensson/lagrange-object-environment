@@ -82,6 +82,37 @@ fn rust_projector_matches_the_checked_in_fixtures() {
     }
 }
 
+#[test]
+fn retained_provenance_keys_follow_images_js_utf16_order() {
+    use lagrange_host_linux::semantic_ui::Node;
+
+    // serde_json's map sorts by Unicode scalar value; Images and the JS
+    // projector sort JS UTF-16 code units. These two keys reverse order.
+    // A native sort without explicit UTF-16 comparison must fail this test.
+    let descriptor = json!({
+        "kind": "native-class",
+        "parameters": {"smalltalkClass": {
+            "name": "UnicodeKeys", "provenance": {
+                "\u{e000}": "bmp-private", "\u{10000}": "supplementary", "category": "accessing"
+            }
+        }}
+    });
+    let doc = project(&descriptor).expect("native class projection");
+    let fields: Vec<(String, String)> = match doc.root {
+        Node::Group { children, .. } => children.into_iter().filter_map(|node| match node {
+            Node::Field { label, text, .. } if label == "Category" || label.starts_with("Provenance: ") =>
+                Some((label, text)),
+            _ => None,
+        }).collect(),
+        other => panic!("expected group, got {other:?}"),
+    };
+    assert_eq!(fields, vec![
+        ("Category".to_string(), "accessing".to_string()),
+        ("Provenance: \u{10000}".to_string(), "supplementary".to_string()),
+        ("Provenance: \u{e000}".to_string(), "bmp-private".to_string()),
+    ]);
+}
+
 /// The rules most easily collapsed by an independent port, checked directly
 /// rather than only through the shared fixture.
 #[test]
