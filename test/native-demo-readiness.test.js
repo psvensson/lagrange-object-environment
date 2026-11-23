@@ -172,6 +172,109 @@ function cohortFixture({probeReadiness, membership, installError, startupMs = 20
     installed: () => installed, nativeStarts: () => nativeStarts, memberReads: () => memberReads};
 }
 
+function captureStartupObservation(fixture) {
+  let observation;
+  fixture.options.onStage = (stage, details) => {
+    if (stage !== 'Stopping the demo processes') return;
+    assert.equal(observation, undefined, 'startup evidence is emitted only once');
+    observation = details.startupObservation;
+  };
+  return () => observation;
+}
+
+test('startup evidence distinguishes incomplete membership from an unattempted readiness probe', async () => {
+  const entered = deferred(), held = deferred();
+  let probes = 0;
+  const rows = [{nodeId: 'seed', status: 'active'}, {nodeId: 'joiner-a', status: 'joining'}];
+  const f = cohortFixture({membership(round) {
+    if (round === 3) { entered.resolve(); return held.promise; }
+    return rows;
+  }, probeReadiness: async () => { probes++; return false; }});
+  const evidence = captureStartupObservation(f);
+  const reason = new Error('stop while the third membership request is held');
+  const running = runDemoCohort(f.options), observed = running.catch(error => error);
+  try {
+    await Promise.race([entered.promise, running.then(() => {
+      throw new Error('Cohort closed before the held membership request');
+    })]);
+    // The retained result must not alias data still owned by a worker/delegate.
+    rows[1].status = 'active'; rows.push({nodeId: 'joiner-b', status: 'active'});
+    f.controller.abort(reason);
+    assert.equal(await observed, reason);
+  } finally { held.resolve([]); f.controller.abort(reason); await observed; }
+  await assert.rejects(running, error => error === reason);
+  const record = evidence();
+  assert.equal(record.membershipAttempts, 3);
+  assert.equal(record.lastMembership.round, 2);
+  assert.equal(record.lastMembership.complete, false);
+  assert.deepEqual(record.lastMembership.rows,
+    [{nodeId: 'seed', status: 'active'}, {nodeId: 'joiner-a', status: 'joining'}]);
+  assert.equal(record.readinessAttempts, 0);
+  assert.equal(record.lastReadiness, null);
+  assert.equal(probes, 0);
+  assert.ok(Object.isFrozen(record) && Object.isFrozen(record.lastMembership)
+    && Object.isFrozen(record.lastMembership.rows) && Object.isFrozen(record.lastMembership.rows[0]));
+  assert.throws(() => { record.lastMembership.rows[0].status = 'changed'; }, TypeError);
+  assert.deepEqual(f.stopped, [0, 1, 2]);
+  assert.equal(f.installed(), 0);
+});
+
+test('startup evidence records a held first probe separately from a validated pending response', async () => {
+  const entered = deferred(), held = deferred();
+  const f = cohortFixture({probeReadiness(_node, {signal}) {
+    signal.addEventListener('abort', () => held.reject(signal.reason), {once: true});
+    entered.resolve(); return held.promise;
+  }});
+  const evidence = captureStartupObservation(f);
+  const reason = new Error('stop while the first readiness probe is held');
+  const running = runDemoCohort(f.options), observed = running.catch(error => error);
+  try {
+    await Promise.race([entered.promise, running.then(() => {
+      throw new Error('Cohort closed before the held readiness probe');
+    })]);
+    f.controller.abort(reason);
+    assert.equal(await observed, reason);
+  } finally { held.reject(reason); f.controller.abort(reason); await observed; }
+  const record = evidence();
+  assert.equal(record.membershipAttempts, 1);
+  assert.equal(record.lastMembership.round, 1);
+  assert.equal(record.lastMembership.complete, true);
+  assert.equal(record.readinessAttempts, 1);
+  assert.equal(record.lastReadiness, null);
+  assert.equal(f.installed(), 0);
+  assert.deepEqual(f.stopped, [0, 1, 2]);
+});
+
+test('startup evidence keeps an older pending verdict tied to its own membership round', async () => {
+  const entered = deferred(), held = deferred();
+  const f = cohortFixture({membership(round, nodes) {
+    if (round === 3) { entered.resolve(); return held.promise; }
+    return nodes.map((node, index) => ({nodeId: node.configuration.node.id,
+      status: round === 2 && index === 2 ? 'joining' : 'active'}));
+  }, probeReadiness: async () => false});
+  const evidence = captureStartupObservation(f);
+  const reason = new Error('stop after membership changed');
+  const running = runDemoCohort(f.options), observed = running.catch(error => error);
+  try {
+    await Promise.race([entered.promise, running.then(() => {
+      throw new Error('Cohort closed before the later membership request');
+    })]);
+    f.controller.abort(reason);
+    assert.equal(await observed, reason);
+  } finally { held.resolve([]); f.controller.abort(reason); await observed; }
+  const record = evidence();
+  assert.equal(record.membershipAttempts, 3);
+  assert.equal(record.lastMembership.round, 2);
+  assert.equal(record.lastMembership.complete, false);
+  assert.equal(record.readinessAttempts, 1);
+  assert.equal(record.lastReadiness.round, 1);
+  assert.equal(record.lastReadiness.ready, false);
+  assert.ok(record.lastReadiness.elapsedMs <= record.lastMembership.elapsedMs);
+  assert.ok(Object.isFrozen(record.lastReadiness));
+  assert.equal(f.installed(), 0);
+  assert.deepEqual(f.stopped, [0, 1, 2]);
+});
+
 test('three active IDs cannot install before seed readiness, and every stage shares the original deadline', async () => {
   const entered = deferred(), release = deferred();
   const probes = [];
@@ -260,8 +363,18 @@ test('worker failure cancels and retires a held readiness body before cohort com
 test('a throwing shutdown-stage observer cannot prevent any owned process from stopping', async () => {
   const f = cohortFixture({probeReadiness: async () => true});
   const reporting = new Error('shutdown observer failed');
-  f.options.onStage = stage => { if (stage === 'Stopping the demo processes') throw reporting; };
+  let observation;
+  f.options.onStage = (stage, details) => {
+    if (stage !== 'Stopping the demo processes') return;
+    observation = details.startupObservation;
+    throw reporting;
+  };
   await assert.rejects(runDemoCohort(f.options), error => error === reporting);
+  assert.equal(observation.membershipAttempts, 1);
+  assert.equal(observation.lastMembership.complete, true);
+  assert.equal(observation.readinessAttempts, 1);
+  assert.equal(observation.lastReadiness.ready, true);
+  assert.equal(observation.lastMembership.round, observation.lastReadiness.round);
   assert.deepEqual(f.stopped, [0, 1, 2, 'native']);
 });
 

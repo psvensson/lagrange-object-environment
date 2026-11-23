@@ -9,6 +9,58 @@ import {createDemoSnapshotReader} from '../../examples/native-cluster/demo-snaps
 import {validateRuntimeSelection} from '../../examples/native-cluster/runtime-selection.js';
 
 const DIAGNOSTIC_PHASES = ['initialization', 'operation', 'protocol', 'cleanup'];
+function observationFields(value, names) {
+  assert(value && typeof value === 'object' && !Array.isArray(value) &&
+    [Object.prototype, null].includes(Object.getPrototypeOf(value)), 'Invalid startup observation record');
+  const fields = {};
+  for (const name of names) {
+    const field = Object.getOwnPropertyDescriptor(value, name);
+    assert(field && Object.hasOwn(field, 'value'), 'Startup observation requires plain named fields');
+    fields[name] = field.value;
+  }
+  return fields;
+}
+
+// This is a bounded projection of the cohort owner's observations, never a
+// readiness verdict. In particular, an older readiness round stays older.
+function projectStartupObservation(value) {
+  if (value === undefined || value === null) return null;
+  const result = observationFields(value,
+    ['membershipAttempts', 'lastMembership', 'readinessAttempts', 'lastReadiness']);
+  for (const counter of [result.membershipAttempts, result.readinessAttempts]) {
+    assert(Number.isSafeInteger(counter) && counter >= 0, 'Invalid startup observation attempt count');
+  }
+  const roundAndTime = (record) => {
+    assert(Number.isSafeInteger(record.round) && record.round >= 1 &&
+      record.round <= result.membershipAttempts, 'Invalid startup observation round');
+    assert(Number.isSafeInteger(record.elapsedMs) && record.elapsedMs >= 0 && record.elapsedMs <= 500_000,
+      'Invalid startup observation elapsed time');
+  };
+  if (result.lastMembership !== null) {
+    const last = observationFields(result.lastMembership, ['round', 'elapsedMs', 'rows', 'complete']);
+    roundAndTime(last);
+    assert(typeof last.complete === 'boolean' && Array.isArray(last.rows) && last.rows.length <= 3,
+      'Invalid startup membership observation');
+    const rows = [];
+    for (let index = 0; index < last.rows.length; index++) {
+      const field = Object.getOwnPropertyDescriptor(last.rows, String(index));
+      assert(field && Object.hasOwn(field, 'value'), 'Invalid startup membership row');
+      const row = observationFields(field.value, ['nodeId', 'status']);
+      assert(typeof row.nodeId === 'string' && row.nodeId.length <= 128 &&
+        typeof row.status === 'string' && row.status.length <= 32, 'Invalid startup membership row fields');
+      rows.push(row);
+    }
+    result.lastMembership = {...last, rows};
+  }
+  if (result.lastReadiness !== null) {
+    const last = observationFields(result.lastReadiness, ['round', 'elapsedMs', 'ready']);
+    roundAndTime(last);
+    assert(typeof last.ready === 'boolean', 'Invalid startup readiness observation');
+    result.lastReadiness = last;
+  }
+  return result;
+}
+
 function sanitized(value) {
   return String(value ?? '').slice(0, 1024)
     .replace(/\bBearer\s+[^\s,;]+/gi, 'Bearer [redacted]')
@@ -92,6 +144,9 @@ export async function exportSourceEvidence({directory, runDirectory, selection, 
   const identity = selection ? validateRuntimeSelection(selection) : null;
   assert(phases.length <= 64, 'Native source phase evidence exceeds its bound');
   const errors = [], files = [], receipts = [];
+  let startupObservation = null;
+  try { startupObservation = projectStartupObservation(provenance?.startupObservation); }
+  catch (error) { errors.push(error); }
   const diagnostics = runDirectory ? await readDiagnostics(runDirectory) : {output: [], errors: []};
   errors.push(...diagnostics.errors);
   files.push(['diagnostics.json', JSON.stringify(diagnostics.output, null, 2)]);
@@ -124,6 +179,7 @@ export async function exportSourceEvidence({directory, runDirectory, selection, 
     topology: topology ? {processCount: topology.processCount,
       configuredReplicationFactor: topology.configuredReplicationFactor,
       ...(topology.hostCount === undefined ? {} : {hostCount: topology.hostCount, hostId: topology.hostId})} : null,
+    startupObservation,
     phases: phases.map(({stage, elapsedMs}) => ({stage: sanitized(stage), elapsedMs})),
     durationMs, failureStage: failure ? sanitized(failureStage) : null,
     failures: sourceFailureRecords(failure), exportFailures: errors.flatMap((error) => sourceFailureRecords(error)).slice(0, 8),

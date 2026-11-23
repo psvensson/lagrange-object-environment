@@ -135,13 +135,41 @@ sequence and provenance checks succeed. Snapshots contain the generated
 demonstration graph/history. Credentials, configuration, raw process logs and
 the private run directory are excluded. A failure export records the admitted
 identity, topology, stages and bounded failure information without inventing a
-successful later phase.
+successful later phase. The cohort also retains one bounded startup observation:
+membership-attempt count and latest validated rows, plus readiness-attempt count
+and latest validated boolean. Each result carries its membership round and
+elapsed time. A missing result remains `null`; a readiness result from an older
+round does not describe later membership. This is diagnostic evidence only and
+does not change the startup decision or add a polling history to the phase list.
 
 Completion requires the exact-head automatic source job, ordinary required
 Node/browser/native checks and independent actual-diff review. Passing
 mechanical tests or reaching a native fixture window does not establish a
 working source cluster. No source acceptance receipt has been recorded for this
 implementation yet.
+
+### First source attempt: 2026-11-23
+
+[PR #111](https://github.com/psvensson/lagrange-object-environment/pull/111)
+head `03109abdc2171a74144dda17e20b4b3cec207598`, source tree
+`2e18e340c54b3a3be7085e14e6ede505e6cec4d7`, was tested with the two exact
+source identities above. [Ordinary CI 45210538312](https://github.com/psvensson/lagrange-object-environment/actions/runs/45210538312)
+passed 636 Node tests, 18 browser tests, and the full configured native suite.
+
+[Source run 45210538192](https://github.com/psvensson/lagrange-object-environment/actions/runs/45210538192)
+completed all three worker start commands by 19.101 seconds, then remained in
+the combined membership/seed-readiness wait. The original startup deadline
+stopped it at 160.388 seconds; bounded cleanup and failure export finished by
+160.779 seconds. Image installation and native launch were not reached.
+
+Artifact `14836242476`, SHA-256
+`c60ee82c032a2003f34d6595097254541bf257881b3ed22d819f0352ab7765dc`,
+contains the failed manifest, empty worker-failure diagnostics, and empty
+snapshot receipts. It predates the bounded startup-observation correction:
+it cannot establish whether exact membership ever completed or `/readyz` was
+called. The timeout alone does not classify the cause as a Lagrange serving
+defect. No deadline, replication setting, or acceptance requirement was relaxed
+in response.
 
 ## Preserved published-package method
 

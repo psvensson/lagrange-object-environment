@@ -117,9 +117,10 @@ export async function runNativeDemoSession(options, {signal = new AbortControlle
     });
     await runDemoCohort({nodes, signal,
       ...(selection.kind === 'source-development' ? {probeReadiness: probeDemoReadiness} : {}),
-      onStage(stage) {
+      onStage(stage, details) {
         provenance.phases.push({stage, elapsedMs: Math.round(performance.now() - started)});
         if (stage === 'Stopping the demo processes') {
+          provenance.startupObservation = details.startupObservation;
           const allowance = acceptanceDeadline === undefined ? 15_000
             : Math.min(15_000, Math.max(0, acceptanceDeadline - performance.now()));
           shutdownCeiling = setTimeout(() => {

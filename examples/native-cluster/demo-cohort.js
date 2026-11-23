@@ -15,10 +15,13 @@ export function exactDemoMembership(rows, expected) {
 export async function runDemoCohort({nodes, startWorker, startNative, signal,
   probeReadiness = null, startupMs = 160_000, pollMs = 250,
   onStage = () => {}, onCleanupFailure = () => {}}) {
-  const deadline = performance.now() + startupMs;
+  const started = performance.now();
+  const deadline = started + startupMs;
   const owners = [];
   const readinessController = new AbortController();
   let readinessWork;
+  let membershipAttempts = 0, readinessAttempts = 0;
+  let lastMembership = null, lastReadiness = null;
   let firstFailure, rejectFailure, primary;
   const secondaryFailures = [];
   const retainReportingFailure = (error) => {
@@ -53,19 +56,28 @@ export async function runDemoCohort({nodes, startWorker, startNative, signal,
       : 'Waiting for the three expected nodes');
     for (;;) {
       guard();
+      const round = ++membershipAttempts;
       const rows = await protect(owners[0].request('members', deadline));
-      if (exactDemoMembership(rows, expected)) {
+      const complete = exactDemoMembership(rows, expected);
+      // Retain only the latest validated observation, with no references to
+      // worker-owned rows. Evidence observes this owner; it never decides
+      // membership or treats an older probe as current serving authority.
+      lastMembership = Object.freeze({round, elapsedMs: Math.round(performance.now() - started),
+        rows: Object.freeze(rows.map(({nodeId, status}) => Object.freeze({nodeId, status}))), complete});
+      if (complete) {
         if (!probeReadiness) break;
         guard();
         // Only the seed serves the application handle used for installation.
         // The three identities and every worker's liveness remain separate
         // requirements; no local serving verdict is inferred from membership.
+        readinessAttempts++;
         readinessWork = Promise.resolve().then(() => probeReadiness(nodes[0], {
           deadline, signal: readinessController.signal,
         }));
         const ready = await protect(readinessWork);
         guard();
         if (typeof ready !== 'boolean') throw new Error('Invalid serving-readiness result');
+        lastReadiness = Object.freeze({round, elapsedMs: Math.round(performance.now() - started), ready});
         if (ready) break;
       }
       let timer;
@@ -90,7 +102,9 @@ export async function runDemoCohort({nodes, startWorker, startNative, signal,
   finally {
     signal.removeEventListener('abort', abort);
     readinessController.abort(primary ?? new Error('Demo cohort closing'));
-    try { onStage('Stopping the demo processes'); }
+    try { onStage('Stopping the demo processes', Object.freeze({startupObservation: Object.freeze({
+      membershipAttempts, lastMembership, readinessAttempts, lastReadiness,
+    })})); }
     catch (error) { retainReportingFailure(error); }
     // All owned groups begin shutdown together; one child cannot delay the
     // others' TERM/KILL ceilings. Keep the original operation failure separate.
