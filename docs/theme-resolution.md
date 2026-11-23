@@ -53,3 +53,25 @@ authority service and actual generic read binding with mock storage. It proves
 stock values, conflicting multilevel overrides, shadowed denial/malformed data,
 missing graphs and paths, cycles, immutable output, fresh rereads and unchanged
 stored records/versions. It makes no physical-cluster or native appearance claim.
+
+## Catalog-default Theme selection (T3)
+
+`resolveCatalogDefault({imageId, authority, blockId})` reads the stable
+`environment/catalog` object through the same authorized `object/read` Images
+port, validates the catalog's format, slots and same-image unpinned stock refs,
+and resolves its actual `defaultTheme` through `resolve`. The returned
+`{themeRef, tokens}` shape is identical to explicit resolution; no catalog
+version token or authority is exposed. Each call rereads the catalog. A
+legitimate default change is observed by a later call rather than being
+overwritten by installation constants or process state.
+
+Missing, inaccessible, malformed and divergent catalog data cause an explicit
+failure, with lower authorization errors passed through unchanged. A catalog
+ref does not authorize the default Theme or its tokens; all must be read with
+the same caller-supplied authority. No code palette, mock backend or
+read-then-provision fallback exists here. Catalog stock refs are validated,
+but not dereferenced as a side effect of choosing a default.
+
+This is catalog selection only. Per-principal `EnvironmentProfile` lookup,
+effective profile-over-catalog selection, observation-driven re-resolution
+and concrete DOM/GTK appearance are independent subsequent milestones.

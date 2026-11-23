@@ -1,9 +1,7 @@
 // ADR 0015: trusted installation policy, never Session startup or user mutation.
 // Images owns exact/seed admission. This owner supplies only Environment schema,
 // stock identity/order and the catalog's domain check through the trusted port.
-import {ENVIRONMENT_LAYOUT} from './theme-layout.js';
-
-const CATALOG_ID = 'environment/catalog';
+import {ENVIRONMENT_CATALOG_OBJECT_ID as CATALOG_ID, ENVIRONMENT_LAYOUT} from './theme-layout.js';
 const CATALOG_SHAPE = ENVIRONMENT_LAYOUT.catalog.id;
 const ROOT_SHAPE = ENVIRONMENT_LAYOUT.root.id;
 const TOKEN_SHAPE = ENVIRONMENT_LAYOUT.token.id;

@@ -1,4 +1,4 @@
-import {ENVIRONMENT_LAYOUT} from './theme-layout.js';
+import {ENVIRONMENT_CATALOG_OBJECT_ID, ENVIRONMENT_LAYOUT} from './theme-layout.js';
 
 // ThemeResolver owns the semantic vocabulary, never a fallback palette.
 const TOKEN_TYPES = new Map([
@@ -122,7 +122,33 @@ function createThemeResolver({readObject} = {}) {
     return Object.freeze({themeRef: selected, tokens});
   }
 
-  return Object.freeze({resolve});
+  // T3: select a provisioned image's REAL catalog default. This is an
+  // authorized read of the one well-known object, not a code fallback, an
+  // unguarded object lookup or a second settings store. Profiles are a
+  // separate future input; no profile/default inference occurs here.
+  async function resolveCatalogDefault({imageId, authority, blockId} = {}) {
+    requireTheme(typeof imageId === 'string' && imageId.length > 0,
+      'Catalog default resolution requires an imageId');
+    const catalog = projection(await readObject({
+      imageId, objectId: ENVIRONMENT_CATALOG_OBJECT_ID, authority, blockId,
+    }));
+    requireTheme(hasKeys(catalog.slots, ENVIRONMENT_LAYOUT.catalog.names),
+      'Invalid EnvironmentCatalog slots');
+    requireTheme(text(catalog.slots.format) === ENVIRONMENT_LAYOUT.catalog.format,
+      'Invalid EnvironmentCatalog format');
+    const selected = localRef(catalog.slots.defaultTheme, imageId);
+    // Read only the catalog itself: listed Themes are locators, not transitive
+    // grants. Validate their structure without dereferencing unrelated stock
+    // entries. A chosen default is resolved through the SAME authorized path
+    // that explicit Theme selection already uses.
+    // Validate the projection's ref shape, not catalog domain policy: the
+    // provisioner allows deliberate stock-list changes and owns its meaning.
+    // Neither multiplicity nor list order affects selection of defaultTheme.
+    catalog.indexed.forEach(ref => localRef(ref, imageId));
+    return resolve({themeRef: selected, authority, blockId});
+  }
+
+  return Object.freeze({resolve, resolveCatalogDefault});
 }
 
 export {createThemeResolver, ThemeResolutionError};
