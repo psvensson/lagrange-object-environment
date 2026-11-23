@@ -171,12 +171,11 @@ test('PRODUCTION AFFORDANCE FENCE: a production input exists WITH its binding an
   assert.equal(binding.resolveInput(descriptor, 1), null, 'a key past the array is a no-op, never a wrong input');
   assert.equal(typeof binding.tokenFor, 'function', 'the affordance carries its transient token supplier');
 
-  // (4) GOLDEN FILE. Exactly ONE production fixture may be v2, and it is the
-  // editable method -- the document the browser actually produces. Every other
-  // production fixture is still v1 with no input node, so E3 widened the
-  // affordance to one place rather than everywhere.
+  // (4) GOLDEN FILE. Exactly ONE production INPUT/BINDING may exist,
+  // on native methods; retained and non-retained source are two presentations
+  // of that SAME affordance. No other production kind acquires a new input.
   const SYNTHETIC = new Set(['v2-input.json', 'v2-input-reorder.json']);
-  const V2_PRODUCTION = new Set(['native-method-editable.json']);
+  const V2_PRODUCTION = new Set(['native-method-editable.json', 'native-method-retained.json']);
   let production = 0;
   let v2Production = 0;
   for (const name of readdirSync(FIXTURES).filter((f) => f.endsWith('.json'))) {
@@ -193,11 +192,11 @@ test('PRODUCTION AFFORDANCE FENCE: a production input exists WITH its binding an
       }, 'the role must NOT cross into the document: the renderer never learns what an input MEANS');
       continue;
     }
-    assert.equal(doc.version, 1, `${name} is not v1: only the editable method may use v2`);
+    assert.equal(doc.version, 1, `${name} is not v1: only the native method replacement may use v2`);
     assert.equal(inputsOf(doc).length, 0, `${name} carries an input node`);
   }
   assert.ok(production >= 7, `expected the production corpus to be exercised, saw ${production}`);
-  assert.equal(v2Production, 1, 'exactly one production fixture is the v2 one');
+  assert.equal(v2Production, 2, 'exactly the two representations of the ONE method replacement input use v2');
 
   // (5) SOURCE TRIPWIRE over EVERY module that turns a provider's context into
   // descriptor `parameters`. ngh forbade `inputs` in all four; E3 permits it in

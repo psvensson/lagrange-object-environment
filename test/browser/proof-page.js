@@ -405,6 +405,11 @@ window.__lagrangeProof = {
       // A read-only field's <dd> text; an editable field's <input> value.
       fieldValues: Array.from(root.querySelectorAll('.lagrange-tool-fields dd')).map((d) => d.querySelector('input')?.value ?? d.textContent),
       fieldInputs: Array.from(root.querySelectorAll('.lagrange-tool-field-input')).map((i) => i.value),
+      // Exact source bytes in an inert read-only DOM <pre>, never innerHTML or
+      // the current value of a writable field or replacement input.
+      sourceBlocks: Array.from(root.querySelectorAll('.lagrange-tool-source')).map((node) => ({
+        tag: node.tagName.toLowerCase(), text: node.textContent, editable: node.isContentEditable,
+      })),
       buttons: Array.from(root.querySelectorAll('.lagrange-tool-references button')).map((b) => b.textContent),
       // Every collection ROW's text, whatever node kind rendered it. An
       // `action` row and a `text` row both appear here, so a test can assert

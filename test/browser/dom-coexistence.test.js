@@ -281,6 +281,10 @@ test('CI: the browser realizer renders the checked-in SemanticUi fixtures (every
       nativeClass.clickButton(2);
       out.nativeClassIntents = nativeClass.takeIntents();
       nativeClass.dispose();
+      const retainedClass = await window.__lagrangeProof.renderSemanticUiFixture('../fixtures/semantic-ui/native-class-retained.json', 'native-class');
+      out.retainedClass = {fields: retainedClass.fields, fieldValues: retainedClass.fieldValues,
+        fieldInputs: retainedClass.fieldInputs, controls: retainedClass.controls};
+      retainedClass.dispose();
       // native-method (Images ADR 0087): the authorized METHOD description renders
       // from the SAME fixture bytes the GTK realizer consumes. source/provenance
       // rows are absent entirely, and Slice A ships no action here.
@@ -312,6 +316,17 @@ test('CI: the browser realizer renders the checked-in SemanticUi fixtures (every
       editableMethod.submitInput(0, '[ ^42 ]');
       out.editableMethodIntents = editableMethod.takeIntents();
       editableMethod.dispose();
+      const retainedMethod = await window.__lagrangeProof.renderSemanticUiFixture('../fixtures/semantic-ui/native-method-retained.json', 'native-method');
+      out.retainedMethod = {
+        fields: retainedMethod.fields, fieldValues: retainedMethod.fieldValues,
+        sourceBlocks: retainedMethod.sourceBlocks, html: retainedMethod.html,
+        textareas: retainedMethod.inputTextareas, fieldInputs: retainedMethod.fieldInputs,
+        buttons: retainedMethod.buttons, controls: retainedMethod.controls,
+      };
+      // Same transient input binding as E3, independent of displayed source.
+      retainedMethod.submitInput(0, 'replacement');
+      out.retainedMethodIntents = retainedMethod.takeIntents();
+      retainedMethod.dispose();
       // unavailable + unauthorized: heading + an explicit reason line, no refs.
       const un = await window.__lagrangeProof.renderSemanticUiFixture('../fixtures/semantic-ui/unavailable.json', 'unavailable-reference');
       out.unavailable = {heading: un.heading, reason: un.reason, buttons: un.buttons};
@@ -421,6 +436,12 @@ test('CI: the browser realizer renders the checked-in SemanticUi fixtures (every
     assert.deepEqual(result.nativeClassIntents, [{kind: 'activate-item', key: 0}, {kind: 'activate-item', key: 2}],
       'the DOM emits only descriptor-local integers, from ONE key space');
 
+    // Images-owned retained metadata is now visible, but remains non-editable.
+    assert.deepEqual(result.retainedClass.fields, ['Name', 'Side', 'Class', 'Layout', 'Category', 'File', 'Package']);
+    assert.deepEqual(result.retainedClass.fieldValues.slice(-3), ['accessing', 'YAXO.pck.st', 'YAXO']);
+    assert.deepEqual(result.retainedClass.fieldInputs, []);
+    assert.deepEqual(result.retainedClass.controls, [], 'provenance never grants a control or authority');
+
     // native-method: only what Images owns, and the absent rows really absent.
     assert.equal(result.nativeMethod.heading, 'Method: childFirst');
     assert.deepEqual(result.nativeMethod.fields, ['Selector', 'Side', 'Declaring class', 'Method']);
@@ -446,6 +467,23 @@ test('CI: the browser realizer renders the checked-in SemanticUi fixtures (every
     assert.deepEqual(result.editableMethod.submitLabels, ['Replace']);
     assert.deepEqual(result.editableMethodIntents, [{kind: 'submit-input', key: 0, text: '[ ^42 ]'}],
       'the host emits the realized key and the RAW text, and names no Command, subject or method');
+
+    // Retained source is a literal text node (not HTML, not a field edit and
+    // not a replacement input's prefilling). Newlines and source operators survive.
+    assert.deepEqual(result.retainedMethod.fields,
+      ['Selector', 'Side', 'Declaring class', 'Method', 'Category', 'File', 'Package']);
+    assert.deepEqual(result.retainedMethod.sourceBlocks,
+      [{tag: 'pre', text: "childFirst\n  ^ '<tag> & data'\n", editable: false}]);
+    assert.ok(result.retainedMethod.html.includes('&lt;tag&gt; &amp; data'),
+      'source must become inert textContent, never executable markup');
+    assert.deepEqual(result.retainedMethod.fieldInputs, []);
+    assert.deepEqual(result.retainedMethod.textareas.map(t => t.value), [''],
+      'retained source never prepopulates the independent replacement input');
+    assert.deepEqual(result.retainedMethodIntents,
+      [{kind: 'submit-input', key: 0, text: 'replacement'}]);
+    assert.deepEqual(result.retainedMethod.buttons, []);
+    assert.deepEqual(result.retainedMethod.controls, ['textarea', 'button'],
+      'a read-only source block introduces no operable control');
 
     // unavailable + unauthorized (the previously-uncovered kinds)
     assert.equal(result.unavailable.heading, 'unavailable-reference');
