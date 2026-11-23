@@ -1,7 +1,7 @@
 # Session-scoped live Theme composition (T6)
 
-Status: **proposed browser/JavaScript interaction contract; independent plan review required before implementation**.
-Owner: `SessionThemeLifecycle` (planned `src/session-theme-lifecycle.js`).
+Status: **browser/JavaScript implementation; exact-head verification required before merge**.
+Owner: `SessionThemeLifecycle` (`src/session-theme-lifecycle.js`).
 Bead: `lagrange-object-environment-0k7.4`.
 Source baseline: Object Environment `main@1dc8adb342d6fc486813b245cb10c67bfd005e94`.
 Decision basis: ADR 0015, ADR 0011 and existing T4/T5 contracts.
@@ -50,7 +50,7 @@ or prepopulate it with views outside this composition. Existing hosts that do
 not opt in retain their existing lifecycle. The new API is reusable composition,
 not a claim that every production host has already adopted it.
 
-Proposed public API:
+Public API:
 
 ```js
 const lifecycle = createSessionThemeLifecycle({
@@ -64,6 +64,7 @@ try {
   await lifecycle.start({
     selection: {kind: 'catalog-default', imageId},
     authority, blockId: readBlockId, observationBlockId,
+    // Optional intervalMs is forwarded to the existing observation owner.
   });
   // Or selection: {kind: 'explicit', themeRef}.
   // Open/present views through compositor; observe lifecycle.done for failure.
@@ -94,7 +95,9 @@ handle alone is not evidence of readiness.
 
 When caller-requested close wins during bootstrap, `start` rejects with an
 exported `SessionThemeCancelledError`, and the Theme reporter is not called.
-A lower layer's independently thrown `AbortError` is an ordinary failure. The
+A lower layer's independently thrown `AbortError` is an ordinary failure. A
+reporter-triggered close after a recorded failure preserves that failure; it
+does not relabel it as startup cancellation. The
 lifecycle distinguishes cancellation by its own close state, not an error name.
 
 A startup or later read, validation or style failure retires the follow,
@@ -115,7 +118,7 @@ without a replacement Theme. No fallback, retry or second polling loop appears.
   is the complete resource-teardown result.
 
 The owner attaches rejection observers immediately to every background promise,
-including `done`. A consumer can still await the original rejected promise;
+including `done` and the shared `close` Promise. A consumer can still await the original rejected promise;
 internal observation does not convert failure into success.
 
 ## Callback and error contract
@@ -171,7 +174,7 @@ CSS or resource handle in Session.state, Perspective, SemanticUi or image object
 
 ## Counterexamples and primary proofs
 
-Direct lifecycle proof (`test/session-theme-lifecycle.test.js`) must distinguish:
+Direct lifecycle proof (`test/session-theme-lifecycle.test.js`) distinguishes:
 
 - Two factories cannot claim the same Session or adapter, even with different
   counterparts. Duplicate start cannot disturb a live first start. Invalid
@@ -190,7 +193,7 @@ Direct lifecycle proof (`test/session-theme-lifecycle.test.js`) must distinguish
   returning a pending/rejecting thenable does not strand shutdown or cause an
   unhandled rejection; the test does not pretend to cancel its arbitrary effects.
 
-Real Images integration (`test/theme-resolver.integration.test.js`) must use the
+Real Images integration (`test/theme-resolver.integration.test.js`) uses the
 canonical resolver and adapter. Two Sessions share the **same image, Theme graph
 and resolver instance** with different authorities: one is permitted; the other
 is denied a reached, preferably shadowed, token. Reads/observation use their own
@@ -199,7 +202,7 @@ values. An authorized catalog or inherited-token edit refreshes the live Session
 unrelated metadata is ignored. Closing either leaves the other independent.
 
 Browser proof (`test/browser/dom-coexistence.test.js` and its existing proof page)
-must instantiate the public lifecycle with the actual BrowserRendererAdapter,
+instantiates the public lifecycle with the actual BrowserRendererAdapter,
 open a real semantic pane through its published Compositor, and drive the
 canonical follow. A style change preserves the same pane, typed field and focus.
 Failure withdraws the Theme without replacing those controls. Destroy via the
@@ -208,7 +211,8 @@ The six `RENDERER_ADAPTER_METHODS` remain unchanged.
 
 ## Deferred boundaries and rejected alternatives
 
-Native Session binding is a linked, blocked follow-up until a reviewed host-only
+Native Session binding is tracked by `lagrange-object-environment-0k7.5` and
+remains blocked until a reviewed host-only
 scalar bridge names GTK-thread dispatch, acknowledgement and cancellation. Its
 proof must hold queued GTK apply/withdrawal across close; fixture styling alone
 does not prove the bridge. Native regression CI still runs for this browser slice.

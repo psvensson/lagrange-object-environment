@@ -5,10 +5,45 @@ ThemeResolver traversal and host-native style updates. It does not add a
 Theme-specific poller, a second Theme graph, a global CSS/GTK settings store,
 or a seventh RendererAdapter lifecycle operation.
 
+## Session lifetime composition
+
+For an opt-in browser Session, use the public `createSessionThemeLifecycle`
+from `src/index.js`. Pass its fresh BrowserRendererAdapter, Session, existing
+ThemeResolver and synchronous error reporter. The factory creates its own
+canonical Compositor; consumers use the returned `compositor`, whose `destroy`
+is the same single-flight operation as lifecycle `close`.
+
+```js
+const lifecycle = createSessionThemeLifecycle({
+  session, rendererAdapter, themeResolver, onThemeError: reportThemeError,
+});
+try {
+  await lifecycle.start({
+    selection: {kind: 'catalog-default', imageId},
+    authority, blockId: readBlockId, observationBlockId,
+  });
+  // Open views using lifecycle.compositor. Observe lifecycle.done for failure.
+} finally {
+  await lifecycle.compositor.destroy();
+}
+```
+
+`done` reports terminal follow completion/failure. `close` additionally awaits
+renderer destruction and preserves prior Theme, withdrawal, reporting and
+teardown failures. Theme failure withdraws its styles and preserves panes until
+the host closes them. The Session and adapter identities cannot be claimed by a
+second lifecycle, and a closed lifecycle cannot restart. See the
+[Session composition contract](architecture/session-theme-composition.md) for
+startup cancellation, reentrant close, error ordering and synchronous callback
+requirements. Native JS-to-GTK Session binding remains separately blocked; the
+browser composition does not prove that missing native bridge.
+
 ## The only data and authority path
 
 The host already owns one `ImageClientAdapter` and a caller authority context.
-Give the resolver its ordinary read and observation ports:
+Give the resolver its ordinary read and observation ports. The lower-level T5
+example below remains useful when inspecting the follow API directly; the
+Session composition above owns this coupling for participating browser hosts:
 
 ```js
 const themeResolver = createThemeResolver({
@@ -115,6 +150,6 @@ Theme values. The production browser and GTK tests exercise live host
 style changes, style removal, malformed input atomicity, stable identity
 and unchanged action payloads.
 
-Per-principal EnvironmentProfile selection, richer editing, automatic
-lifecycle composition for every production host, and measured distributed
+Per-principal EnvironmentProfile selection, richer editing, native Session
+lifecycle binding, adoption by every production host, and measured distributed
 Lagrange cluster use remain separate acceptance milestones.

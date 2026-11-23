@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {readFile} from 'node:fs/promises';
-import {createThemeResolver, ThemeResolutionError, createEnvironmentProvisioner} from '../src/index.js';
+import {
+  Session, createThemeResolver, ThemeResolutionError, createEnvironmentProvisioner,
+  createFakeRendererAdapter, createSessionThemeLifecycle,
+} from '../src/index.js';
 import {createImageClientAdapter, createImageProvisioningPort} from '../src/image-client-adapter.js';
 
 const runtimeUrl = process.env.LAGRANGE_IMAGES_URL
@@ -21,6 +24,7 @@ const IMAGE = 'theme-resolution';
 const THEME = 'environment/themes/smalltalk-workbench/v1';
 const BLOCK = 'theme-reader';
 const OBSERVATION_BLOCK = 'theme-observer';
+const SECOND_BINDINGS = Object.freeze({blockId: 'other-theme-reader', observationBlockId: 'other-theme-observer'});
 const ref = objectId => ({kind: 'ref', imageId: IMAGE, objectId});
 const text = value => ({kind: 'text', value});
 const integer = value => ({kind: 'integer', value: String(value)});
@@ -36,7 +40,7 @@ const STOCK = [
   ['typography.ui.family', 'fontFamily', 'sans-serif'], ['typography.ui.size', 'fontSize', 13],
 ].map(([path, type, value]) => ({path, type, value}));
 
-async function setup(t, provision = true, withObservation = false) {
+async function setup(t, provision = true, withObservation = false, extraBindings = []) {
   const runtime = await api.createRuntime({backend: {mode: 'mock'}});
   t.after(() => runtime.close());
   await runtime.images.createImage({id: IMAGE});
@@ -57,8 +61,11 @@ async function setup(t, provision = true, withObservation = false) {
   const callable = await api.installCallableInterfaceV2({images: runtime.images, imageId: IMAGE,
     interfaceId: 'theme-reader-interface', functionName: 'read-object', parameters: ['string'],
     result: 'object-read-result', types});
-  await api.installImageObjectReadBinding({images: runtime.images, callableInterface: ref(callable.id),
-    bindingId: 'theme-reader-binding', blockId: BLOCK});
+  const bindings = [{blockId: BLOCK, observationBlockId: OBSERVATION_BLOCK}, ...extraBindings];
+  for (const [index, binding] of bindings.entries()) {
+    await api.installImageObjectReadBinding({images: runtime.images, callableInterface: ref(callable.id),
+      bindingId: 'theme-reader-binding' + (index ? '/' + index : ''), blockId: binding.blockId});
+  }
   if (withObservation) {
     // Public Images ADR 0070 observation binding. The Theme owner consumes
     // this SAME authorized lane as the generic EnvironmentShell/ProjectBrowser,
@@ -76,14 +83,33 @@ async function setup(t, provision = true, withObservation = false) {
     const obs = await api.installCallableInterfaceV2({images: runtime.images, imageId: IMAGE,
       interfaceId: 'theme-observer-interface', functionName: 'observe',
       parameters: ['string'], result: 'obs-result', types: obsTypes});
-    await api.installImageObservationBinding({images: runtime.images, imageId: IMAGE,
-      callableInterface: ref(obs.id), bindingId: 'theme-observer-binding', blockId: OBSERVATION_BLOCK});
+    for (const [index, binding] of bindings.entries()) {
+      await api.installImageObservationBinding({images: runtime.images, imageId: IMAGE,
+        callableInterface: ref(obs.id), bindingId: 'theme-observer-binding' + (index ? '/' + index : ''),
+        blockId: binding.observationBlockId});
+    }
   }
   const adapter = createImageClientAdapter({...api, ...runtime});
   const calls = [];
   const errors = [];
+  const observationCalls = [];
+  const consumedChanges = [];
   const resolver = createThemeResolver({
-    observe: adapter.observe, observePull: adapter.observePull,
+    observe(imageId, options) {
+      observationCalls.push({kind: 'follow', imageId, ...options});
+      return {async *[Symbol.asyncIterator]() {
+        for await (const change of adapter.observe(imageId, options)) {
+          yield change;
+          // The consumer requests the next event only after it finished this
+          // one. This is an event-processing barrier, not a second poller.
+          consumedChanges.push({authority: options.authority, change});
+        }
+      }};
+    },
+    observePull(request) {
+      observationCalls.push({kind: 'anchor', ...request});
+      return adapter.observePull(request);
+    },
     async readObject(request) {
       calls.push(request);
       try { return await adapter.readObject(request); }
@@ -95,7 +121,8 @@ async function setup(t, provision = true, withObservation = false) {
   const allAuthority = async (except = []) => authorityFor((await runtime.images.listRecords(IMAGE))
     .map(record => record.id).filter(id => !except.includes(id)));
   const snapshot = async () => (await runtime.images.listRecords(IMAGE)).sort((a, b) => a.id < b.id ? -1 : 1);
-  return {runtime, adapter, resolver, calls, errors, authorityFor, allAuthority, snapshot};
+  return {runtime, adapter, resolver, calls, errors, observationCalls, consumedChanges,
+    authorityFor, allAuthority, snapshot};
 }
 
 async function putToken(runtime, id, path, type, value) {
@@ -336,6 +363,201 @@ test('T5 real Images authorized observations update the live catalog and DesignT
   await follow.done;
   assert.deepEqual(errors, [], 'no alternate fetch or hidden fallback was needed');
 });
+
+function themeSession(resolver) {
+  const renderer = createFakeRendererAdapter();
+  const styles = [];
+  const errors = [];
+  // This lane proves the real Images boundary. The real BrowserRendererAdapter
+  // and DOM identity are covered by the canonical browser proof page.
+  const rendererAdapter = Object.freeze({...renderer,
+    setResolvedTokens(tokens) { styles.push(tokens); },
+  });
+  // Equal descriptive principal keys must not turn two separate authority
+  // contexts into a shared Theme result or a shared Session lifetime.
+  const session = new Session({principal: 'same-descriptive-principal', state: {selection: 'retained'}});
+  const lifecycle = createSessionThemeLifecycle({session, rendererAdapter, themeResolver: resolver,
+    onThemeError(error) { errors.push(error); },
+  });
+  return {session, renderer, styles, errors, lifecycle};
+}
+
+async function waitForThemeProof(predicate, label) {
+  const deadline = Date.now() + 15_000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) assert.fail('real Images Theme proof did not reach ' + label);
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+}
+
+function assertSessionBindings(f, contexts) {
+  const expected = new Map(contexts.map(([authority, blockId, observationBlockId]) =>
+    [authority, {blockId, observationBlockId}]));
+  for (const call of f.calls) {
+    assert.ok(expected.has(call.authority), 'read uses exactly one supplied authority context');
+    assert.equal(call.imageId, IMAGE);
+    assert.equal(call.blockId, expected.get(call.authority).blockId);
+  }
+  for (const call of f.observationCalls) {
+    assert.ok(expected.has(call.authority), 'observation uses exactly one supplied authority context');
+    assert.equal(call.imageId, IMAGE);
+    assert.equal(call.blockId, expected.get(call.authority).observationBlockId);
+  }
+  for (const [authority] of contexts) {
+    assert.ok(f.calls.some(call => call.authority === authority));
+    assert.ok(f.observationCalls.some(call => call.kind === 'anchor' && call.authority === authority));
+  }
+}
+
+const openThemePane = lifecycle => lifecycle.compositor.openView({
+  viewDescriptor: {kind: 'tool-pane'},
+  presentationDescriptor: {kind: 'inspector', subject: ref('theme-proof-pane'), parameters: {}},
+});
+
+test('T6 one real Images graph and resolver isolate a denied shadowed token from a permitted Session', integration, async t => {
+  const f = await setup(t, true, true, [SECOND_BINDINGS]);
+  await putToken(f.runtime, 'session/accent', 'accent', 'color', text('#112233'));
+  await putTheme(f.runtime, 'session/derived', THEME, ['session/accent']);
+  await putToken(f.runtime, 'unrelated-token', 'accent', 'color', text('#aabbcc'));
+  await f.runtime.images.putObject(IMAGE, {
+    id: 'environment/catalog', shape: ref('environment/shapes/catalog/v1'),
+    slots: {format: text('environment-catalog/v1'), defaultTheme: ref('session/derived')},
+    indexed: [ref(THEME), ref('session/derived')],
+  });
+  const permittedAuthority = await f.allAuthority();
+  const deniedAuthority = await f.allAuthority([stockToken('accent')]);
+  assert.notEqual(permittedAuthority, deniedAuthority);
+  const permitted = themeSession(f.resolver);
+  const denied = themeSession(f.resolver);
+  const selection = {kind: 'catalog-default', imageId: IMAGE};
+  let deniedFailure;
+  try {
+    const permittedView = await openThemePane(permitted.lifecycle);
+    const deniedView = await openThemePane(denied.lifecycle);
+    await permitted.lifecycle.start({selection, authority: permittedAuthority,
+      blockId: BLOCK, observationBlockId: OBSERVATION_BLOCK, intervalMs: 10});
+    assert.deepEqual(permitted.styles, [STOCK.map(token => token.path === 'accent'
+      ? {...token, value: '#112233'} : token)]);
+    // Resolve the SAME selected graph after the first Session has populated
+    // its renderer. A result cached by image, Theme or principal would leak.
+    await assert.rejects(denied.lifecycle.start({selection, authority: deniedAuthority,
+      ...SECOND_BINDINGS, intervalMs: 10}), error => {
+      deniedFailure = error;
+      assert.equal(error, f.errors.at(-1));
+      assert.equal(error.name, 'AuthorityError');
+      return true;
+    });
+    await assert.rejects(denied.lifecycle.done, error => error === deniedFailure);
+    assert.deepEqual(denied.errors, [deniedFailure]);
+    assert.deepEqual(denied.styles, [null], 'denial withdraws without receiving any permitted scalar values');
+    assert.equal(f.calls.filter(call => call.authority === deniedAuthority).at(-1).objectId,
+      stockToken('accent'), 'even the overridden base token is independently authorized');
+    assert.ok(denied.lifecycle.compositor.liveView(deniedView), 'Theme failure preserves the existing pane');
+    assert.equal(denied.renderer.liveResourceCount(), 1);
+    assert.equal(denied.lifecycle.compositor.destroy, denied.lifecycle.close);
+    await assert.rejects(denied.lifecycle.compositor.destroy(), error => error === deniedFailure);
+    assert.equal(denied.renderer.liveResourceCount(), 0);
+    assert.ok(permitted.lifecycle.compositor.liveView(permittedView));
+    assert.equal(permitted.renderer.liveResourceCount(), 1);
+
+    // Closing the failed Session cannot stop the permitted follow. This token
+    // is inherited by the selected child and uses the real authorized feed.
+    await putToken(f.runtime, stockToken('surface.base'), 'surface.base', 'color', text('#0f1e2d'));
+    await waitForThemeProof(() => permitted.styles.at(-1)?.some(token =>
+      token.path === 'surface.base' && token.value === '#0f1e2d'), 'inherited token refresh');
+    assert.equal(permitted.styles.length, 2);
+    assert.deepEqual(denied.styles, [null]);
+
+    // Prove that a readable but unrelated invalidation really traversed the
+    // feed and was consumed; no sleep-based absence assertion is needed.
+    const readsBeforeUnrelated = f.calls.length;
+    await putToken(f.runtime, 'unrelated-token', 'accent', 'color', text('#ddeeff'));
+    await waitForThemeProof(() => f.consumedChanges.some(({authority, change}) =>
+      authority === permittedAuthority && change.objectId === 'unrelated-token'), 'ignored metadata');
+    assert.equal(f.calls.length, readsBeforeUnrelated);
+    assert.equal(permitted.styles.length, 2);
+    assert.deepEqual(permitted.errors, []);
+    assertSessionBindings(f, [
+      [permittedAuthority, BLOCK, OBSERVATION_BLOCK],
+      [deniedAuthority, SECOND_BINDINGS.blockId, SECOND_BINDINGS.observationBlockId],
+    ]);
+    for (const fixture of [permitted, denied]) {
+      assert.deepEqual(fixture.session.state, {selection: 'retained'});
+      assert.equal(fixture.session.perspective, null);
+    }
+  } finally {
+    const cleanup = await Promise.allSettled([permitted.lifecycle.close(), denied.lifecycle.close()]);
+    assert.equal(cleanup[0].status, 'fulfilled');
+    if (deniedFailure) {
+      assert.equal(cleanup[1].status, 'rejected');
+      assert.equal(cleanup[1].reason, deniedFailure, 'repeated close preserves the recorded failure');
+    } else {
+      assert.equal(cleanup[1].status, 'fulfilled');
+    }
+  }
+  assert.equal(denied.renderer.calls().filter(call => call.method === 'destroyAll').length, 1);
+  assert.equal(permitted.renderer.calls().filter(call => call.method === 'destroyAll').length, 1);
+});
+
+for (const firstToClose of [0, 1]) {
+  test(`T6 closing Session ${firstToClose} leaves the other real Images follow and renderer live`, integration, async t => {
+    const f = await setup(t, true, true, [SECOND_BINDINGS]);
+    const authorities = [await f.allAuthority(), await f.allAuthority()];
+    assert.notEqual(authorities[0], authorities[1]);
+    const bindings = [{blockId: BLOCK, observationBlockId: OBSERVATION_BLOCK}, SECOND_BINDINGS];
+    const sessions = [themeSession(f.resolver), themeSession(f.resolver)];
+    const views = [];
+    try {
+      for (const [index, fixture] of sessions.entries()) {
+        views.push(await openThemePane(fixture.lifecycle));
+        await fixture.lifecycle.start({
+          selection: index === 0 ? {kind: 'catalog-default', imageId: IMAGE}
+            : {kind: 'explicit', themeRef: ref(THEME)},
+          authority: authorities[index], ...bindings[index], intervalMs: 10,
+        });
+        assert.deepEqual(fixture.styles, [STOCK]);
+      }
+      const closed = sessions[firstToClose];
+      const liveIndex = 1 - firstToClose;
+      const live = sessions[liveIndex];
+      assert.equal(closed.lifecycle.compositor.destroy, closed.lifecycle.close);
+      await closed.lifecycle.compositor.destroy();
+      await closed.lifecycle.done;
+      const closedStyles = closed.styles.slice();
+      const closedReads = f.calls.filter(call => call.authority === authorities[firstToClose]).length;
+      assert.equal(closed.renderer.liveResourceCount(), 0);
+      assert.equal(live.renderer.liveResourceCount(), 1);
+      const liveView = live.lifecycle.compositor.liveView(views[liveIndex]);
+      assert.ok(liveView);
+      const closedObservation = f.observationCalls.find(call =>
+        call.kind === 'follow' && call.authority === authorities[firstToClose]);
+      assert.equal(closedObservation.signal.aborted, true);
+
+      await putToken(f.runtime, stockToken('text.primary'), 'text.primary', 'color', text('#102030'));
+      await waitForThemeProof(() => f.consumedChanges.some(({authority, change}) =>
+        authority === authorities[liveIndex] && change.objectId === stockToken('text.primary')),
+      'surviving Session refresh');
+      assert.deepEqual(live.styles, [STOCK, STOCK.map(token => token.path === 'text.primary'
+        ? {...token, value: '#102030'} : token)]);
+      assert.deepEqual(closed.styles, closedStyles, 'closed renderer receives no subsequent token delivery');
+      assert.equal(f.calls.filter(call => call.authority === authorities[firstToClose]).length, closedReads,
+        'closed follow issues no later authorized read');
+      assert.equal(live.lifecycle.compositor.liveView(views[liveIndex]).presentationDescriptor,
+        liveView.presentationDescriptor, 'live edit does not re-present the semantic pane');
+      assertSessionBindings(f, authorities.map((authority, index) =>
+        [authority, bindings[index].blockId, bindings[index].observationBlockId]));
+      for (const fixture of sessions) {
+        assert.deepEqual(fixture.errors, []);
+        assert.deepEqual(fixture.session.state, {selection: 'retained'});
+      }
+    } finally {
+      await Promise.all(sessions.map(fixture => fixture.lifecycle.compositor.destroy()));
+    }
+    for (const fixture of sessions) {
+      assert.equal(fixture.renderer.calls().filter(call => call.method === 'destroyAll').length, 1);
+    }
+  });
+}
 
 test('nearest overrides win, unrelated paths survive, shared refs stay authorized and fresh calls reread', integration, async t => {
   const f = await setup(t);
