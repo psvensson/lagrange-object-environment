@@ -45,18 +45,74 @@ test('CI: two resolved Themes style independent DOM panes and never style an unt
   });
 });
 
-test('CI: ThemeResolver observation drives the production DOM style update and explicit error withdrawal', {skip: !available && 'no Chrome available'}, async () => {
+function assertThemePanePreserved(sample) {
+  for (const property of ['connected', 'samePane', 'sameInput', 'focused', 'logicalFocus', 'samePresentation', 'sameHandle']) {
+    assert.equal(sample[property], true, 'Session Theme update preserves ' + property);
+  }
+  assert.equal(sample.typed, 'typed and retained');
+}
+
+function assertThemeCompositionRetired(result) {
+  assert.equal(result.destroyIsClose, true, 'the published Compositor destroy is the lifecycle close');
+  assert.equal(result.singleFlight, true, 'concurrent and repeated facade shutdown share the same Promise');
+  assert.equal(result.postCloseOpenRejected, true, 'same-turn post-close opening rejects through canonical admission');
+  assert.equal(result.postClosePresentRejected, true, 'same-turn post-close presentation rejects through canonical admission');
+  assert.equal(result.postCloseFocusRejected, true, 'same-turn post-close focus rejects through canonical admission');
+  assert.deepEqual(result.rendererCallsAfterClose, ['destroyAll'],
+    'no post-close createSurface, detachPresentation or attachPresentation may reach the actual adapter');
+  assert.equal(result.destructionSawRetiredFollow, true, 'actual renderer destruction waits for follow retirement');
+  assert.equal(result.observationAborted, true, 'facade shutdown aborts the canonical follow');
+  assert.equal(result.iteratorReturned, true);
+  assert.equal(result.disconnected, true, 'facade shutdown destroys the actual DOM pane');
+  assert.equal(result.viewRetired, true);
+  assert.equal(result.mountEmpty, true, 'post-close requests cannot mount another pane');
+  assert.equal(result.lateViewStatus, null, 'post-close opening cannot reinsert a lost view after teardown');
+  assert.deepEqual(result.durableIntentAfterClose, [], 'all requests have settled with no resurrected durable intent');
+  assert.equal(result.noReadsAfterClose, true, 'a late event cannot issue another Theme read');
+  assert.deepEqual(result.sessionState, {selection: 'retained'});
+  assert.equal(result.sessionPerspective, null);
+  assert.deepEqual(result.rendererOperations,
+    ['createSurface', 'attachPresentation', 'detachPresentation', 'resize', 'destroySurface', 'destroyAll'],
+    'Session styling does not add a seventh renderer lifecycle operation');
+}
+
+test('CI: public Session Theme lifecycle preserves a real semantic pane through refresh and failure withdrawal', {skip: !available && 'no Chrome available'}, async () => {
   await withProofPage(async ({page}) => {
     const r = await page.evaluate(() => window.__lagrangeProof.observeAndRecolorLiveDom());
-    assert.equal(r.initial, 'rgb(230, 230, 226)');
-    assert.equal(r.changed, 'rgb(18, 25, 34)',
+    assert.equal(r.before.background, 'rgb(230, 230, 226)');
+    assert.equal(r.after.background, 'rgb(18, 25, 34)',
       'changed DesignToken must be reread, resolved, then rendered without reattach');
-    assert.deepEqual(r.updates, ['#e6e6e2', '#121922']);
-    assert.equal(r.nodeUnchanged, true, 'live Theme updates preserve DOM and typed input identity');
+    assert.deepEqual([r.before.base, r.after.base], ['#e6e6e2', '#121922']);
+    assert.deepEqual([r.before.styleCount, r.after.styleCount], [1, 1]);
+    assertThemePanePreserved(r.before);
+    assertThemePanePreserved(r.after);
     assert.equal(r.errors.length, 1);
-    assert.match(r.errors[0], /Theme color requires lowercase opaque/);
-    assert.deepEqual(r.afterError, {themed: false, styleCount: 0, base: ''},
-      'an explicitly handled invalid Theme withdraws styling, never invents a fallback');
+    assert.equal(r.errors[0].name, 'ThemeResolutionError');
+    assert.match(r.errors[0].message, /Theme color requires lowercase opaque/);
+    assert.equal(r.terminalStatus, 'rejected');
+    assert.equal(r.reportedFailureMatchesDone, true);
+    assert.equal(r.afterError.themed, false, 'failed following withdraws styling without choosing a fallback');
+    assert.equal(r.afterError.styleCount, 0);
+    assert.equal(r.afterError.base, '');
+    assertThemePanePreserved(r.afterError);
+    assert.equal(r.closeStatus, 'rejected');
+    assert.equal(r.sameFailureOnClose, true, 'complete teardown still reports the recorded Theme failure');
+    assertThemeCompositionRetired(r);
+  });
+});
+
+test('CI: published Compositor destruction retires an active Session Theme follow and the actual DOM pane', {skip: !available && 'no Chrome available'}, async () => {
+  await withProofPage(async ({page}) => {
+    const r = await page.evaluate(() => window.__lagrangeProof.observeAndRecolorLiveDom({failTheme: false}));
+    assert.equal(r.after.background, 'rgb(18, 25, 34)');
+    assertThemePanePreserved(r.after);
+    assert.equal(r.afterError, null);
+    assert.deepEqual(r.errors, []);
+    assert.equal(r.activeBeforeClose, true, 'the healthy follow must remain active until facade shutdown');
+    assert.equal(r.pendingEventBeforeClose, true, 'close wins over an outstanding observation next()');
+    assert.equal(r.terminalStatus, 'fulfilled');
+    assert.equal(r.closeStatus, 'fulfilled');
+    assertThemeCompositionRetired(r);
   });
 });
 

@@ -13,6 +13,7 @@ import {createEnvironmentShell} from '../../src/environment-shell.js';
 import {renderSemanticUiToDom} from '../../src/browser-renderer/dom-realizer.js';
 import {validateSemanticUi} from '../../src/semantic-ui.js';
 import {createThemeResolver} from '../../src/theme-resolver.js';
+import {Session, createSessionThemeLifecycle, RENDERER_ADAPTER_METHODS, RendererResourceLostError} from '../../src/index.js';
 
 // The PR B browser proof harness. Drives the BrowserRendererAdapter through
 // the full lifecycle against real Chrome WebGPU with the triangle Component.
@@ -515,11 +516,12 @@ window.__lagrangeProof = {
     }
   },
 
-  // T5 end-to-end host composition: the real ThemeResolver follows the
-  // existing metadata-only observation SHAPE, rereads a changed DesignToken
-  // through its authorized read port and applies tokens to the real browser
-  // renderer. Real Images lane issuance/ACL are proved separately in Node.
-  async observeAndRecolorLiveDom() {
+  // T6 production composition: a real Session, canonical ThemeResolver and
+  // BrowserRendererAdapter are wired only by the public Session lifecycle.
+  // The pane is opened and destroyed through its published Compositor. The
+  // lower port supplies the existing metadata-only observation SHAPE; actual
+  // Images lane issuance/ACL are proved separately in the Node integration.
+  async observeAndRecolorLiveDom({failTheme = true} = {}) {
     const response = await fetch('../fixtures/theme/stock-tokens.json');
     if (!response.ok) throw new Error('missing stock Theme fixture');
     const stock = await response.json();
@@ -550,6 +552,9 @@ window.__lagrangeProof = {
     const authority = {opaque: true};
     const waiting = [];
     const queued = [];
+    const reads = [];
+    let observationSignal;
+    let iteratorReturned = false;
     const emit = objectId => {
       const change = {kind: 'object.put', objectId, cursor: 'obs:opaque', type: 'record.put'};
       const next = waiting.shift();
@@ -557,41 +562,70 @@ window.__lagrangeProof = {
       else queued.push(change);
     };
     const resolver = createThemeResolver({
-      async readObject({imageId: id, objectId, authority: supplied}) {
-        if (id !== imageId || supplied !== authority || !records.has(objectId)) {
+      async readObject({imageId: id, objectId, authority: supplied, blockId}) {
+        if (id !== imageId || supplied !== authority || blockId !== 'read-object' || !records.has(objectId)) {
           throw new Error('unauthorized or missing Theme object');
         }
+        reads.push(objectId);
         return structuredClone(records.get(objectId));
       },
-      async observePull({afterCursor}) {
-        if (afterCursor !== '') throw new Error('initial observation must anchor a live cursor');
+      async observePull({imageId: id, authority: supplied, blockId, afterCursor}) {
+        if (id !== imageId || supplied !== authority || blockId !== 'observe' || afterCursor !== '') {
+          throw new Error('initial observation must use its supplied authority and binding');
+        }
         return {events: [], cursor: 'obs-cursor/v1:anchor'};
       },
-      observe() {
+      observe(id, {authority: supplied, blockId, afterCursor, signal}) {
+        if (id !== imageId || supplied !== authority || blockId !== 'observe'
+            || afterCursor !== 'obs-cursor/v1:anchor') {
+          throw new Error('live observation must retain its supplied authority and binding');
+        }
+        observationSignal = signal;
         return {[Symbol.asyncIterator]() {
           return {
             next() {
               if (queued.length) return Promise.resolve({value: queued.shift(), done: false});
               return new Promise(resolve => waiting.push(resolve));
             },
-            async return() {return {done: true};},
+            async return() {iteratorReturned = true; return {done: true};},
           };
         }};
       },
     });
     const adapter = makeAdapter();
-    const handle = await adapter.createSurface({kind: 'tool-pane'});
-    await adapter.attachPresentation(handle, {
+    const rendererCalls = [];
+    let terminal;
+    let destructionSawRetiredFollow = false;
+    // Observe the REAL adapter without changing its Promise or suspension
+    // timing. An async destroyAll wrapper could mask a lost-view race.
+    const observedAdapter = Object.freeze({...adapter,
+      ...Object.fromEntries(RENDERER_ADAPTER_METHODS.map(method => {
+        const operation = adapter[method].bind(adapter);
+        return [method, (...args) => {
+          rendererCalls.push(method);
+          if (method === 'destroyAll') {
+            destructionSawRetiredFollow = terminal !== undefined && iteratorReturned
+              && observationSignal?.aborted === true;
+          }
+          return operation(...args);
+        }];
+      })),
+    });
+    const session = new Session({principal: 'descriptive-browser-principal', state: {selection: 'retained'}});
+    const errors = [];
+    const lifecycle = createSessionThemeLifecycle({session, rendererAdapter: observedAdapter, themeResolver: resolver,
+      onThemeError(error) { errors.push(error); },
+    });
+    const {compositor} = lifecycle;
+    const descriptor = {
       kind: 'inspector',
       subject: ref('view'),
       parameters: {fields: {name: txt('User text')}, writable: ['name']},
+    };
+    lifecycle.done.then(() => {terminal = {status: 'fulfilled'};}, error => {
+      terminal = {status: 'rejected', error};
     });
-    const root = mount.lastElementChild;
-    const input = root.querySelector('.lagrange-tool-field-input');
-    input.value = 'typed and retained';
-    const updates = [];
-    const errors = [];
-    let follower;
+    let expectedFailure;
     const awaitCount = async (predicate, label) => {
       for (let i = 0; i < 300; i++) {
         if (predicate()) return;
@@ -600,36 +634,96 @@ window.__lagrangeProof = {
       throw new Error('live Theme ' + label + ' did not arrive');
     };
     try {
-      follower = await resolver.followCatalogDefault({
-        imageId, authority, blockId: 'read-object', observationBlockId: 'observe',
-        onUpdate({tokens}) {
-          adapter.setResolvedTokens(tokens);
-          updates.push(tokens.find(t => t.path === 'surface.base').value);
-        },
-        onError(error) {
-          errors.push(error.message);
-          adapter.setResolvedTokens(null); // explicit withdrawal, no stock fallback
-        },
+      const viewId = await compositor.openView({viewDescriptor: {kind: 'tool-pane'}, presentationDescriptor: descriptor});
+      const handle = compositor.surfaceHandleForView(viewId);
+      const root = mount.lastElementChild;
+      const input = root.querySelector('.lagrange-tool-field-input');
+      compositor.focusView(viewId);
+      input.focus();
+      input.value = 'typed and retained';
+      const sample = () => ({
+        themed: root.classList.contains('lagrange-tool-themed'),
+        styleCount: root.querySelectorAll(':scope > style[data-lagrange-theme]').length,
+        base: root.style.getPropertyValue('--lagrange-surface-base'),
+        background: getComputedStyle(root).backgroundColor,
+        connected: root.isConnected,
+        samePane: root === mount.firstElementChild,
+        sameInput: input === root.querySelector('.lagrange-tool-field-input'),
+        typed: input.value,
+        focused: document.activeElement === input,
+        logicalFocus: compositor.focusedView() === viewId,
+        samePresentation: compositor.liveView(viewId)?.presentationDescriptor === descriptor,
+        sameHandle: compositor.surfaceHandleForView(viewId) === handle,
       });
-      const initial = getComputedStyle(root).backgroundColor;
+      await lifecycle.start({selection: {kind: 'catalog-default', imageId},
+        authority, blockId: 'read-object', observationBlockId: 'observe'});
+      const before = sample();
       records.get('stock/surface.base').slots.value = txt('#121922');
       emit('stock/surface.base');
-      await awaitCount(() => updates.length === 2, 'updated token');
-      const changed = getComputedStyle(root).backgroundColor;
-      const nodeUnchanged = root === mount.firstElementChild
-        && input === root.querySelector('.lagrange-tool-field-input')
-        && input.value === 'typed and retained';
-      records.get('stock/surface.base').slots.value = txt('invalid CSS value');
-      emit('stock/surface.base');
-      await follower.done;
-      const afterError = {themed: root.classList.contains('lagrange-tool-themed'),
-        styleCount: root.querySelectorAll(':scope > style[data-lagrange-theme]').length,
-        base: root.style.getPropertyValue('--lagrange-surface-base')};
-      return {initial, changed, nodeUnchanged, updates, errors, afterError};
+      await awaitCount(() => root.style.getPropertyValue('--lagrange-surface-base') === '#121922', 'updated token');
+      const after = sample();
+      let afterError = null;
+      if (failTheme) {
+        records.get('stock/surface.base').slots.value = txt('invalid CSS value');
+        emit('stock/surface.base');
+        await awaitCount(() => terminal !== undefined, 'failed follow result');
+        if (terminal.status !== 'rejected') throw new Error('invalid Theme must reject lifecycle.done');
+        expectedFailure = terminal.error;
+        afterError = sample();
+      }
+      // In the healthy case this is an ACTIVE follow with a pending event.
+      // Closing only after failure could pass even if facade.destroy bypassed
+      // follow retirement, so the browser driver runs both branches.
+      const activeBeforeClose = terminal === undefined && observationSignal?.aborted === false;
+      const pendingEventBeforeClose = waiting.length > 0;
+      const destroyIsClose = compositor.destroy === lifecycle.close;
+      const callsBeforeClose = rendererCalls.length;
+      const closing = compositor.destroy();
+      // These new requests begin AFTER close in the SAME synchronous turn.
+      // Eventual rejection alone is not enough: none may reach the renderer.
+      const lateViewId = 'post-close-view';
+      const opening = compositor.openView({viewId: lateViewId,
+        viewDescriptor: {kind: 'tool-pane'}, presentationDescriptor: descriptor});
+      const presenting = compositor.presentOn(viewId, descriptor);
+      const outcomes = Promise.allSettled([closing, opening, presenting]);
+      let focusFailure;
+      try { compositor.focusView(viewId); } catch (error) { focusFailure = error; }
+      const concurrent = lifecycle.close();
+      const [closed, opened, presented] = await outcomes;
+      const closeFailure = closed.status === 'rejected' ? closed.reason : undefined;
+      if (closeFailure !== expectedFailure) throw closeFailure ?? new Error('close lost the recorded Theme failure');
+      await awaitCount(() => terminal !== undefined, 'closed follow result');
+      const readsAtClose = reads.length;
+      records.get('stock/surface.base').slots.value = txt('#abcdef');
+      emit('stock/surface.base'); // release an old pending next() after close
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      let repeatedFailure;
+      const repeated = compositor.destroy();
+      try { await repeated; } catch (error) { repeatedFailure = error; }
+      if (repeatedFailure !== expectedFailure) throw repeatedFailure ?? new Error('repeated close lost its failure');
+      return {before, after, afterError,
+        errors: errors.map(error => ({name: error.name, message: error.message})),
+        reportedFailureMatchesDone: errors.length === 1 && errors[0] === terminal.error,
+        terminalStatus: terminal.status,
+        closeStatus: closeFailure === undefined ? 'fulfilled' : 'rejected',
+        sameFailureOnClose: failTheme && closeFailure === terminal.error && repeatedFailure === terminal.error,
+        activeBeforeClose, pendingEventBeforeClose,
+        destroyIsClose, singleFlight: closing === concurrent && closing === repeated,
+        postCloseOpenRejected: opened.status === 'rejected' && opened.reason instanceof RendererResourceLostError,
+        postClosePresentRejected: presented.status === 'rejected' && presented.reason instanceof RendererResourceLostError,
+        postCloseFocusRejected: focusFailure instanceof RendererResourceLostError,
+        rendererCallsAfterClose: rendererCalls.slice(callsBeforeClose), destructionSawRetiredFollow,
+        durableIntentAfterClose: compositor.durableIntent(), lateViewStatus: compositor.viewStatus(lateViewId),
+        mountEmpty: mount.childElementCount === 0,
+        observationAborted: observationSignal?.aborted === true, iteratorReturned,
+        disconnected: !root.isConnected, viewRetired: compositor.liveView(viewId) === null,
+        noReadsAfterClose: reads.length === readsAtClose,
+        sessionState: session.state, sessionPerspective: session.perspective,
+        rendererOperations: [...RENDERER_ADAPTER_METHODS],
+      };
     } finally {
-      follower?.stop();
-      await follower?.done;
-      await adapter.destroyAll();
+      try { await compositor.destroy(); }
+      catch (error) { if (error !== expectedFailure) throw error; }
     }
   },
 
