@@ -205,6 +205,11 @@ function createSessionThemeLifecycle({session, rendererAdapter, themeResolver, o
       // Compositor retains the existing typed renderer-error mapping.
       throw failureResult([...(failureErrors ?? []), teardownError], 'Session Theme teardown failed');
     });
+    // Compositor has fenced admissions, but an already-admitted renderer
+    // operation may keep its drain pending. Stop following now, independently
+    // of that drain. The delegate's abort is idempotent and preserves its
+    // immediate timing when there was no pending composition operation.
+    controller.abort();
     closing.then(resolveClose, rejectClose);
     return closePromise;
   }

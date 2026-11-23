@@ -1,6 +1,6 @@
 # Session-scoped live Theme composition (T6)
 
-Status: **browser/JavaScript implementation; exact-head verification required before merge**.
+Status: **browser/JavaScript implementation; native Session binding remains separate**.
 Owner: `SessionThemeLifecycle` (`src/session-theme-lifecycle.js`).
 Bead: `lagrange-object-environment-0k7.4`.
 Source baseline: Object Environment `main@1dc8adb342d6fc486813b245cb10c67bfd005e94`.
@@ -160,12 +160,15 @@ state **before** aborting the follow or invoking any external code. Every close
 caller, including reentrant calls through the published Compositor, receives that
 same Promise and eventually the same fulfillment or rejection.
 
-Close immediately invokes the private Compositor's `destroy`, whose existing
-synchronous admission fence rejects new view operations before any abort listener
-or follow-retirement continuation runs. Its delegated `destroyAll` then aborts
-the already-owned signal and waits for the canonical follow start/worker to
+Close immediately invokes the private Compositor's `destroy`, whose synchronous
+admission fence rejects new view operations and clears logical views and focus
+before any abort listener or follow-retirement continuation runs. Close then
+aborts the already-owned signal immediately, independently of any renderer work
+the Compositor is draining. Its delegated `destroyAll` retains an idempotent
+abort for the immediate path and waits for the canonical follow start/worker to
 retire, without waiting for uncancellable lower reads or invalid callback
-thenables. Only concrete renderer destruction is delayed by that barrier.
+thenables. Concrete renderer destruction follows both admitted composition-work
+retirement and follow retirement; neither owner duplicates the other's drain.
 
 Actual adapter teardown is attempted exactly once **even if** startup, follow
 settlement, withdrawal or reporting failed. Internal retirement records those
@@ -173,16 +176,17 @@ failures without throwing them through Compositor's renderer-error mapper;
 only actual adapter teardown failures cross that boundary. No subsequent
 supported callback can publish styling. A held renderer teardown remains
 awaited; prompt follow cancellation does not make renderer destruction
-instantaneous. Compositor's liveness-query snapshots retain their canonical
-behavior, and its view map is cleared in teardown's `finally` block.
+instantaneous. Compositor's liveness queries expose no live views once close
+starts. An admitted operation cannot republish live or lost view state after
+that fence, even when its renderer response arrives later.
 
 `close` preserves any recorded follow failures and appends the Compositor's
 existing typed teardown error if destruction fails. With only one error it
 preserves that error object. With multiple errors it rejects with an ordered
 `AggregateError` (original, withdrawal, reporter, teardown; original as cause).
 If only teardown failed, that error is the cause and sole result. Repeated close
-never hides an earlier failure behind a later successful no-op. Compositor's
-internal view clearing and resource error mapping remain unchanged.
+never hides an earlier failure behind a later successful no-op. Compositor owns
+the admitted-operation drain and retains its resource error mapping.
 
 The composition stores no principal, grant, cursor, Theme preference, token cache,
 CSS or resource handle in Session.state, Perspective, SemanticUi or image objects.
@@ -252,9 +256,10 @@ Session); a seventh renderer op; per-widget observers; global CSS/GTK state;
 async style dispatch disguised as synchronous; a second poller or token cache.
 Also rejected: waiting for follow retirement before invoking Compositor destroy,
 because that delays its canonical admission fence. The barrier belongs only
-around actual renderer teardown. Operations already admitted before close are
-outside this correction and remain tracked by existing Compositor Bead
-`lagrange-object-environment-3zx`; it adds no competing liveness policy.
+around actual renderer teardown. Compositor Bead
+`lagrange-object-environment-3zx` supplies the canonical drain for operations
+already admitted before close. Theme observation stops immediately after that
+admission fence; concrete teardown waits for both operation and follow retirement.
 
 ## Verification and delivery
 

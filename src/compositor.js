@@ -122,10 +122,32 @@ function createCompositor({rendererAdapter} = {}) {
   const views = new Map();
   let nextViewOrdinal = 0;
   let destroyed = false;
+  let destruction = null;
+  const admittedOperations = new Set();
 
   function requireAlive() {
     if (destroyed) {
       throw new RendererResourceLostError('the compositor (Session composition) has been destroyed');
+    }
+  }
+
+  // Register retirement before invoking the operation: an adapter can call
+  // destroy synchronously before it returns its Promise. The retirement token
+  // never rejects; each operation's caller retains its own result or error.
+  function runOperation(operation) {
+    requireAlive();
+    let resolveRetired;
+    const retired = new Promise(resolve => { resolveRetired = resolve; });
+    admittedOperations.add(retired);
+    const retire = () => {
+      admittedOperations.delete(retired);
+      resolveRetired();
+    };
+    try {
+      return Promise.resolve(operation()).finally(retire);
+    } catch (error) {
+      retire();
+      throw error;
     }
   }
 
@@ -192,114 +214,144 @@ function createCompositor({rendererAdapter} = {}) {
    * a live view throws.
    */
   async function openView({viewId: suppliedViewId, viewDescriptor, presentationDescriptor}) {
-    requireAlive();
-    requireViewDescriptor(viewDescriptor);
-    requirePresentationDescriptor(presentationDescriptor);
-    let viewId;
-    if (suppliedViewId !== undefined) {
-      if (typeof suppliedViewId !== 'string' || suppliedViewId.length === 0) {
-        throw new TypeError('a supplied viewId must be a non-empty string (re-admission of a durable ID, not new identity)');
-      }
-      viewId = admitViewId(suppliedViewId);
-    } else {
-      viewId = mintViewId();
-    }
-    let surfaceHandle = null;
-    let hasValidatedSurfaceHandle = false;
-    try {
-      surfaceHandle = await rendererAdapter.createSurface(viewDescriptor);
-      requireHandle(surfaceHandle, 'createSurface must return an opaque string surface handle');
-      hasValidatedSurfaceHandle = true;
-      await rendererAdapter.attachPresentation(surfaceHandle, presentationDescriptor);
-    } catch (error) {
-      if (hasValidatedSurfaceHandle) {
-        try {
-          await rendererAdapter.destroySurface(surfaceHandle);
-        } catch {
-          // Preserve the primary attach failure. A failed compensation is not
-          // retried per-surface; broad Session teardown remains available.
+    return runOperation(async () => {
+      requireViewDescriptor(viewDescriptor);
+      requirePresentationDescriptor(presentationDescriptor);
+      let viewId;
+      if (suppliedViewId !== undefined) {
+        if (typeof suppliedViewId !== 'string' || suppliedViewId.length === 0) {
+          throw new TypeError('a supplied viewId must be a non-empty string (re-admission of a durable ID, not new identity)');
         }
+        viewId = admitViewId(suppliedViewId);
+      } else {
+        viewId = mintViewId();
       }
-      views.set(viewId, {viewDescriptor, presentationDescriptor, surfaceHandle: null, status: 'lost'});
-      throw mapAdapterFailure(viewId, error);
-    }
-    views.set(viewId, {viewDescriptor, presentationDescriptor, surfaceHandle, status: 'live'});
-    return viewId;
+      // Descriptor validation can invoke getters. Recheck before dispatching
+      // the first renderer operation as well as after each suspension.
+      requireAlive();
+      let surfaceHandle = null;
+      let hasValidatedSurfaceHandle = false;
+      try {
+        surfaceHandle = await rendererAdapter.createSurface(viewDescriptor);
+        requireHandle(surfaceHandle, 'createSurface must return an opaque string surface handle');
+        hasValidatedSurfaceHandle = true;
+        requireAlive();
+        await rendererAdapter.attachPresentation(surfaceHandle, presentationDescriptor);
+        requireAlive();
+      } catch (error) {
+        if (hasValidatedSurfaceHandle) {
+          try {
+            await rendererAdapter.destroySurface(surfaceHandle);
+          } catch {
+            // Preserve the primary failure. Retirement includes this one
+            // compensation attempt; final Session teardown sweeps afterward.
+          }
+        }
+        if (!destroyed) {
+          views.set(viewId, {viewDescriptor, presentationDescriptor, surfaceHandle: null, status: 'lost'});
+        }
+        throw mapAdapterFailure(viewId, error);
+      }
+      views.set(viewId, {viewDescriptor, presentationDescriptor, surfaceHandle, status: 'live'});
+      return viewId;
+    });
   }
 
   async function resizeView(viewId, size) {
-    requireAlive();
-    const view = requireLiveView(viewId);
-    assertDataRepresentable(size, 'size');
-    if (typeof size.width !== 'number' || typeof size.height !== 'number') {
-      throw new TypeError('size must carry numeric width and height');
-    }
-    if (view.status === 'lost') {
-      throw new RendererResourceLostError(`view ${viewId} is lost; its surface cannot be resized`);
-    }
-    try {
-      await rendererAdapter.resize(view.surfaceHandle, {width: size.width, height: size.height});
-    } catch (error) {
-      throw mapAdapterFailure(viewId, error);
-    }
+    return runOperation(async () => {
+      const view = requireLiveView(viewId);
+      assertDataRepresentable(size, 'size');
+      if (typeof size.width !== 'number' || typeof size.height !== 'number') {
+        throw new TypeError('size must carry numeric width and height');
+      }
+      if (view.status === 'lost') {
+        throw new RendererResourceLostError(`view ${viewId} is lost; its surface cannot be resized`);
+      }
+      requireAlive();
+      try {
+        await rendererAdapter.resize(view.surfaceHandle, {width: size.width, height: size.height});
+        requireAlive();
+      } catch (error) {
+        throw mapAdapterFailure(viewId, error);
+      }
+    });
   }
 
   /** Replace a view's presentation (re-attach), keeping its surface. */
   async function presentOn(viewId, presentationDescriptor) {
-    requireAlive();
-    const view = requireLiveView(viewId);
-    requirePresentationDescriptor(presentationDescriptor);
-    if (view.status === 'lost') {
-      throw new RendererResourceLostError(`view ${viewId} is lost; its surface is gone`);
-    }
-    try {
-      await rendererAdapter.detachPresentation(view.surfaceHandle);
-      await rendererAdapter.attachPresentation(view.surfaceHandle, presentationDescriptor);
-      view.presentationDescriptor = presentationDescriptor;
-    } catch (error) {
-      throw mapAdapterFailure(viewId, error);
-    }
+    return runOperation(async () => {
+      const view = requireLiveView(viewId);
+      requirePresentationDescriptor(presentationDescriptor);
+      if (view.status === 'lost') {
+        throw new RendererResourceLostError(`view ${viewId} is lost; its surface is gone`);
+      }
+      requireAlive();
+      try {
+        await rendererAdapter.detachPresentation(view.surfaceHandle);
+        requireAlive();
+        await rendererAdapter.attachPresentation(view.surfaceHandle, presentationDescriptor);
+        requireAlive();
+        view.presentationDescriptor = presentationDescriptor;
+      } catch (error) {
+        throw mapAdapterFailure(viewId, error);
+      }
+    });
   }
 
   /** Close one logical view, freeing exactly its renderer resource. */
   async function closeView(viewId) {
-    requireAlive();
-    const view = requireLiveView(viewId);
-    if (view.status === 'live' && view.surfaceHandle) {
-      try {
-        await rendererAdapter.destroySurface(view.surfaceHandle);
-      } catch (error) {
-        views.delete(viewId);
-        if (focusedViewId === viewId) focusedViewId = null;
-        throw mapAdapterFailure(viewId, error);
+    return runOperation(async () => {
+      const view = requireLiveView(viewId);
+      if (view.status === 'live' && view.surfaceHandle) {
+        try {
+          await rendererAdapter.destroySurface(view.surfaceHandle);
+          requireAlive();
+        } catch (error) {
+          views.delete(viewId);
+          if (focusedViewId === viewId) focusedViewId = null;
+          throw mapAdapterFailure(viewId, error);
+        }
       }
-    }
-    views.delete(viewId);
-    // Destroying a focused view clears focus cleanly (no stale handle).
-    if (focusedViewId === viewId) focusedViewId = null;
+      views.delete(viewId);
+      // Destroying a focused view clears focus cleanly (no stale handle).
+      if (focusedViewId === viewId) focusedViewId = null;
+    });
   }
 
   /**
-   * Tear down the Session's composition: destroy ALL renderer resources. The
-   * map is cleared even if destroyAll throws (the Session is ending regardless,
-   * and the adapter is authoritative for resources). Idempotent.
+   * Fence the Session immediately, retire admitted work, then destroy ALL
+   * renderer resources. Concurrent and later callers share one terminal result.
+   * A lower operation that never settles keeps destruction pending; a host's
+   * deadline remains responsible for bounding an unresponsive renderer.
    */
-  async function destroy() {
-    if (destroyed) return;
+  function destroy() {
+    if (destruction) return destruction;
+    let resolveDestruction;
+    let rejectDestruction;
+    destruction = new Promise((resolve, reject) => {
+      resolveDestruction = resolve;
+      rejectDestruction = reject;
+    });
+    // Reentrant adapter code may request destruction without awaiting it.
+    // Observing internally leaves the returned identity and rejection intact.
+    destruction.catch(() => {});
     destroyed = true;
-    try {
-      await rendererAdapter.destroyAll();
-    } catch (error) {
-      // Consistent taxonomy: a raw adapter throw during teardown is still a
-      // renderer error, never an untyped exception crossing into the Session.
-      if (error instanceof RendererResourceLostError) throw error;
-      throw new RendererResourceLostError(
-        `renderer teardown failed: ${error?.message ?? error}`, {cause: error},
-      );
-    } finally {
-      views.clear();
-      focusedViewId = null; // Session teardown clears focus
+    views.clear();
+    focusedViewId = null;
+    async function finishDestruction() {
+      // Do not introduce an extra turn when no admitted work is pending.
+      if (admittedOperations.size > 0) await Promise.all([...admittedOperations]);
+      try {
+        await rendererAdapter.destroyAll();
+      } catch (error) {
+        if (error instanceof RendererResourceLostError) throw error;
+        throw new RendererResourceLostError(
+          `renderer teardown failed: ${error?.message ?? error}`, {cause: error},
+        );
+      }
     }
+    finishDestruction().then(resolveDestruction, rejectDestruction);
+    return destruction;
   }
 
   /**
