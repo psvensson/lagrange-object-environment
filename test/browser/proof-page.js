@@ -10,7 +10,7 @@ import {instantiate as instantiateGlb} from './components/glb/glb.component.js';
 import {createCompositor} from '../../src/compositor.js';
 import {createSelectionModel} from '../../src/selection-model.js';
 import {createEnvironmentShell} from '../../src/environment-shell.js';
-import {renderSemanticUiToDom} from '../../src/browser-renderer/dom-realizer.js';
+import {createDomRealizer, renderSemanticUiToDom} from '../../src/browser-renderer/dom-realizer.js';
 import {validateSemanticUi} from '../../src/semantic-ui.js';
 import {createThemeResolver} from '../../src/theme-resolver.js';
 import {Session, createSessionThemeLifecycle, RENDERER_ADAPTER_METHODS, RendererResourceLostError} from '../../src/index.js';
@@ -127,6 +127,110 @@ const openTriangle = (adapter, width, height) => openView(adapter, {kind: 'trian
 
 window.__lagrangeProof = {
   canvases: () => Array.from(document.querySelectorAll('#mount canvas')),
+
+  // 3zx: hold an ACTUAL DOM realization inside the production adapter's
+  // asynchronous attach/start path. Disposing a fake adapter before release
+  // would not expose either orphaned attach or remount-after-dispose.
+  async destroyDuringDomRealization(stage) {
+    const deferred = () => {
+      let resolve;
+      const promise = new Promise(yes => { resolve = yes; });
+      return {promise, resolve};
+    };
+    const observe = promise => {
+      const result = {status: 'pending', errorName: null};
+      const done = Promise.resolve(promise).then(() => { result.status = 'fulfilled'; }, error => {
+        result.status = 'rejected'; result.errorName = error.name;
+      });
+      return {promise, result, done};
+    };
+    const entered = deferred();
+    const release = deferred();
+    const realizations = [];
+    const retained = new Set();
+    const intents = [];
+    const order = [];
+    let destroyCalls = 0;
+    let disposeCalls = 0;
+    let destructionCompleted = false;
+    let startedAfterCompletedDestruction = false;
+    let mountedRealControl = false;
+    let handle;
+    mount.innerHTML = '';
+    const adapter = createBrowserRendererAdapter({mount,
+      loadComponent() { throw new Error('the semantic pane must use its actual DOM realizer'); },
+      realizerFor: () => ({async attach(options) {
+        handle = options.surfaceHandle;
+        const dom = createDomRealizer({mountPoint: mount, emitIntent: options.emitIntent});
+        const realization = await dom.attach(options);
+        realizations.push(realization);
+        retained.add(realization);
+        order.push('attach-entered');
+        if (stage === 'attach') { entered.resolve(); await release.promise; }
+        order.push('attach-returning');
+        return {...realization,
+          async start() {
+            order.push('start-entered');
+            if (stage === 'start') { entered.resolve(); await release.promise; }
+            startedAfterCompletedDestruction ||= destructionCompleted;
+            realization.start();
+            mountedRealControl = realization._root.isConnected
+              && realization._root.querySelector('.lagrange-tool-field-input') instanceof HTMLInputElement;
+            order.push('mounted');
+          },
+          dispose() {
+            disposeCalls++;
+            order.push('dispose');
+            realization.dispose();
+            retained.delete(realization);
+          },
+        };
+      }}),
+    });
+    adapter.onIntent((intent, surfaceHandle) => intents.push({intent, surfaceHandle}));
+    const compositor = createCompositor({rendererAdapter: {...adapter,
+      destroyAll() { destroyCalls++; order.push('destroyAll'); return adapter.destroyAll(); },
+    }});
+    const opening = observe(compositor.openView({viewId: 'held-dom',
+      viewDescriptor: {kind: 'tool-pane'}, presentationDescriptor: {
+        kind: 'inspector', subject: {kind: 'ref', imageId: 'drain-proof', objectId: 'held-dom'},
+        parameters: {fields: {title: {kind: 'text', value: 'Real DOM control'}}, writable: ['title'],
+          references: [{kind: 'ref', imageId: 'drain-proof', objectId: 'target'}]},
+      }}));
+    let closing;
+    try {
+      await entered.promise;
+      closing = observe(compositor.destroy());
+      closing.done.then(() => { destructionCompleted = true; });
+      // One browser turn observes an already-settled baseline destroy without
+      // releasing the causal attach/start gate or relying on a sleep duration.
+      await new Promise(resolve => setTimeout(resolve, 0));
+      const beforeRelease = {closing: closing.result.status, destroyCalls,
+        mountChildren: mount.childElementCount};
+      release.resolve();
+      await Promise.all([opening.done, closing.done]);
+      const intentCount = intents.length;
+      realizations[0]._root.querySelector('.lagrange-tool-references button').click();
+      return {stage, beforeRelease, opened: opening.result, closed: closing.result,
+        mountedRealControl, startedAfterCompletedDestruction, destroyCalls, disposeCalls,
+        retainedRealizations: retained.size,
+        runningRealizations: realizations.filter(realization => realization.isRunning()).length,
+        mountChildren: mount.childElementCount,
+        connected: realizations[0]._root.isConnected,
+        listenersRetired: intents.length === intentCount,
+        viewStatus: compositor.viewStatus('held-dom'), liveView: compositor.liveView('held-dom'),
+        surfaceHandle: compositor.surfaceHandleForView('held-dom'),
+        viewForHandle: compositor.viewForSurfaceHandle(handle),
+        focusedView: compositor.focusedView(), durableIntent: compositor.durableIntent(), order};
+    } finally {
+      // The red baseline must finish and report its leaked state, not strand a
+      // browser worker or leave an unobserved opening rejection behind.
+      release.resolve();
+      await Promise.all([opening.done, closing?.done]);
+      await adapter.destroyAll();
+      for (const realization of realizations) realization.dispose();
+    }
+  },
 
   // --- DOM + Component COEXISTENCE proof (Bead 9vl): navigator + inspector
   // (DOM tool realizations) + a GLB Component view behind ONE adapter. An

@@ -10,6 +10,36 @@ import {available, withProofPage} from './support/proof-lane.js';
 // BrowserRendererAdapter, via the INJECTED realization-dispatch seam (not a
 // hard-coded kind switch). Runs under Xvfb/headless SwiftShader.
 
+for (const stage of ['attach', 'start']) {
+  test(`CI: Compositor destruction drains a real DOM realization held inside ${stage}`, {skip: !available && 'no Chrome available'}, async () => {
+    await withProofPage(async ({page}) => {
+      const result = await page.evaluate(stage => window.__lagrangeProof.destroyDuringDomRealization(stage), stage);
+      assert.deepEqual(result.beforeRelease, {closing: 'pending', destroyCalls: 0, mountChildren: 0},
+        'concrete teardown waits for the already-admitted adapter operation');
+      assert.equal(result.opened.status, 'rejected');
+      assert.equal(result.opened.errorName, 'RendererResourceLostError');
+      assert.equal(result.closed.status, 'fulfilled');
+      assert.equal(result.mountedRealControl, true, 'the test realizes a genuine semantic DOM input');
+      assert.equal(result.startedAfterCompletedDestruction, false);
+      assert.equal(result.destroyCalls, 1);
+      assert.equal(result.disposeCalls, 1, 'the concrete realization is disposed once before final sweep');
+      assert.equal(result.retainedRealizations, 0);
+      assert.equal(result.runningRealizations, 0);
+      assert.equal(result.mountChildren, 0);
+      assert.equal(result.connected, false);
+      assert.equal(result.listenersRetired, true, 'retained controls cannot still emit after teardown');
+      assert.equal(result.viewStatus, null);
+      assert.equal(result.liveView, null);
+      assert.equal(result.surfaceHandle, null);
+      assert.equal(result.viewForHandle, null);
+      assert.equal(result.focusedView, null);
+      assert.deepEqual(result.durableIntent, []);
+      assert.ok(result.order.indexOf('destroyAll') > result.order.indexOf('mounted'),
+        'the broad resource sweep follows the admitted realization, never precedes it');
+    });
+  });
+}
+
 // T4 visual materialization: the SAME resolved semantic token fixtures are
 // consumed by browser and GTK. This is the PRODUCTION browser adapter path,
 // not simply a style-function unit test or a hand-built themed fixture.
