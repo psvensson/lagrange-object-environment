@@ -56,60 +56,115 @@ await controller.start();  // the image's actual catalog.defaultTheme
 await controller.close();  // stop follow BEFORE destroying Compositor views
 ```
 
-One lifetime per controller: `NEW -> STARTING -> ACTIVE -> CLOSING -> CLOSED`.
+One lifetime per controller: `NEW -> STARTING -> ACTIVE -> CLOSING -> CLOSED`,
+plus terminal `FAILED` for a non-cancellation follow/error-reporting failure.
 Concurrent/duplicate start is rejected; closing is idempotent and terminal.
 The controller owns the transition rules and the abort signal; the
 `ThemeResolver` remains sole owner of follow cursor/dependency semantics.
-Initial start performs exactly one authorized follow, whose first
-`onUpdate` sets all host tokens synchronously. No Session can implicitly
-create a missing default object, invoke trusted provisioning, scan profiles or
-select a fallback palette. A failed initial follow refuses start and
-returns its original error. It must not leave a live subscription or
-partially styled session; the host's existing unthemed state is preserved.
 
-An authorized update only invokes `applyTokens` for this controller's
-active lifetime. A subsequent follow error must **withdraw styling for
-that Session only** via `applyTokens(null)`, then report the original error
-exactly once; it must not silently keep presenting the old Theme as current.
-Report failure is visible and does not invent another authorization path.
+**Startup settlement is NOT inferred from the follower Promise fulfilling.**
+`ThemeResolver.followCatalogDefault` may fulfill with an *already-stopped*
+handle after a user cancellation, and its worker can call `onError` before
+the handle is delivered. A closing-state / aborted-signal check is required
+immediately AFTER awaiting the follow and BEFORE transitioning to `ACTIVE`.
+The controller records any early follow error independently of the returned
+handle; an early error wins over successful fulfillment and rejects `start`
+with the original primary error (or the explicitly reported aggregate when
+secondary errors exist), never an `ACTIVE` controller. A concurrent
+`close()` instead causes `start()` to reject a stable, documented
+`SessionThemeClosedError` (or `AbortError` whose cancellation origin is
+explicit), never to resolve success. No Session can implicitly create a
+missing default object, invoke trusted provisioning, scan profiles or select
+a fallback palette. A failed start retires any acquired subscription and
+withdraws a partially applied Theme; no resource remains active.
 
-`close()` marks the controller closing and aborts the follow BEFORE calling
-`compositor.destroy()`. Late read results and callbacks cannot restyle a
-closed Session. Destroy errors are propagated; repeated close is idempotent,
-and the subscription is never re-admitted. A close during an uncancellable
-initial read completes promptly using the resolver's stop fencing. One
-Session's failure or close must not touch another Session's views or Theme.
+The first `onUpdate` applies the already-authorized tokens **synchronously**
+to the browser host before a successful `start()` resolves. A candidate
+`applyTokens` port returning a Promise/thenable is refused at this T6a
+boundary rather than silently treating a queued style request as complete.
 
-**Host boundaries:** `applyTokens` is deliberately a small injected
-host-only control. It is **not** a seventh RendererAdapter lifecycle op.
-GTK code may invoke `LinuxRendererAdapter::set_resolved_tokens` through
-its existing host composition; this JS lifecycle owner does not control GTK
-widgets directly. No appearance data enters `SemanticUi`, a Presentation,
-`Session.state`, a Perspective, or an image record.
+An authorized update only invokes `applyTokens` while this controller
+is still `STARTING` or `ACTIVE` and its abort signal remains live. A
+subsequent follow error moves it to terminal `FAILED` and must withdraw
+styling for **that Session only** through `applyTokens(null)`; no fallback
+or durable rollback is permitted.
+
+**Error reporting is independently failure-safe.** Withdrawal is attempted
+even when the follow fails; a throwing/rejected withdrawal must not skip
+`reportError(original)`. Reporting is attempted exactly once for the primary
+failure whether withdrawal succeeds or fails. Both operations are settled
+independently; an `AggregateError` carries the primary error PLUS all
+secondary withdrawal/reporting errors if any. The controller exposes a
+public, awaitable `done` (or equivalent terminal-failure channel) so the
+host can observe all errors, including a reporter rejection, with a
+terminally handled internal Promise to prevent unhandled rejections.
+The original error remains separately identifiable; secondary failures
+are never dropped merely to preserve a pleasing status.
+
+`close()` synchronously marks the controller `CLOSING`, aborts the
+controller signal and calls `follow.stop()` (when present) BEFORE invoking
+`compositor.destroy()`. The shutdown Promise is shared by all close callers,
+and the controller cannot start again. A close while the initial follow is
+still pending cancels start with the explicit outcome above and retires any
+late-arriving handle before destruction completes. Late lower reads are
+terminally handled and cannot apply styling after close.
+
+**Two independent falsifiers are required:** a recorder asserts the precise
+`abort/stop -> compositor.destroy` ordering (a mutant reversing the order
+must fail), and a separate held-read/queued-onUpdate test proves late
+callbacks cannot style a closed view. A test relying *only* on a late
+callback cannot prove ordering because the close-state fence could mask a
+reversed teardown. Destroy errors remain observable through the terminal
+channel, even after a follow error; repeated close is idempotent. One
+Session's failure/close cannot touch another Session's views or Theme.
+
+**T6a host boundary:** `applyTokens` is a small injected **synchronous
+browser/JS host-only** control, not a seventh RendererAdapter lifecycle op.
+The current native JS↔GTK `hosts/linux/src/js_env/renderer_port.rs` carries
+only six **asynchronous** lifecycle operations with separate JS-owner and
+GTK-owner threads. It cannot truthfully provide synchronous completion for
+`LinuxRendererAdapter::set_resolved_tokens` today. T6a therefore proves
+the browser/JS Session path and retains native build/regression CI but
+**does not claim native Session live Theme integration**.
+
+A separately reviewed T6b must add a host-only native appearance control
+under the EXISTING `js_env` port/actor owner, returning an awaited
+completion/error acknowledgment. It must preserve GTK-thread ownership,
+operation ordering and cancellation (including a queued update vs close),
+and prove JS follow→native host→real GTK style change. Never implement
+fire-and-forget style calls, add a seventh RendererAdapter lifecycle op,
+or claim an absent bridge via a stub. No appearance data enters
+`SemanticUi`, a Presentation, `Session.state`, a Perspective, or an
+image record.
 
 ## Independent plan-review falsification
 
-1. Two real `Session` objects, two `Compositor` instances and independently
-   themed browser adapters: a changed authorized token updates each
-   correctly, and closing or denying one cannot alter the other's
-   computed styles or command-input state.
-2. Deterministic held initial read and concurrent `close()`: no late
-   `applyTokens`, follow cleanly canceled, `compositor.destroy` called
-   once, no leaked callbacks or unhandled rejection.
-3. An independent lower `AbortError` is an actual startup/follow failure,
-   not interpreted as voluntary Session stop.
-4. Invalid/malformed token or denied Theme: the renderer's validator refuses
-   unsafe input; the original error is preserved and the session is explicitly
-   unstyled; no fallback, no silent rollback of durable Theme state.
-5. Duplicate start, close-before-start, repeated close, and close while update
-   notification is queued have unique outcomes and bounded completion.
-6. A test deliberately **removes the stop-before-destroy edge**, showing a
-   stale styling callback can reach a torn-down renderer, then verifies the
-   correct owner prevents it.
-7. Real Images read/observation composition test and both host/UI gates,
-   exact-source green Node/browser/native CI, current docs/ownership reconciliation.
-8. Adversarial plan review **before** code and a *separate* diff/test review
-   after code, with findings resolved rather than overridden.
+1. Two real `Session` objects, two `Compositor` instances and
+   independently themed **browser** adapters: changed authorized tokens
+   update both; closing or denying one cannot alter the other or its text.
+2. Held initial read with concurrent `close()`, same-turn close before
+   bootstrap microtask, and a follow that returns an already-stopped handle:
+   start must reject the documented cancellation outcome, not claim `ACTIVE`.
+3. Observation `onError` arriving BEFORE the follow handle resolves: start
+   rejects the original failure and never records an active subscription.
+4. Independently injected lower `AbortError` at anchor/read/render while
+   *not* closing must reject or terminally report; only deliberate close is
+   treated as cancellation.
+5. Denied/malformed Theme plus throwing/rejecting withdrawal and reporter:
+   always attempt reporting the original failure; `done` exposes every
+   secondary failure with original identity recoverable, no hidden fallback.
+6. Duplicate start, close-before-start, repeated close, and close while an
+   update notification is queued have unique, bounded, terminal outcomes.
+7. **Separate teardown ordering test:** event log asserts follow abort/stop
+   BEFORE `compositor.destroy`; a reversed-order mutant fails even with the
+   late-callback fence intact.
+8. **Separate late-callback test:** a held/uncancellable Images read released
+   after close cannot apply Theme, and the Compositor destroys exactly once.
+9. Real Images read/observation + actual production browser adapter, current
+   DOM computed-style/typed-text checks, full Node/browser/native regression CI.
+   No native Session bridge claimed until T6b completion/error acknowledgment.
+10. Independent plan review **before** code and a separate diff/test review
+    after code, with all material findings addressed.
 
 ## Dependencies and boundaries deliberately deferred
 
@@ -126,7 +181,9 @@ widgets directly. No appearance data enters `SemanticUi`, a Presentation,
 - Production cluster acceptance for native PRs #95/#100 and published
   `lagrange-server` is separate; no obsolete package assumption here.
 - The `SessionThemeLifecycle` host API is an interface candidate, not
-  another durable settings/configuration system.
+  another durable settings/configuration system. T6a is JS/browser-only;
+  native JS-to-GTK completion/error/cancellation ordering is the explicit
+  subsequent T6b port-owned dependency.
 
 ## Alternatives explicitly rejected
 
