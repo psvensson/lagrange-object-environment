@@ -59,8 +59,7 @@ pub fn css_for_resolved_tokens(tokens: &Value) -> Result<String, String> {
             }
             "dimension" | "fontSize" => {
                 // Mirror JS Number.isSafeInteger, not serde_json::as_u64:
-                // 13, 13.0, 1.3e1 and -0 are the SAME valid dimension,
-                // including when a JSON parser stores an integral float.
+                // 13, 13.0, 1.3e1 and -0 are the SAME valid dimension.
                 let number = value.as_f64().ok_or("GTK Theme dimension must be a JSON number")?;
                 if !number.is_finite() || number.fract() != 0.0 || number < 0.0
                     || number > 9_007_199_254_740_991.0
@@ -121,7 +120,7 @@ selection {{ background-color: {selection_bg}; color: {selection_text}; }}
 // GTK CSS providers are applied to the actual widget contexts in ONE pane,
 // never installed on the display/process. Two sessions with different Themes
 // can coexist, and dropping a pane retires its widget-owned providers.
-pub fn apply_native_tool_css(root: &gtk4::Widget, css: &str) {
+pub fn apply_native_tool_css(root: &gtk4::Widget, css: &str) -> gtk4::CssProvider {
     let provider = gtk4::CssProvider::new();
     provider.load_from_data(css);
     fn attach(widget: &gtk4::Widget, provider: &gtk4::CssProvider) {
@@ -133,4 +132,19 @@ pub fn apply_native_tool_css(root: &gtk4::Widget, css: &str) {
         }
     }
     attach(root, &provider);
+    provider
+}
+
+/// Remove only the provider that this pane owns. Never remove another pane's
+/// provider and never install a display-global override or stock fallback.
+pub fn remove_native_tool_css(root: &gtk4::Widget, provider: &gtk4::CssProvider) {
+    fn detach(widget: &gtk4::Widget, provider: &gtk4::CssProvider) {
+        widget.style_context().remove_provider(provider);
+        let mut child = widget.first_child();
+        while let Some(current) = child {
+            child = current.next_sibling();
+            detach(&current, provider);
+        }
+    }
+    detach(root, provider);
 }

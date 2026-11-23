@@ -74,6 +74,9 @@ but not dereferenced as a side effect of choosing a default.
 
 This section documents catalog selection only. Per-principal `EnvironmentProfile`
 lookup and observation-driven re-resolution remain independent future milestones.
-Static DOM/GTK appearance is implemented separately by
-[renderer-native Theme appearance](theme-appearance.md) (T4); `ThemeResolver`
-continues to know nothing about CSS or GTK.
+Static DOM/GTK appearance is implemented by
+[renderer-native Theme appearance](theme-appearance.md) (T4).
+The resolver also owns [live dependency-aware Theme following](theme-live.md)
+(T5) through the existing authorized image-observation lane; neither Theme
+inheritance nor invalidation policy lives in a renderer.
+`ThemeResolver` continues to know nothing about CSS or GTK.

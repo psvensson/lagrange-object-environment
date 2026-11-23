@@ -64,7 +64,13 @@ compare computed foreground colors, ensure separate Themes coexist, and
 exercise the production `LinuxRendererAdapter` constructor/attach path.
 Negative tests reject malformed/injection-capable token values.
 
-This is **static per-Session appearance**. The next milestone is authorized
-observation-driven Theme re-resolution and replacement of the current native
-realizations without creating a parallel polling or settings system. It makes
-no claim about the distributed Lagrange server or published package.
+T4 alone provided static per-Session appearance. T5 adds host-side
+`setResolvedTokens` / `set_resolved_tokens` controls that update existing
+styled panes without rebuilding widgets, and
+[authorized observation-driven live Theme follows](theme-live.md) through the
+existing `ThemeResolver`. Hosts explicitly compose the follow callback
+with their renderer; selection, error reporting and Session custody remain
+host responsibilities. The CSS/GTK realizers still know no Theme identity,
+image service, observation cursor or durable setting.
+
+This makes no claim about the distributed Lagrange server or published package.

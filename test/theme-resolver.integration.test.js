@@ -20,6 +20,7 @@ const integration = {skip: loadError && 'pinned Images public graph entry unavai
 const IMAGE = 'theme-resolution';
 const THEME = 'environment/themes/smalltalk-workbench/v1';
 const BLOCK = 'theme-reader';
+const OBSERVATION_BLOCK = 'theme-observer';
 const ref = objectId => ({kind: 'ref', imageId: IMAGE, objectId});
 const text = value => ({kind: 'text', value});
 const integer = value => ({kind: 'integer', value: String(value)});
@@ -35,7 +36,7 @@ const STOCK = [
   ['typography.ui.family', 'fontFamily', 'sans-serif'], ['typography.ui.size', 'fontSize', 13],
 ].map(([path, type, value]) => ({path, type, value}));
 
-async function setup(t, provision = true) {
+async function setup(t, provision = true, withObservation = false) {
   const runtime = await api.createRuntime({backend: {mode: 'mock'}});
   t.after(() => runtime.close());
   await runtime.images.createImage({id: IMAGE});
@@ -58,14 +59,37 @@ async function setup(t, provision = true) {
     result: 'object-read-result', types});
   await api.installImageObjectReadBinding({images: runtime.images, callableInterface: ref(callable.id),
     bindingId: 'theme-reader-binding', blockId: BLOCK});
+  if (withObservation) {
+    // Public Images ADR 0070 observation binding. The Theme owner consumes
+    // this SAME authorized lane as the generic EnvironmentShell/ProjectBrowser,
+    // never an image.history read or separate Theme watch channel.
+    const obsTypes = api.normalizeTypeDeclarations({
+      'obs-event': {kind: 'record', fields: [
+        {name: 'object-id', type: 'string'}, {name: 'kind', type: 'string'},
+        {name: 'cursor', type: 'string'},
+      ]},
+      'obs-result': {kind: 'record', fields: [
+        {name: 'events', type: {kind: 'list', element: 'obs-event'}},
+        {name: 'cursor', type: 'string'},
+      ]},
+    });
+    const obs = await api.installCallableInterfaceV2({images: runtime.images, imageId: IMAGE,
+      interfaceId: 'theme-observer-interface', functionName: 'observe',
+      parameters: ['string'], result: 'obs-result', types: obsTypes});
+    await api.installImageObservationBinding({images: runtime.images, imageId: IMAGE,
+      callableInterface: ref(obs.id), bindingId: 'theme-observer-binding', blockId: OBSERVATION_BLOCK});
+  }
   const adapter = createImageClientAdapter({...api, ...runtime});
   const calls = [];
   const errors = [];
-  const resolver = createThemeResolver({async readObject(request) {
-    calls.push(request);
-    try { return await adapter.readObject(request); }
-    catch (error) { errors.push(error); throw error; }
-  }});
+  const resolver = createThemeResolver({
+    observe: adapter.observe, observePull: adapter.observePull,
+    async readObject(request) {
+      calls.push(request);
+      try { return await adapter.readObject(request); }
+      catch (error) { errors.push(error); throw error; }
+    },
+  });
   const authorityFor = ids => runtime.authority.issue({principal: 'theme-reader',
     grants: ids.map(id => ({operation: 'object/read', resource: api.objectResource(IMAGE, id)}))});
   const allAuthority = async (except = []) => authorityFor((await runtime.images.listRecords(IMAGE))
@@ -250,6 +274,67 @@ test('the T4 derived appearance fixture is produced by actual authorized Theme i
   const result = await resolveUnchanged(f, 'appearance/derived');
   assert.deepEqual(result.tokens, derived);
   assert.notDeepEqual(result.tokens, STOCK);
+});
+
+test('T5 real Images authorized observations update the live catalog and DesignToken values', integration, async t => {
+  const f = await setup(t, true, true);
+  // Install an authorized candidate derived Theme BEFORE minting read grants:
+  // references (even in a catalog) do not grant access to new objects.
+  await putToken(f.runtime, 'live/accent', 'accent', 'color', text('#112233'));
+  await putTheme(f.runtime, 'live', THEME, ['live/accent']);
+  const authority = await f.allAuthority();
+  const updates = [];
+  const errors = [];
+  const waiting = new Map();
+  const onUpdate = (resolved, change) => {
+    updates.push({resolved, change});
+    for (const [n, wake] of waiting) {
+      if (updates.length >= n) {
+        waiting.delete(n);
+        wake();
+      }
+    }
+  };
+  const waitFor = count => {
+    if (updates.length >= count) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        waiting.delete(count);
+        reject(new Error('live Images observation did not reach update ' + count));
+      }, 15_000);
+      waiting.set(count, () => { clearTimeout(timer); resolve(); });
+    });
+  };
+  const follow = await f.resolver.followCatalogDefault({
+    imageId: IMAGE, authority, blockId: BLOCK, observationBlockId: OBSERVATION_BLOCK,
+    intervalMs: 10, onUpdate, onError: error => { errors.push(error); },
+  });
+  t.after(() => follow.stop());
+  assert.deepEqual(updates[0].resolved, {themeRef: ref(THEME), tokens: STOCK});
+  assert.equal(updates[0].change, null);
+  assert.equal(updates[0].resolved.tokens.find(t => t.path === 'accent').value, '#245a81');
+  // A deliberate ordinary-image write retargets the canonical catalog.
+  await f.runtime.images.putObject(IMAGE, {
+    id: 'environment/catalog', shape: ref('environment/shapes/catalog/v1'),
+    slots: {format: text('environment-catalog/v1'), defaultTheme: ref('live')},
+    indexed: [ref(THEME), ref('live')],
+  });
+  await waitFor(2);
+  assert.equal(updates.at(-1).resolved.themeRef.objectId, 'live');
+  assert.equal(updates.at(-1).resolved.tokens.find(t => t.path === 'accent').value, '#112233');
+  assert.equal(updates.at(-1).change.objectId, 'environment/catalog');
+  assert.deepEqual(Object.keys(updates.at(-1).change).sort(), ['cursor', 'kind', 'objectId', 'type'],
+    'the feed must disclose only opaque metadata, never records or revisions');
+  // A second ordinary write changes a selected DesignToken. One actual Images
+  // invalidation -> a fresh authorized full Theme traversal -> new scalar.
+  await putToken(f.runtime, 'live/accent', 'accent', 'color', text('#334455'));
+  await waitFor(3);
+  assert.equal(updates.at(-1).resolved.tokens.find(t => t.path === 'accent').value, '#334455');
+  assert.equal(updates.at(-1).change.objectId, 'live/accent');
+  assert.ok(f.calls.every(call => call.authority === authority && call.blockId === BLOCK));
+  follow.stop();
+  await follow.done;
+  assert.deepEqual(errors, [], 'no alternate fetch or hidden fallback was needed');
 });
 
 test('nearest overrides win, unrelated paths survive, shared refs stay authorized and fresh calls reread', integration, async t => {

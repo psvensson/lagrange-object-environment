@@ -12,6 +12,7 @@ import {createSelectionModel} from '../../src/selection-model.js';
 import {createEnvironmentShell} from '../../src/environment-shell.js';
 import {renderSemanticUiToDom} from '../../src/browser-renderer/dom-realizer.js';
 import {validateSemanticUi} from '../../src/semantic-ui.js';
+import {createThemeResolver} from '../../src/theme-resolver.js';
 
 // The PR B browser proof harness. Drives the BrowserRendererAdapter through
 // the full lifecycle against real Chrome WebGPU with the triangle Component.
@@ -433,6 +434,202 @@ window.__lagrangeProof = {
       return {before, intents, afterFirstTeardown};
     } finally {
       await Promise.all([a.adapter.destroyAll(), b.adapter.destroyAll(), c.adapter.destroyAll()]);
+    }
+  },
+
+  // T5: a real production BrowserRendererAdapter receives fresh resolved
+  // tokens as a HOST-SIDE update, not an attach/recreate. Preserve the
+  // original DOM node, typed text, focus and the descriptor-local intent.
+  async updateLiveThemeOnRealDom() {
+    const loadTokens = async name => {
+      const result = await fetch('../fixtures/theme/' + name + '-tokens.json');
+      if (!result.ok) throw new Error('missing Theme fixture ' + name);
+      return result.json();
+    };
+    const [stock, derived] = await Promise.all([loadTokens('stock'), loadTokens('derived')]);
+    mount.innerHTML = '';
+    const descriptor = {
+      kind: 'inspector',
+      subject: {kind: 'ref', imageId: 'img', objectId: 'live-theme-subject'},
+      parameters: {
+        fields: {title: {kind: 'text', value: 'Unchanged'}},
+        writable: ['title'],
+        references: [{kind: 'ref', imageId: 'img', objectId: 'other'}],
+      },
+    };
+    const adapter = makeAdapter({resolvedTokens: stock});
+    const plain = makeAdapter();
+    const intents = [];
+    adapter.onIntent((intent, handle) => intents.push({intent, handle}));
+    const handle = await adapter.createSurface({kind: 'tool-pane'});
+    await adapter.attachPresentation(handle, descriptor);
+    const root = mount.lastElementChild;
+    const edit = root.querySelector('.lagrange-tool-field-input');
+    edit.focus();
+    edit.value = 'Text typed during a Theme change';
+    const plainHandle = await plain.createSurface({kind: 'tool-pane'});
+    await plain.attachPresentation(plainHandle, descriptor);
+    const plainRoot = mount.lastElementChild;
+    const sample = node => ({
+      themed: node.classList.contains('lagrange-tool-themed'),
+      background: getComputedStyle(node).backgroundColor,
+      foreground: getComputedStyle(node).color,
+      fontSize: getComputedStyle(node).fontSize,
+      styleCount: node.querySelectorAll(':scope > style[data-lagrange-theme]').length,
+      base: node.style.getPropertyValue('--lagrange-surface-base'),
+      connected: node.isConnected,
+    });
+    try {
+      const before = sample(root);
+      const plainBefore = sample(plainRoot);
+      adapter.setResolvedTokens(derived);
+      const after = sample(root);
+      const stillSame = mount.firstElementChild === root
+        && root.querySelector('.lagrange-tool-field-input') === edit
+        && document.activeElement === edit
+        && edit.value === 'Text typed during a Theme change';
+      adapter.setResolvedTokens(derived);
+      const idempotent = sample(root);
+      let rejectedInvalid = false;
+      try {adapter.setResolvedTokens(derived.slice(0, -1));} catch (error) {
+        rejectedInvalid = error instanceof TypeError;
+      }
+      const afterInvalid = sample(root);
+      root.querySelector('.lagrange-tool-references button').click();
+      edit.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
+      adapter.setResolvedTokens(null);
+      const cleared = sample(root);
+      const stillSameAfterClear = mount.firstElementChild === root
+        && edit.value === 'Text typed during a Theme change';
+      adapter.setResolvedTokens(stock);
+      const restored = sample(root);
+      const plainAfter = sample(plainRoot);
+      await adapter.destroyAll();
+      let rejectedAfterDestroy = false;
+      try {adapter.setResolvedTokens(derived);} catch {rejectedAfterDestroy = true;}
+      return {before, after, idempotent, rejectedInvalid, afterInvalid, cleared, restored,
+        plainBefore, plainAfter, stillSame, stillSameAfterClear, intents, handle, rejectedAfterDestroy};
+    } finally {
+      await adapter.destroyAll();
+      await plain.destroyAll();
+    }
+  },
+
+  // T5 end-to-end host composition: the real ThemeResolver follows the
+  // existing metadata-only observation SHAPE, rereads a changed DesignToken
+  // through its authorized read port and applies tokens to the real browser
+  // renderer. Real Images lane issuance/ACL are proved separately in Node.
+  async observeAndRecolorLiveDom() {
+    const response = await fetch('../fixtures/theme/stock-tokens.json');
+    if (!response.ok) throw new Error('missing stock Theme fixture');
+    const stock = await response.json();
+    mount.innerHTML = '';
+    const imageId = 'live-theme-browser';
+    const ref = objectId => ({kind: 'ref', imageId, objectId});
+    const txt = value => ({kind: 'text', value});
+    const records = new Map();
+    for (const token of stock) {
+      records.set('stock/' + token.path, {
+        versionToken: 'opaque-token',
+        slots: {format: txt('environment-design-token/v1'), path: txt(token.path),
+          type: txt(token.type), value: (token.type === 'dimension' || token.type === 'fontSize')
+            ? {kind: 'integer', value: String(token.value)} : txt(token.value)},
+        indexed: [],
+      });
+    }
+    records.set('root', {
+      versionToken: 'opaque-root',
+      slots: {format: txt('environment-theme/root/v1'), name: txt('Root')},
+      indexed: stock.map(token => ref('stock/' + token.path)),
+    });
+    records.set('environment/catalog', {
+      versionToken: 'opaque-catalog',
+      slots: {format: txt('environment-catalog/v1'), defaultTheme: ref('root')},
+      indexed: [ref('root')],
+    });
+    const authority = {opaque: true};
+    const waiting = [];
+    const queued = [];
+    const emit = objectId => {
+      const change = {kind: 'object.put', objectId, cursor: 'obs:opaque', type: 'record.put'};
+      const next = waiting.shift();
+      if (next) next({value: change, done: false});
+      else queued.push(change);
+    };
+    const resolver = createThemeResolver({
+      async readObject({imageId: id, objectId, authority: supplied}) {
+        if (id !== imageId || supplied !== authority || !records.has(objectId)) {
+          throw new Error('unauthorized or missing Theme object');
+        }
+        return structuredClone(records.get(objectId));
+      },
+      async observePull({afterCursor}) {
+        if (afterCursor !== '') throw new Error('initial observation must anchor a live cursor');
+        return {events: [], cursor: 'obs-cursor/v1:anchor'};
+      },
+      observe() {
+        return {[Symbol.asyncIterator]() {
+          return {
+            next() {
+              if (queued.length) return Promise.resolve({value: queued.shift(), done: false});
+              return new Promise(resolve => waiting.push(resolve));
+            },
+            async return() {return {done: true};},
+          };
+        }};
+      },
+    });
+    const adapter = makeAdapter();
+    const handle = await adapter.createSurface({kind: 'tool-pane'});
+    await adapter.attachPresentation(handle, {
+      kind: 'inspector',
+      subject: ref('view'),
+      parameters: {fields: {name: txt('User text')}, writable: ['name']},
+    });
+    const root = mount.lastElementChild;
+    const input = root.querySelector('.lagrange-tool-field-input');
+    input.value = 'typed and retained';
+    const updates = [];
+    const errors = [];
+    let follower;
+    const awaitCount = async (predicate, label) => {
+      for (let i = 0; i < 300; i++) {
+        if (predicate()) return;
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+      throw new Error('live Theme ' + label + ' did not arrive');
+    };
+    try {
+      follower = await resolver.followCatalogDefault({
+        imageId, authority, blockId: 'read-object', observationBlockId: 'observe',
+        onUpdate({tokens}) {
+          adapter.setResolvedTokens(tokens);
+          updates.push(tokens.find(t => t.path === 'surface.base').value);
+        },
+        onError(error) {
+          errors.push(error.message);
+          adapter.setResolvedTokens(null); // explicit withdrawal, no stock fallback
+        },
+      });
+      const initial = getComputedStyle(root).backgroundColor;
+      records.get('stock/surface.base').slots.value = txt('#121922');
+      emit('stock/surface.base');
+      await awaitCount(() => updates.length === 2, 'updated token');
+      const changed = getComputedStyle(root).backgroundColor;
+      const nodeUnchanged = root === mount.firstElementChild
+        && input === root.querySelector('.lagrange-tool-field-input')
+        && input.value === 'typed and retained';
+      records.get('stock/surface.base').slots.value = txt('invalid CSS value');
+      emit('stock/surface.base');
+      await follower.done;
+      const afterError = {themed: root.classList.contains('lagrange-tool-themed'),
+        styleCount: root.querySelectorAll(':scope > style[data-lagrange-theme]').length,
+        base: root.style.getPropertyValue('--lagrange-surface-base')};
+      return {initial, changed, nodeUnchanged, updates, errors, afterError};
+    } finally {
+      follower?.stop();
+      await follower?.done;
+      await adapter.destroyAll();
     }
   },
 

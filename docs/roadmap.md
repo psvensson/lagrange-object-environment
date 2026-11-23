@@ -102,11 +102,13 @@ Images `9462476` proves chosen identities, write-free replay and divergent refus
 Node image (`test/images-provisioning-admission.integration.test.js`). T1 now provisions the compact
 Smalltalk stock graph; T2 resolves explicit authorized Theme refs with inheritance and complete
 token validation. See [installation](theme-installation.md) and [resolution](theme-resolution.md).
-T3 now resolves the provisioned catalog's default through authorized reads, preserving
-legitimate default changes. T4 consumes the same resolved semantic tokens in actual
-browser CSS and GTK widget styles at host composition; this is static per-Session
-appearance, not observation-driven updates or profile preference selection.
-See [Theme appearance](theme-appearance.md).
+T3 resolves the provisioned catalog default through authorized reads. T4 consumes
+the same resolved semantic tokens in actual browser CSS and GTK widget styles.
+T5 follows explicit Themes and catalog defaults through the existing authorized
+observation lane with dependency-aware rereads, and updates existing DOM/GTK panes
+in place. Host composition must opt in to the follow; automatic per-principal
+selection and every-session production lifecycle wiring remain open.
+See [Theme appearance](theme-appearance.md) and [live Themes](theme-live.md).
 
 - [ ] define the minimal ordinary-object Shapes/classes for `EnvironmentCatalog`, `Theme`, `DesignToken` and `EnvironmentProfile`; keep complete Theme authority graph-visible rather than one opaque DTCG/CSS blob
 - [ ] add one idempotent environment provisioner that installs those Shapes/classes and creates the single stable-id `EnvironmentCatalog` plus canonical stock/default Theme graph; normal Sessions never create shared defaults
@@ -116,7 +118,8 @@ See [Theme appearance](theme-appearance.md).
 - [x] make the GTK/native realization consume the same resolved token set through pane-scoped native GTK CssProviders; A/B tests prove distinct appearances from the same ThemeResolver outputs without global state (T4)
 - [ ] keep SemanticUi renderer-neutral: add an appearance-role field only if a concrete presentation proves node semantics alone are insufficient; never pass CSS/GTK values across the semantic boundary
 - [ ] implement DTCG import/export as a projection of Theme/DesignToken objects, with Style Dictionary/Penpot interoperability treated as tooling at the edge rather than runtime authority
-- [ ] use the ordinary authorized observation/live-query path so an authorized Theme/DesignToken edit re-resolves and updates every affected live view without polling or a theme-specific distributed channel
+- [x] establish T5 authorized live following of explicit Themes and catalog defaults with cursor bootstrap, inherited/shadowed-token dependency tracking, catalog retargeting and a host callback to update the same DOM/GTK panes without a second Theme poller
+- [ ] wire T5 into every production Session and relevant live view, including per-principal profile/default precedence and error UX; the existing authorized observation lane is pull-based rather than push
 - [ ] build the first generic Theme presentation/editor from ordinary object presentations/Commands: choose a Theme, inspect/edit representative tokens, and see DOM+GTK update through the same live path
 
 Success: visual style can be changed substantially by editing ordinary image objects, the same Theme produces renderer-appropriate DOM and GTK output, and no CSS/DTCG/native toolkit state can become a competing durable source of truth.
