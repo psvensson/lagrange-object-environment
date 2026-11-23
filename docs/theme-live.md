@@ -118,3 +118,32 @@ and unchanged action payloads.
 Per-principal EnvironmentProfile selection, richer editing, automatic
 lifecycle composition for every production host, and measured distributed
 Lagrange cluster use remain separate acceptance milestones.
+
+
+## Session-scoped lifetime (T6 browser candidate)
+
+The browser/JavaScript host may opt in to the reviewed
+[Session Theme lifecycle composition](architecture/session-theme-composition.md):
+
+```js
+const lifecycle = createSessionThemeLifecycle({
+  session, compositor, themeResolver,
+  setResolvedTokens: tokens => browserRenderer.setResolvedTokens(tokens),
+  onThemeError: error => showThemeError(error), // synchronous, non-awaiting
+});
+await lifecycle.start({
+  selection: {kind: 'catalog-default', imageId},
+  authority, blockId: readBlockId, observationBlockId,
+});
+// On Session teardown: stop the authorized follow before Compositor.destroy.
+await lifecycle.close();
+```
+
+This is explicit host composition, **not** automatic login-time registration.
+Errors withdraw styling and surface through the required synchronous host
+callback. Closing during startup rejects with a specific cancellation error
+instead of claiming a Theme was installed. Neither asynchronous callbacks nor
+an unowned JS→GTK style dispatch are admitted. The native Session port still
+exposes only the six lifecycle operations; a separate GTK-thread bridge is
+required for native live-Session wiring. There is no per-principal profile
+selection until a reviewed ProfileResolver/uniqueness contract exists.

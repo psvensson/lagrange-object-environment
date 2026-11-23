@@ -1,6 +1,6 @@
 # Session-scoped live Theme composition (T6)
 
-Status: **revised browser/JavaScript interaction contract for fresh independent plan review; not implemented**.
+Status: **browser/JavaScript T6 implementation candidate on a stacked review branch; not merged and Beads gate outstanding**. Fresh independent Copilot plan review found and resolved three design gaps. Source implementation is separately subject to exact-head tests and independent diff review.
 Owner: `SessionThemeLifecycle` (planned `src/session-theme-lifecycle.js`).
 Source baseline: Object Environment `main@1dc8adb342d6fc486813b245cb10c67bfd005e94`.
 Decision basis: ADR 0015, ADR 0011 and existing T4/T5 contracts.

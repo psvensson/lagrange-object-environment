@@ -98,3 +98,4 @@ export {
 export {createImageReadConnection} from './image-read-connection.js';
 
 export {createThemeResolver, ThemeResolutionError} from './theme-resolver.js';
+export {createSessionThemeLifecycle, SessionThemeStartupCancelledError} from './session-theme-lifecycle.js';
