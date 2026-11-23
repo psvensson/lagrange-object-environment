@@ -156,24 +156,30 @@ The first pressure comes from real Cuis classes, methods and objects that Images
 
 DONE (E1-E3, Beads eij.1/eij.2/eij.3). The three checklist items below were written as one
 "browse and edit Cuis code" ambition; E1-E3 established the semantic path, and what they did NOT
-establish is as important as what they did, so each is split into the proven part and the part that
-awaits a LOWER contract.
+establish is as important as what they did, so each is split into the proven part and
+remaining end-user acceptance. Images ADR 0096 subsequently supplied retained source and metadata
+as optional authorized description fields; they are now presented when present.
 
 - [x] present one Cuis-origin, Images-native class through ordinary discovery: name, superclass,
       side, declared layout, its own selectors, and the class relations as locators (E1). ORIGIN IS
       NOT IDENTITY: a hand-authored native class and a Cuis-imported one take the identical route,
       and nothing in the Environment can branch on origin
-- [ ] present `protocol`/`category` and durable Cuis `provenance` on a class. AWAITING A LOWER
-      CONTRACT, not deferred by choice: Images owns no durable Cuis association today and truthfully
-      answers `provenance: null`, so the projector OMITS the row rather than rendering an empty one
+- [x] present retained class/method category and provenance supplied by Images ADR 0096
+      through the ordinary authorized descriptions, without making origin a routing identity.
+      Missing associations remain absent; no renderer invents a package or an empty row
+- [ ] prove provenance retention over a real imported Cuis package in the running user tool,
+      rather than inferring it from an in-memory fixture
 - [x] browse that native class to native methods, preserving native method identity, as a SECOND
       independently authorized read (E2). Since Images ccd8321 that read is `object/read` on the
       declaring class plus `smalltalk-method/read` on the logical `{image, class, selector}`
       position, both before resolution
-- [ ] present method SOURCE and protocol. AWAITING THE SAME LOWER CONTRACT: the class builder
-      installs a method's semantic program and retains no text it compiled from, so
-      `descriptor.source` is truthfully `null` before AND after a replacement. THIS IS NOT A SOURCE
-      BROWSER, and E3 did not make it one
+- [x] display Images-retained method source (ADR 0096) as a read-only, whitespace-
+      preserving SemanticUi text role in both DOM and GTK; replacement remains an independent
+      transient input, never an implicit edit of the displayed source. Where source was not
+      retained, `descriptor.source` is `null` and no source pane is manufactured
+- [ ] finish an end-user source workflow across a real imported package, including source
+      retention and authority/conflict proof; code navigation, syntax-aware editing and
+      evaluation remain separately scoped
 - [x] route the first useful EDIT operation through SemanticUi intent -> ordinary Command -> public
       Images semantic operation -> fresh authoritative reread (E3): replace ONE existing native
       method from EXPLICITLY SUPPLIED new source, with a transient position token, a genuine stale

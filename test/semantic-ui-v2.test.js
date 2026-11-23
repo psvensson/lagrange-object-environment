@@ -14,11 +14,10 @@ import {
 // argument to an interaction, deliberately distinguishable from a `field`, which
 // displays semantic state that exists.
 //
-// The distinction is the whole point. Images truthfully answers `source: null`
-// for a native method, and the projector already OMITS Source/Provenance rows
-// rather than rendering them empty (Images jtz.1), because an empty row would
-// imply a durable field exists. An editable empty `field` labelled "Source"
-// would assert exactly that. `input` says only "this view accepts text here".
+// The distinction is the whole point. Images may truthfully answer
+// `source: null` for methods installed without retention. Retained source is
+// displayed read-only through a separate text role; an empty editable Source
+// field would invent current state. `input` says only "supply text here".
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = resolve(HERE, 'fixtures/semantic-ui');

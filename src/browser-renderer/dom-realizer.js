@@ -54,8 +54,12 @@ function isToolKind(kind) {
 function renderNode(node, listen, onAction, onEdit, onSubmitInput) {
   switch (node.kind) {
     case 'text': {
-      const el = document.createElement(node.role === 'heading' ? 'h3' : 'p');
+      // The authorized Smalltalk source is a READ-ONLY text presentation.
+      // A pre element preserves newlines, spaces and syntax characters without
+      // interpreting any of them as DOM/HTML or an editable current value.
+      const el = document.createElement(node.role === 'source' ? 'pre' : node.role === 'heading' ? 'h3' : 'p');
       if (node.role === 'reason') el.className = 'lagrange-tool-reason';
+      if (node.role === 'source') el.className = 'lagrange-tool-source';
       el.textContent = node.text;
       return el;
     }

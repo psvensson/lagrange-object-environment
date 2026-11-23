@@ -51,6 +51,26 @@ fn value_text(value: &Value) -> String {
     }
 }
 
+/// Display Images-owned, already-authorized native Smalltalk provenance.
+/// Literal port of appendSmalltalkProvenanceFields in src/semantic-ui.js.
+fn append_smalltalk_provenance_fields(children: &mut Vec<Value>, provenance: Option<&Value>) {
+    let Some(metadata) = provenance.and_then(Value::as_object) else {
+        return;
+    };
+    let mut entries: Vec<_> = metadata.iter().collect();
+    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+    for (key, value) in entries {
+        let Some(text) = value.as_str() else { continue };
+        let label = match key.as_str() {
+            "category" => "Category".to_string(),
+            "file" => "File".to_string(),
+            "package" => "Package".to_string(),
+            _ => format!("Provenance: {key}"),
+        };
+        children.push(json!({"kind": "field", "label": label, "text": text}));
+    }
+}
+
 /// Project a presentationDescriptor (plain JSON: {kind, subject, parameters})
 /// to a validated SemanticUi/v1 document. Literal port of
 /// semanticUiForPresentation.
@@ -257,13 +277,11 @@ pub fn project(descriptor: &Value) -> Result<SemanticUi, String> {
             };
             children.push(json!({"kind": "collection", "label": label, "items": items}));
         }
-        // `provenance` is deliberately NOT rendered; Images owns no durable
-        // native-class provenance today (Images jtz.1).
+        append_smalltalk_provenance_fields(&mut children, smalltalk_class.get("provenance"));
     } else if kind == "native-method" {
         // The authorized native Smalltalk METHOD description (Images ADR 0087).
-        // `source` and `provenance` are truthful ABSENCES and their rows are
-        // OMITTED, exactly as the JS projector omits them: an empty row would
-        // suggest a durable field exists.
+        // The authorized descriptor may contain retained source/provenance
+        // (Images ADR 0096). A non-retained method still has no source row.
         children.push(json!({
             "kind": "field",
             "label": "Selector",
@@ -284,6 +302,11 @@ pub fn project(descriptor: &Value) -> Result<SemanticUi, String> {
             "label": "Method",
             "text": smalltalk_method.get("method").map(value_text).unwrap_or_default(),
         }));
+        append_smalltalk_provenance_fields(&mut children, smalltalk_method.get("provenance"));
+        if let Some(source) = smalltalk_method.get("source").and_then(Value::as_str) {
+            children.push(json!({"kind": "text", "role": "heading", "text": "Source"}));
+            children.push(json!({"kind": "text", "role": "source", "text": source}));
+        }
     } else if kind == "unavailable-reference" || kind == "unauthorized-reference" {
         let base = if kind == "unauthorized-reference" { "Not authorized" } else { "Unavailable" };
         let reason = match params.get("reason").and_then(|r| r.as_str()) {

@@ -17,8 +17,8 @@ import {UNAVAILABLE_REF_KIND, UNAUTHORIZED_REF_KIND} from './object-navigator.js
  * ORIGIN IS NOT IDENTITY. A class that arrived through Images' Cuis native
  * import IS a native class, and takes this one route. Nothing in this module
  * can branch on origin even in principle: the description carries no origin,
- * and `provenance` is `null` because Images owns no durable association today
- * (that is the truthful answer, not a stub — see Bead eij.2 and Images jtz.1).
+ * and Images-owned provenance, when retained, is merely metadata for display
+ * (ADR 0096), not a second routing or identity path.
  *
  * A REF IS NEVER AUTHORITY (ADR 0005, as amended). The `superclass` and
  * `classSide` refs a description carries are LOCATORS. This module never
@@ -90,11 +90,10 @@ const NATIVE_SMALLTALK_VIEW_ID = 'native-smalltalk-view';
  *
  * It is an INPUT, not a field (SemanticUi/v2, Bead ngh): the user supplies a
  * transient ARGUMENT — new source — to an interaction. It is emphatically not an
- * edit of a displayed value, and there is nothing here it could be an edit OF:
- * Images keeps no text a native method was compiled from, so
- * `descriptor.source` is truthfully `null` before AND after a replacement. E3 is
- * REPLACEMENT FROM EXPLICITLY SUPPLIED SOURCE, not a source editor, and this
- * affordance says exactly that and nothing more.
+ * edit of a displayed value: while source may be retained for display,
+ * `descriptor.source` may be null for methods installed without source
+ * retention. Even when retained source is displayed read-only, E3 remains
+ * REPLACEMENT FROM EXPLICITLY SUPPLIED SOURCE, not an implicit source editor.
  *
  * The ARRAY is the key space, enumerated once — the projector keys each input by
  * its index here and `resolveMethodReplacementInput` indexes this same array, so

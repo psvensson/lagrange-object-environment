@@ -277,14 +277,27 @@ fn render_node(
 ) {
     match node {
         Node::Text { role, text } => {
-            let label = gtk4::Label::new(Some(text));
-            label.set_halign(gtk4::Align::Start);
-            match role.as_deref() {
-                Some("heading") => label.set_widget_name("lagrange-tool-heading"),
-                Some("reason") => label.set_widget_name("lagrange-tool-reason"),
-                _ => {}
+            if role.as_deref() == Some("source") {
+                // Read-only code presentation, not a method editor or a second
+                // source owner. Preserve the exact newlines/whitespace handed
+                // down by the authorized Images semantic read.
+                let view = gtk4::TextView::new();
+                view.set_widget_name("lagrange-tool-source");
+                view.set_monospace(true);
+                view.set_editable(false);
+                view.set_cursor_visible(false);
+                view.buffer().set_text(text);
+                container.append(&view);
+            } else {
+                let label = gtk4::Label::new(Some(text));
+                label.set_halign(gtk4::Align::Start);
+                match role.as_deref() {
+                    Some("heading") => label.set_widget_name("lagrange-tool-heading"),
+                    Some("reason") => label.set_widget_name("lagrange-tool-reason"),
+                    _ => {}
+                }
+                container.append(&label);
             }
-            container.append(&label);
         }
         Node::Field { label, text, key, editable } => {
             let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);

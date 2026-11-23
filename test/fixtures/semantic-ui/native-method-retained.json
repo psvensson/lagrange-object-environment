@@ -1,0 +1,67 @@
+{
+  "kind": "semantic-ui",
+  "version": 2,
+  "root": {
+    "kind": "group",
+    "title": "Method: childFirst",
+    "children": [
+      {
+        "kind": "text",
+        "role": "heading",
+        "text": "Method: childFirst"
+      },
+      {
+        "kind": "field",
+        "label": "Selector",
+        "text": "childFirst"
+      },
+      {
+        "kind": "field",
+        "label": "Side",
+        "text": "instance"
+      },
+      {
+        "kind": "field",
+        "label": "Declaring class",
+        "text": "-> smalltalk/class/BrowseChild"
+      },
+      {
+        "kind": "field",
+        "label": "Method",
+        "text": "-> smalltalk/class/BrowseChild/method/Y2hpbGRGaXJzdA"
+      },
+      {
+        "kind": "field",
+        "label": "Category",
+        "text": "accessing"
+      },
+      {
+        "kind": "field",
+        "label": "File",
+        "text": "YAXO.pck.st"
+      },
+      {
+        "kind": "field",
+        "label": "Package",
+        "text": "YAXO"
+      },
+      {
+        "kind": "text",
+        "role": "heading",
+        "text": "Source"
+      },
+      {
+        "kind": "text",
+        "role": "source",
+        "text": "childFirst\n  ^ '<tag> & data'\n"
+      },
+      {
+        "kind": "input",
+        "key": 0,
+        "label": "New source",
+        "valueKind": "text",
+        "submitLabel": "Replace"
+      }
+    ]
+  }
+}

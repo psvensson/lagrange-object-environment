@@ -331,3 +331,20 @@ Do not use this epic to pre-emptively build:
 - a generic source editor before source semantics/editing Commands exist;
 - browser-specific durable state outside Perspectives/image objects;
 - personality-owned renderers, activation routers or authority mechanisms.
+
+
+## Retained native Smalltalk source and provenance (Images ADR 0096)
+
+The canonical Images class/method description is the only source for displayed
+class/package provenance, method category and retained method text. The native
+Smalltalk browser preserves the entire authorized descriptor by identity; the
+SemanticUi projector displays optional provenance keys as read-only fields and
+optional source as an exact-text `source` role, realized as a non-editable
+monospace text view by browser DOM and Linux GTK. Both ports are pinned to the
+same retained/absent fixture corpus. A missing or null source means the code
+was not retained, not that the method body is empty. No compiled-artifact
+reconstruction, importer-specific branch or inferred method identity is allowed.
+
+The existing `New source` input remains a separate transient replacement
+argument. Reading source grants no write permission; replacement still needs
+its own authorized method-position operation, conflict token and reread.
