@@ -1,164 +1,241 @@
 # Session-scoped live Theme composition (T6)
 
-Status: **revised browser/JavaScript interaction contract for fresh independent plan review; not implemented**.
+Status: **proposed browser/JavaScript interaction contract; independent plan review required before implementation**.
 Owner: `SessionThemeLifecycle` (planned `src/session-theme-lifecycle.js`).
+Bead: `lagrange-object-environment-0k7.4`.
 Source baseline: Object Environment `main@1dc8adb342d6fc486813b245cb10c67bfd005e94`.
 Decision basis: ADR 0015, ADR 0011 and existing T4/T5 contracts.
 
 ## Problem and current executable evidence
 
 `Session` in `src/model.js` holds an external principal, Perspective and transient
-state, **not** renderer resources, grants, subscriptions or a teardown routine.
-`Compositor.destroy()` owns all logical-view and renderer destruction,
-and `ThemeResolver.followCatalogDefault/followTheme` owns one authorized
-metadata-only Images observation lane, graph dependencies and stop fencing.
-The browser and GTK host adapters already expose concrete in-place
-`setResolvedTokens` / `set_resolved_tokens` controls outside the six
-RendererAdapter lifecycle methods. **But the native JS-host port exposes
-only the six renderer lifecycle operations**, and the GTK setter must run
-on the GTK-owning thread. There is no reviewed native live-style dispatch
-bridge. Initial T6 is therefore **browser/JavaScript host composition only**;
-native Session lifecycle integration is blocked on a separately designed
-host-only scalar dispatch bridge. Nothing currently guarantees that a browser
-Session starts exactly one follow, withdraws styling on denial, reports
-errors, or stops the follow **before** its Compositor destroys views.
+state. It has no renderer resources, grants, subscriptions or close routine.
+`Compositor` owns logical views and renderer destruction. `ThemeResolver`
+owns authorized reads, inheritance, dependency tracking, observation and stop
+fencing. The browser and GTK adapters already expose in-place style controls.
+Nothing currently couples one Session's follow to its Compositor's teardown.
 
-## Single cross-subsystem owner
+The native JS renderer port exposes only six lifecycle operations, while
+`LinuxRendererAdapter.set_resolved_tokens` must run on the GTK-owning thread.
+There is no reviewed native live-style dispatch bridge. This slice provides
+**browser/JavaScript composition only**, without claiming native Session wiring
+or changing the renderer-neutral meaning of Theme tokens.
 
-One opt-in `SessionThemeLifecycle` composition owns **only the arrow**
-`Session + ThemeResolver follow -> host renderer styling -> Compositor teardown`.
-It never decides Theme inheritance, catalog semantics, authority policy,
-profile selection, image provisioning, view identity or native CSS/GTK style.
+## Single owner and construction boundary
 
-Inputs are injected, required current objects: a `Session`, its
-`Compositor`, the existing `ThemeResolver`, the browser host's synchronous
-`BrowserRendererAdapter.setResolvedTokens` (bound as a scalar-only function),
-and a **synchronous** host error-reporting callback.
-The composition owns the subscription lifetime, not the Compositor or the
-renderer implementation. Neither callback may return a Promise or other
-thenable; otherwise a reporter awaiting `close()` would deadlock the
-ThemeResolver's awaited `onError` and styling could complete after teardown.
-A thenable return is a **contract error**, never awaited. Its rejection must
-be observed/handled so it cannot leak as an unhandled rejection. Already
-started synchronous style operations finish in one JS turn, while closing
-prevents subsequent operations from beginning.
+`SessionThemeLifecycle` owns the interaction
+`Session + ThemeResolver follow -> host style control -> Compositor teardown`.
+It delegates Theme semantics to ThemeResolver, view state and resource-error
+mapping to the existing Compositor, and CSS realization to the host adapter.
+It neither selects a profile nor provisions an image.
 
-Proposed public factory:
+The factory receives a canonical `Session`, its fresh browser `rendererAdapter`,
+the existing `themeResolver`, and a synchronous `onThemeError` reporter. It
+creates the canonical Compositor internally with `createCompositor`, keeping
+that raw object private. It publishes a frozen forwarding facade with the same
+view methods and **`compositor.destroy === lifecycle.close`**. It does not
+copy view state or replace any Compositor admission, focus or error policy.
+There is no separately exposed raw `destroy` that can bypass follow retirement.
+
+Private module WeakSets claim the Session and actual renderer-adapter identities
+once. A second factory using either already-claimed identity rejects before
+starting any work, including after closure. A new Session needs a fresh adapter.
+Validation happens before either identity is claimed. These weak custody sets
+contain no principal mapping, tokens, grants or durable preferences.
+
+Participating hosts give their consumers the published Compositor facade and
+route shutdown through that facade or `close`. They do not separately destroy
+the underlying renderer, share it with another independently created Compositor,
+or prepopulate it with views outside this composition. Existing hosts that do
+not opt in retain their existing lifecycle. The new API is reusable composition,
+not a claim that every production host has already adopted it.
+
+Proposed public API:
 
 ```js
 const lifecycle = createSessionThemeLifecycle({
-  session, compositor, themeResolver, setResolvedTokens, onThemeError,
+  session,
+  rendererAdapter, // fresh BrowserRendererAdapter; synchronous setResolvedTokens
+  themeResolver,
+  onThemeError,    // synchronous, required
 });
-await lifecycle.start({
-  selection: {kind: 'catalog-default', imageId},
-  authority, blockId: readBlockId, observationBlockId,
-});
-// Or: selection: {kind: 'explicit', themeRef}
-await lifecycle.close(); // idempotent: follow stop -> compositor.destroy()
+const {compositor} = lifecycle;
+try {
+  await lifecycle.start({
+    selection: {kind: 'catalog-default', imageId},
+    authority, blockId: readBlockId, observationBlockId,
+  });
+  // Or selection: {kind: 'explicit', themeRef}.
+  // Open/present views through compositor; observe lifecycle.done for failure.
+} finally {
+  await compositor.destroy(); // same single-flight operation as lifecycle.close()
+}
 ```
 
-A selection is explicit, tagged and image-local. The Session's authenticated
-`principal` is **not** an authority token, never passed as a substitute for
-`authority`, and never used to guess an `EnvironmentProfile`. Catalog-default
-absence/denial/malformed state fails explicitly; no stock palette is fabricated.
+The factory returns `{compositor, start, done, close}`. The Session's principal
+is descriptive identity, never an authority token or a profile lookup shortcut.
+Each follow receives exactly its caller's authority and read/observation binding
+ids. Only resolved scalar tokens reach the adapter; Theme refs, cursors and
+grants do not. Absence, denial or invalid catalog state never selects a palette
+from code. The tagged selection is explicit and image-local.
 
-## Sequencing and failure contract
+## Start and terminal follow result
 
-1. The browser host creates its Session, renderer and Compositor normally,
-   then starts this **opt-in** lifecycle. Duplicate `start()` invocations
-   on **one lifecycle instance** are rejected; another lifecycle must not be
-   constructed for the same renderer/Compositor by the host. A closed lifecycle
-   cannot be restarted. No shared/global Session registry is created.
-2. Before first styled view state is assumed, the selected follow opens
-   the existing authorized observation lane and returns an actual resolved
-   Theme through its `onUpdate` callback; the host supplies the complete
-   validated scalar token set to `setResolvedTokens`, not the Theme ref,
-   principal, authority, cursor, or any stored object. The observed cursor is
-   anchored inside ThemeResolver before its initial authorized read.
-3. Errors while starting reject `start()` and report through the one required
-   **synchronous** error callback; no subscription or old style remains as a
-   silent fallback. A special case is **caller-requested cancellation**:
-   when `close()` wins during bootstrap, ThemeResolver may return a stopped
-   follow handle with NO initial `onUpdate`. The lifecycle explicitly detects
-   its aborted signal or closing state and **rejects `start()` with a
-   distinguishable cancellation error**, without calling `onThemeError` or
-   reporting success. This result is not a Theme read/permission failure.
-   Later read/validation/render errors withdraw styling using synchronous
-   `setResolvedTokens(null)`, report the original error, and retire the
-   follow. If withdrawal also fails, the host error callback receives
-   both original and withdrawal errors explicitly, never masking the first.
-   No retry/poll loop is invented.
-4. Closing is single-flight and idempotent. It aborts the follow immediately,
-   lets the follower settle without waiting for uncancellable underlying reads,
-   and then awaits `Compositor.destroy()` exactly once. A concurrent start
-   must reject as cancelled, never report a successful active subscription.
-   The host callback contract is synchronous and non-awaiting: a reporter
-   may **call `close()` without awaiting its Promise**; it may not await
-   `close()` inside the ThemeResolver error callback. Error-handler failures
-   are observed and surfaced through the lifecycle result rather than
-   causing unhandled Promise rejections or trapping teardown. No async
-   renderer callback can outlive close because it is disallowed.
-   Closing cannot invalidate another Session's renderers.
-5. No control-plane identity, grant, observation cursor, CSS, GPU resource,
-   selected Theme id or durable preference is put into `Session.state`,
-   Perspective, SemanticUi or any image object by this composition.
+The first `start` invocation owns the one startup attempt. Duplicate calls and
+calls after closure reject without reporting a Theme failure, withdrawing an
+active Theme, starting a second follow or destroying an existing composition.
+A failed first attempt is terminal; there is no implicit retry or restart.
 
-## Counterexamples / independent falsification
+The lifecycle owns an AbortController before dispatching the follow, including
+before the initial observation anchor returns. It delegates anchoring and every
+read to ThemeResolver. Successful start requires an accepted initial synchronous
+style application and no intervening close or terminal failure. A stopped follow
+handle alone is not evidence of readiness.
 
-- Two simultaneous Sessions with different authorized Themes: one mutation
-  refreshes only the permitted Session and destroying one does not change
-  the other's style, view handles, input text or focus.
-- A catalog default or inherited DesignToken update reaches the same live
-  pane through the canonical ThemeResolver; unrelated metadata is ignored.
-- Denial and a malformed Theme update call the one error channel and withdraw
-  styling; no static fallback or stale success status is published.
-- Closing during a held **startup read** and during a held **refresh read**
-  settles promptly; releasing the lower reads later launches no new reads
-  or DOM updates. No callback runs after closure. The concurrent `start()`
-  rejects with a cancellation-specific error rather than reporting success,
-  and the ordinary Theme error callback is not invoked by close.
-- Repeated `close` executes Compositor teardown once; duplicate `start`
-  and startup after close reject. Explicit startup cancellation is distinct
-  from a lower `AbortError`. A synchronous reporter that triggers `close()`
-  (without awaiting it) cannot deadlock, and a misbehaving callback returning
-  a pending/rejecting Promise is rejected as a contract violation, with that
-  Promise's rejection observed. A throwing renderer/error callback never
-  strands a subscription or creates an unhandled rejection.
-- Existing `RENDERER_ADAPTER_METHODS` remains exactly six. The actual
-  browser DOM style update preserves a typed input/focus.
-- **Native-specific blocked case:** `hosts/linux/src/js_env/renderer_port.rs`
-  currently exposes only six operations. The separate, independent native
-  bridge plan must name its GTK-thread dispatch/ack/cancellation owner and
-  falsify a held queued style apply and withdrawal after Session close,
-  before native Session T6 can be claimed.
+When caller-requested close wins during bootstrap, `start` rejects with an
+exported `SessionThemeCancelledError`, and the Theme reporter is not called.
+A lower layer's independently thrown `AbortError` is an ordinary failure. The
+lifecycle distinguishes cancellation by its own close state, not an error name.
 
-## Out of scope / rejected approaches
+A startup or later read, validation or style failure retires the follow,
+withdraws styling with `rendererAdapter.setResolvedTokens(null)`, and invokes
+`onThemeError` once. It preserves existing view identities and user input;
+failure itself does **not** destroy the Compositor. The host must close its
+composition in its normal/failure cleanup path, including after rejected start.
+This deliberate separation allows an existing pane to display a diagnostic
+without a replacement Theme. No fallback, retry or second polling loop appears.
 
-**Per-principal preferences are not implemented.** ADR 0015 reserves the
-authenticated-principal -> profile mapping and safe lazy uniqueness to
-`ProfileResolver`, and lower public uniqueness/lookup capability has not
-been established here. This slice must not scan all profiles, auto-create
-records on login or infer authority from a principal key. A separate Bead
-and a verified lower contract are required before profile selection.
+`done` is the **terminal follow result**, not proof of renderer destruction:
 
-A seventh renderer operation, an observer per widget, global GTK/CSS state,
-an unowned JS->GTK style message, asynchronous style/error callbacks inside
-the current lifecycle, an in-memory persistent Theme default, reimplementing
-authorized observation, weakening read authorization or reviving obsolete
-server releases are rejected as duplicate owner/fallback behavior.
-**Native Session binding is explicitly blocked** until a separately reviewed
-GTK-thread, host-only scalar style bridge exists. The existing GTK T4/T5
-adapter styling tests stay green but do NOT prove that bridge.
-Native and cloud deployment acceptance remain separately gated.
+- It resolves when following has retired because of normal close/cancellation,
+  including close before start.
+- It rejects when following has retired because of a startup/refresh failure,
+  including failed withdrawal or reporting as defined below.
+- It does not wait for or include the Compositor's later destruction. `close`
+  is the complete resource-teardown result.
+
+The owner attaches rejection observers immediately to every background promise,
+including `done`. A consumer can still await the original rejected promise;
+internal observation does not convert failure into success.
+
+## Callback and error contract
+
+The real browser adapter's `setResolvedTokens` and the host reporter must finish
+synchronously, without returning Promises/thenables. The adapter already validates
+and applies styles synchronously. A reporter may trigger `close()` without
+awaiting or returning that Promise. The lifecycle never waits for user reporting
+inside ThemeResolver's awaited error callback, so reporter-to-close reentrancy
+cannot create a wait cycle.
+
+A thenable return is a contract violation. Its rejection is observed and it is
+not awaited. The lifecycle reports that violation and completes its own cleanup.
+This check **cannot undo arbitrary side effects already scheduled by an invalid
+callback**. No-late-style guarantees apply to the supported synchronous browser
+setter, not arbitrary asynchronous injected host code.
+
+Failure has one ordered record: original Theme/start/style error, optional
+withdrawal error, then optional reporter error. The reporter receives the
+original error or an `AggregateError` containing original plus withdrawal error.
+It is never called recursively to report its own failure. `start` (when startup
+failed) and `done` reject with the same recorded follow failure: preserve the
+original error object if it is the only failure, otherwise use an `AggregateError`
+with the original as `cause` and ordered underlying errors. Thrown values are
+preserved, not replaced by strings. A later rejection of an unsupported callback's
+thenable is handled but cannot rewrite an already-settled result.
+
+## Close and reentrancy contract
+
+`close` is single-flight and idempotent. It publishes its one Promise and closing
+state **before** aborting the follow or invoking any external code. Every close
+caller, including reentrant calls through the published Compositor, receives that
+same Promise and eventually the same fulfillment or rejection.
+
+Close immediately aborts the already-owned signal. It waits for the canonical
+follow start/worker to retire, without waiting for uncancellable lower reads or
+for invalid callback thenables, then attempts the private Compositor's `destroy`
+exactly once. Compositor teardown is attempted **even if** startup, follow
+settlement, withdrawal or reporting failed. No subsequent supported callback can
+publish styling. A held renderer teardown remains awaited; prompt follow
+cancellation is not a promise that arbitrary renderer destruction is instantaneous.
+
+`close` preserves any recorded follow failures and appends the Compositor's
+existing typed teardown error if destruction fails. With only one error it
+preserves that error object. With multiple errors it rejects with an ordered
+`AggregateError` (original, withdrawal, reporter, teardown; original as cause).
+If only teardown failed, that error is the cause and sole result. Repeated close
+never hides an earlier failure behind a later successful no-op. Compositor's
+internal view clearing and resource error mapping remain unchanged.
+
+The composition stores no principal, grant, cursor, Theme preference, token cache,
+CSS or resource handle in Session.state, Perspective, SemanticUi or image objects.
+
+## Counterexamples and primary proofs
+
+Direct lifecycle proof (`test/session-theme-lifecycle.test.js`) must distinguish:
+
+- Two factories cannot claim the same Session or adapter, even with different
+  counterparts. Duplicate start cannot disturb a live first start. Invalid
+  construction does not consume a valid identity.
+- Destruction through the published Compositor is exactly `close`, stops the
+  follow before the one adapter teardown, and concurrent/reentrant closes share
+  one Promise. Hold teardown to prove a second close does not return early.
+- Hold the initial observation anchor, initial Theme read and refresh read in
+  separate cases. Close retires the follow before releasing each lower operation.
+  Late release/rejection launches no additional reads or supported style callback.
+  Interrupted startup rejects cancellation without a Theme error report.
+- A lower independent AbortError reports normally. A throwing setter, failed
+  withdrawal, throwing reporter and failed renderer teardown preserve all errors
+  in order and still attempt destruction once. Repeated failed close replays it.
+- A synchronous reporter triggers close without deadlocking. An invalid callback
+  returning a pending/rejecting thenable does not strand shutdown or cause an
+  unhandled rejection; the test does not pretend to cancel its arbitrary effects.
+
+Real Images integration (`test/theme-resolver.integration.test.js`) must use the
+canonical resolver and adapter. Two Sessions share the **same image, Theme graph
+and resolver instance** with different authorities: one is permitted; the other
+is denied a reached, preferably shadowed, token. Reads/observation use their own
+supplied bindings; the denied Session cannot receive the permitted Session's
+values. An authorized catalog or inherited-token edit refreshes the live Session;
+unrelated metadata is ignored. Closing either leaves the other independent.
+
+Browser proof (`test/browser/dom-coexistence.test.js` and its existing proof page)
+must instantiate the public lifecycle with the actual BrowserRendererAdapter,
+open a real semantic pane through its published Compositor, and drive the
+canonical follow. A style change preserves the same pane, typed field and focus.
+Failure withdraws the Theme without replacing those controls. Destroy via the
+published Compositor proves lifecycle wiring, not a separate handwritten stop.
+The six `RENDERER_ADAPTER_METHODS` remain unchanged.
+
+## Deferred boundaries and rejected alternatives
+
+Native Session binding is a linked, blocked follow-up until a reviewed host-only
+scalar bridge names GTK-thread dispatch, acknowledgement and cancellation. Its
+proof must hold queued GTK apply/withdrawal across close; fixture styling alone
+does not prove the bridge. Native regression CI still runs for this browser slice.
+
+Per-principal ProfileResolver lookup/unique lazy creation remains separate.
+There is no shell scan, profile auto-creation, principal-as-grant or speculative
+lower API. DTCG interchange and cloud/deployment acceptance are also separate.
+
+Rejected: independent wrappers around an exposed raw Compositor (teardown can
+bypass follow retirement); a new Theme-aware Compositor state machine (duplicates
+interaction policy); host-only uniqueness by convention (two owners can claim a
+Session); a seventh renderer op; per-widget observers; global CSS/GTK state;
+async style dispatch disguised as synchronous; a second poller or token cache.
 
 ## Verification and delivery
 
-Before source changes, obtain a **fresh-context independent plan review**
-of this interaction and falsification list, record findings, and create/claim
-the corresponding Dolt-backed Bead with the pinned CLI in a managed checkout.
-This checked-in architecture note is **not a substitute for Beads** or
-evidence of independent approval. Implement in one small code PR for the browser/JavaScript host with direct
-lifecycle tests, real Images-authorized follow integration, browser DOM proof,
-and full exact-head Node/browser/native CI. The native bridge is a separate,
-blocked follow-up and must not be silently implemented in the browser slice. Review the actual diff with a
-separate agent before merge.
+Use a fresh-context adversarial subagent from the implementing assistant for the
+plan and a separate fresh-context subagent for the actual implementation diff,
+as the user requested. GitHub/Copilot review is not this task's approval gate.
+Record reviewed source identity, findings, dispositions and verdict in the Bead;
+resolve blockers and re-review revisions before implementation.
+
+Create/claim the corresponding Bead through the pinned Dolt-backed CLI and keep
+native follow-up/dependencies in that work graph. This document is the interaction
+contract, not an alternative task tracker. Implement one small browser/JavaScript
+slice, run its direct/integration/browser proofs and full exact-head Node/browser/
+native CI, reconcile current docs/ownership, and obtain independent diff approval
+before merge. Follow AGENTS.md thermal rules for any local test/build; remote CI
+retains its configured concurrency. No native Session wiring is implied by green
+native regression tests.

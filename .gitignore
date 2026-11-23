@@ -8,3 +8,9 @@ renderer-component/target/
 
 # Rust build cache for the native Linux host (ADR 0013 L1)
 hosts/linux/target/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
