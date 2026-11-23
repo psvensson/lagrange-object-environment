@@ -104,6 +104,10 @@ test('stock resolution uses only authorized projections and produces complete im
   const authority = await f.allAuthority();
   const resolved = await resolveUnchanged(f, THEME, authority);
   assert.deepEqual(resolved, {themeRef: ref(THEME), tokens: STOCK});
+  // The exact cross-host T4 appearance fixture is an observed, authorized
+  // ThemeResolver result, not a second hardcoded runtime palette.
+  const renderedStock = JSON.parse(await readFile(new URL('./fixtures/theme/stock-tokens.json', import.meta.url), 'utf8'));
+  assert.deepEqual(resolved.tokens, renderedStock);
   assert.deepEqual(f.calls.map(call => call.objectId), [THEME, ...STOCK.map(token => stockToken(token.path))]);
   for (const call of f.calls) {
     assert.equal(call.authority, authority);
@@ -227,6 +231,25 @@ test('catalog selection rejects invalid image ids without reading', async () => 
     await assert.rejects(resolver.resolveCatalogDefault({imageId}), ThemeResolutionError);
   }
   assert.equal(count, 0);
+});
+
+test('the T4 derived appearance fixture is produced by actual authorized Theme inheritance', integration, async t => {
+  const f = await setup(t);
+  const derived = JSON.parse(await readFile(new URL('./fixtures/theme/derived-tokens.json', import.meta.url), 'utf8'));
+  const overrides = [];
+  for (const token of derived) {
+    const stock = STOCK.find(item => item.path === token.path);
+    if (token.value === stock.value) continue;
+    const id = 'appearance/' + token.path;
+    await putToken(f.runtime, id, token.path, token.type,
+      token.type === 'dimension' || token.type === 'fontSize'
+        ? integer(token.value) : text(token.value));
+    overrides.push(id);
+  }
+  await putTheme(f.runtime, 'appearance/derived', THEME, overrides);
+  const result = await resolveUnchanged(f, 'appearance/derived');
+  assert.deepEqual(result.tokens, derived);
+  assert.notDeepEqual(result.tokens, STOCK);
 });
 
 test('nearest overrides win, unrelated paths survive, shared refs stay authorized and fresh calls reread', integration, async t => {

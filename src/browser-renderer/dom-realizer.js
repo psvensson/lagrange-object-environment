@@ -30,6 +30,7 @@
  */
 
 import {semanticUiForPresentation} from '../semantic-ui.js';
+import {applyResolvedTokensToDom, cssVarsForResolvedTokens} from './dom-theme.js';
 
 // The presentation kinds this realizer claims as SEMANTIC TOOL UI (as opposed to
 // a Component/graphics surface). The native Smalltalk kinds join here in E2,
@@ -161,7 +162,7 @@ function renderNode(node, listen, onAction, onEdit, onSubmitInput) {
 // descriptor-projection so a host/test can drive the SAME rendering path from
 // a checked-in fixture — the cross-host identity mechanism: the browser
 // consumes exactly the bytes the GTK realizer consumes.
-function renderSemanticUiToDom({doc, kind, surfaceHandle, listen, onAction, onEdit, onSubmitInput}) {
+function renderSemanticUiToDom({doc, kind, surfaceHandle, listen, onAction, onEdit, onSubmitInput, themeVars = null}) {
   const root = document.createElement('section');
   root.className = `lagrange-tool lagrange-tool-${kind}`;
   root.dataset.surfaceHandle = surfaceHandle;
@@ -189,13 +190,18 @@ function renderSemanticUiToDom({doc, kind, surfaceHandle, listen, onAction, onEd
     }
   }
   flushFields();
-  return root;
+  return applyResolvedTokensToDom(root, themeVars);
 }
 
-function createDomRealizer({mountPoint, emitIntent}) {
+function createDomRealizer({mountPoint, emitIntent, resolvedTokens = null}) {
   if (!mountPoint) {
     throw new TypeError('the DOM realizer requires a mountPoint');
   }
+
+  // Host composition supplies the already-resolved tokens; a Theme ref or
+  // image service never crosses into the DOM realizer. Validate once, before
+  // any surface can attach. Null means unstyled, never a fallback Theme.
+  const themeVars = resolvedTokens === null ? null : cssVarsForResolvedTokens(resolvedTokens);
 
   // attach: project -> render -> mount. Returns the opaque Realization.
   async function attach({surfaceHandle, presentationDescriptor}) {
@@ -228,7 +234,7 @@ function createDomRealizer({mountPoint, emitIntent}) {
       emitIntent(surfaceHandle, Object.freeze({kind: 'submit-input', key, text}));
     };
 
-    const root = renderSemanticUiToDom({doc, kind, surfaceHandle, listen, onAction, onEdit, onSubmitInput});
+    const root = renderSemanticUiToDom({doc, kind, surfaceHandle, listen, onAction, onEdit, onSubmitInput, themeVars});
 
     let mounted = false;
     return {

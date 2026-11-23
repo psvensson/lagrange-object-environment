@@ -10,6 +10,41 @@ import {available, withProofPage} from './support/proof-lane.js';
 // BrowserRendererAdapter, via the INJECTED realization-dispatch seam (not a
 // hard-coded kind switch). Runs under Xvfb/headless SwiftShader.
 
+// T4 visual materialization: the SAME resolved semantic token fixtures are
+// consumed by browser and GTK. This is the PRODUCTION browser adapter path,
+// not simply a style-function unit test or a hand-built themed fixture.
+test('CI: two resolved Themes style independent DOM panes and never style an unthemed pane', {skip: !available && 'no Chrome available'}, async () => {
+  await withProofPage(async ({page}) => {
+    const result = await page.evaluate(() => window.__lagrangeProof.compareThemedToolRealizations());
+    const [stock, derived, plain] = result.before;
+    assert.equal(stock.themed, true);
+    assert.equal(derived.themed, true);
+    assert.equal(plain.themed, false);
+    assert.deepEqual([stock.baseVariable, derived.baseVariable, plain.baseVariable],
+      ['#e6e6e2', '#121922', '']);
+    assert.deepEqual([stock.accentVariable, derived.accentVariable, plain.accentVariable],
+      ['#245a81', '#ac4f81', '']);
+    assert.deepEqual([stock.background, derived.background], ['rgb(230, 230, 226)', 'rgb(18, 25, 34)']);
+    assert.deepEqual([stock.foreground, derived.foreground], ['rgb(28, 36, 40)', 'rgb(240, 243, 247)']);
+    assert.deepEqual([stock.fontSize, derived.fontSize], ['13px', '16px']);
+    assert.deepEqual([stock.padding, derived.padding], ['6px', '12px']);
+    assert.deepEqual([stock.buttonBackground, derived.buttonBackground],
+      ['rgb(245, 245, 240)', 'rgb(37, 50, 66)']);
+    assert.deepEqual([stock.buttonColor, derived.buttonColor],
+      ['rgb(36, 90, 129)', 'rgb(172, 79, 129)']);
+    assert.equal(stock.hasStyleElement, 1);
+    assert.equal(derived.hasStyleElement, 1);
+    assert.equal(plain.hasStyleElement, 0, 'the unthemed pane obtains no implicit CSS Theme');
+    assert.deepEqual(result.intents, [[], [{kind: 'activate-item', key: 0}], []],
+      'styling must never change the ordinary descriptor-local Command intent');
+    assert.equal(result.afterFirstTeardown.aConnected, false);
+    assert.equal(result.afterFirstTeardown.bConnected, true);
+    assert.deepEqual(result.afterFirstTeardown.b, derived,
+      'destroying a differently themed pane cannot reset another pane style');
+    assert.deepEqual(result.afterFirstTeardown.c, plain);
+  });
+});
+
 test('CI: DOM tool realizations + a GLB Component coexist behind one adapter (injected dispatch seam)', {skip: !available && 'no Chrome available'}, async () => {
   await withProofPage(async ({page}) => {
     const result = await page.evaluate(async () => {

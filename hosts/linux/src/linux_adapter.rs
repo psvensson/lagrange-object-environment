@@ -32,7 +32,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use serde_json::Value;
+use gtk4::prelude::*;
 
+use crate::gtk_theme::{apply_native_tool_css, css_for_resolved_tokens};
 use crate::projector::project;
 use crate::semantic_gtk::{realize, GtkRealization, Intent};
 use crate::{GlbHost, GlbInstance};
@@ -156,6 +158,7 @@ pub struct LinuxRendererAdapter {
     glb_host: Arc<GlbHost>,
     glb_runner: GlbRunner,
     surfaces: HashMap<String, SurfaceEntry>,
+    theme_css: Option<String>, // host-only, never a durable Theme or adapter op
 }
 
 impl LinuxRendererAdapter {
@@ -164,7 +167,17 @@ impl LinuxRendererAdapter {
             glb_host: Arc::new(GlbHost::new()),
             glb_runner,
             surfaces: HashMap::new(),
+            theme_css: None,
         }
+    }
+
+    /// Host composition injects ThemeResolver's complete resolved token set.
+    /// No Theme refs, grants, catalog reads or default stylesheet are owned here.
+    pub fn with_resolved_tokens(glb_runner: GlbRunner, tokens: &Value) -> Result<Self, String> {
+        let css = css_for_resolved_tokens(tokens)?;
+        let mut adapter = Self::new(glb_runner);
+        adapter.theme_css = Some(css);
+        Ok(adapter)
     }
 
     fn require_live(&self, handle: &str, method: &str) -> Result<&SurfaceEntry, String> {
@@ -396,8 +409,12 @@ impl RendererAdapterOps for LinuxRendererAdapter {
         let realization = if is_tool_kind(kind) {
             let doc = project(presentation_descriptor)
                 .map_err(|e| format!("linux renderer: project({kind}): {e}"))?;
+            let realization = realize(&doc);
+            if let Some(css) = self.theme_css.as_ref() {
+                apply_native_tool_css(realization.root.upcast_ref(), css);
+            }
             Realization::Gtk {
-                realization: realize(&doc),
+                realization,
                 descriptor: presentation_descriptor.clone(),
             }
         } else if kind == "glb" {

@@ -34,6 +34,7 @@
 //! the readback copy on that queue before `buffer_map_async` + poll. No fork,
 //! no Component change.
 
+pub mod gtk_theme;
 pub mod linux_adapter;
 pub mod projector;
 pub mod semantic_gtk;

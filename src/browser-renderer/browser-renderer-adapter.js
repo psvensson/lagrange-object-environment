@@ -30,7 +30,7 @@ import {createDomRealizer, isToolKind} from './dom-realizer.js';
  * single-surface demo host violates.)
  */
 
-function createBrowserRendererAdapter({loadComponent, mount = null, createRenderTarget = null, resolveAssets = null, realizerFor = null} = {}) {
+function createBrowserRendererAdapter({loadComponent, mount = null, createRenderTarget = null, resolveAssets = null, realizerFor = null, resolvedTokens = null} = {}) {
   if (typeof loadComponent !== 'function') {
     throw new TypeError('createBrowserRendererAdapter requires a loadComponent() factory that imports the transpiled renderer Component module');
   }
@@ -64,7 +64,7 @@ function createBrowserRendererAdapter({loadComponent, mount = null, createRender
     mountPoint, emitInput: (handle, event) => emitIntent(handle, event),
   });
   const domRealizer = mountPoint ? createDomRealizer({
-    mountPoint, emitIntent: (handle, intent) => fanOutIntent(handle, intent),
+    mountPoint, resolvedTokens, emitIntent: (handle, intent) => fanOutIntent(handle, intent),
   }) : null;
   // The default mapping: tool kinds -> the DOM realizer, everything else ->
   // the Component realizer. An injected realizerFor may return a realizer for a

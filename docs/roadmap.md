@@ -103,15 +103,17 @@ Node image (`test/images-provisioning-admission.integration.test.js`). T1 now pr
 Smalltalk stock graph; T2 resolves explicit authorized Theme refs with inheritance and complete
 token validation. See [installation](theme-installation.md) and [resolution](theme-resolution.md).
 T3 now resolves the provisioned catalog's default through authorized reads, preserving
-legitimate default changes. Profile preference selection, observation and visible
-DOM/GTK realization remain open.
+legitimate default changes. T4 consumes the same resolved semantic tokens in actual
+browser CSS and GTK widget styles at host composition; this is static per-Session
+appearance, not observation-driven updates or profile preference selection.
+See [Theme appearance](theme-appearance.md).
 
 - [ ] define the minimal ordinary-object Shapes/classes for `EnvironmentCatalog`, `Theme`, `DesignToken` and `EnvironmentProfile`; keep complete Theme authority graph-visible rather than one opaque DTCG/CSS blob
 - [ ] add one idempotent environment provisioner that installs those Shapes/classes and creates the single stable-id `EnvironmentCatalog` plus canonical stock/default Theme graph; normal Sessions never create shared defaults
 - [ ] define `ThemeResolver` as the sole owner of base-theme traversal, token override/type validation and resolved semantic token values; prove inheritance-cycle/type mismatch failures
 - [ ] seed a small coherent semantic token vocabulary (surface/text/accent/selection/spacing/radius/typography/etc.) using established design-system practice without importing another framework's component ontology
-- [ ] make the browser/DOM realization consume the resolved token set (prefer CSS custom properties) with no parallel hard-coded semantic theme
-- [ ] make the GTK/native realization consume the same resolved token set through its native style mechanism; add A/B proof that both renderers resolve the same semantic values even though their native materialization differs
+- [x] make the browser/DOM realization consume the complete resolved token set through scoped CSS custom properties, with no parallel hard-coded semantic theme (T4, actual computed-style proof)
+- [x] make the GTK/native realization consume the same resolved token set through pane-scoped native GTK CssProviders; A/B tests prove distinct appearances from the same ThemeResolver outputs without global state (T4)
 - [ ] keep SemanticUi renderer-neutral: add an appearance-role field only if a concrete presentation proves node semantics alone are insufficient; never pass CSS/GTK values across the semantic boundary
 - [ ] implement DTCG import/export as a projection of Theme/DesignToken objects, with Style Dictionary/Penpot interoperability treated as tooling at the edge rather than runtime authority
 - [ ] use the ordinary authorized observation/live-query path so an authorized Theme/DesignToken edit re-resolves and updates every affected live view without polling or a theme-specific distributed channel
