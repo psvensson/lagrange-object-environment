@@ -8,7 +8,7 @@ import {pathToFileURL, fileURLToPath} from 'node:url';
 import {randomBytes} from 'node:crypto';
 import {clusterPorts, ownedProcess} from './process-owner.js';
 import {IMAGES_REVISION, LAGRANGE_REVISION} from '../../examples/native-cluster/deployment.js';
-import {validateRuntimeSelection} from '../../examples/native-cluster/runtime-selection.js';
+import {validateRuntimeSelection, PUBLISHED_PACKAGE} from '../../examples/native-cluster/runtime-selection.js';
 
 const repo = fileURLToPath(new URL('../../', import.meta.url));
 const [testPath, imagesCheckout] = process.argv.slice(2);
@@ -42,7 +42,7 @@ try {
   assert.equal(ready.event, 'ready', `real cluster bootstrap failed at ${ready.stage}: ${ready.error}; ${ready.cause}`);
   const runtimeSelection = validateRuntimeSelection(ready.provenance.runtimeSelection);
   assert.equal(runtimeSelection.kind, 'published-package');
-  assert.deepEqual(ready.provenance, {backend: 'lagrange', durable: true, lagrangeVersion: '0.4.0',
+  assert.deepEqual(ready.provenance, {backend: 'lagrange', durable: true, lagrangeVersion: PUBLISHED_PACKAGE.version,
     lagrangeRevision: LAGRANGE_REVISION, expectedImagesRevision: IMAGES_REVISION, runtimeSelection});
   const endpoint = `http://127.0.0.1:${ready.address.port}`;
   const missing = await fetch(endpoint + '/v1/read', {method: 'POST', signal: AbortSignal.timeout(10_000),

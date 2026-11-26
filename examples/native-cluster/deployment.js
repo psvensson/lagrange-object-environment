@@ -10,7 +10,7 @@ import {admitRuntimeSelection, PUBLISHED_PACKAGE, validateRuntimeSelection} from
 export const IMAGE = 'native-cluster-demo';
 export const PROJECT = 'integration';
 export const BLOCK = 'read-object';
-// Legacy published acceptance keeps its original identity pair.
+// Published acceptance consumes the selected package and its own Images pair.
 export const IMAGES_REVISION = PUBLISHED_PACKAGE.imagesRevision;
 export const LAGRANGE_REVISION = PUBLISHED_PACKAGE.revision;
 

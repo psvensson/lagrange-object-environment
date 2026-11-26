@@ -44,8 +44,8 @@ fn embedded_portable_runtime_artifact_is_the_pinned_canonical_material() {
 /// both automatic CI sibling checkouts (JS integration and native source) must agree, and
 /// `PORTABLE_RUNTIME_SOURCE_REVISION` is the authoritative value. A bump that
 /// moves one without the other is a hard failure here, never a silent drift.
-/// The separately invoked published-package acceptance keeps its historical
-/// identity pair; test/ci-policy.test.js fences that distinct manual contract.
+/// The published-package release trial keeps its separate historical Images
+/// pin; test/ci-policy.test.js fences that distinct diagnostic contract.
 #[test]
 fn ci_sibling_checkout_pins_the_same_images_revision_as_the_artifact() {
     for name in ["ci.yml", "native-source.yml"] {

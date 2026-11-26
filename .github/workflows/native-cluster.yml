@@ -1,5 +1,6 @@
-name: Published package acceptance (manual)
+name: Published package release trial
 on:
+  pull_request:
   workflow_dispatch:
 permissions:
   contents: read
@@ -33,6 +34,13 @@ jobs:
       - name: Install locked published Lagrange deployment
         working-directory: lagrange-object-environment/examples/native-cluster
         run: npm ci --no-audit --no-fund
+      - name: Record admitted installed package identity
+        working-directory: lagrange-object-environment/examples/native-cluster
+        run: |
+          node --input-type=module -e '
+            import {admitRuntimeSelection} from "./runtime-selection.js";
+            console.log(JSON.stringify({event: "published-runtime-admitted", selection: await admitRuntimeSelection()}));
+          '
       - name: Compile native artifacts before starting cluster processes
         working-directory: lagrange-object-environment
         run: |
@@ -51,5 +59,6 @@ jobs:
         # One owned service/runtime and one native process at a time. The
         # harness has a 160s setup bound and 500s total backstop, no retries.
         run: |
+          export NODE_HOST_ID="$(hostname)"
           xvfb-run -a -s "-screen 0 1280x1024x24" node test/native-cluster/run.js \
             "$(cat /tmp/native-cluster-test-path)" "$GITHUB_WORKSPACE/lagrange-images"

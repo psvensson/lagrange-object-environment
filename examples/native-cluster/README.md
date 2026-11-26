@@ -1,9 +1,10 @@
 # Isolated native viewer deployment
 
-**Current status:** the source-development path is implemented and awaits
-exact-head live acceptance. No successful source cluster run is claimed yet.
-The separately retained published-package proof remains blocked before image
-creation by the historical Lagrange startup defect.
+**Current status:** released Lagrange `0.4.2` is selected for two separate
+trials: the existing source cohort and the existing installed-package runner.
+Neither trial has a new live result. Historical package startup (`llh`) and
+source serving-readiness (`8vv`) failures remain open; no successful cluster
+navigation, authorization or unchanged-history result is claimed.
 
 The deployment installs a fresh demonstration graph through public Images APIs.
 Its operator can read the Project, `root`, and `target`; the `denied` member
@@ -17,13 +18,21 @@ The launcher admits one explicit identity pair, defined by
 
 | Choice | Lagrange identity | Images checkout |
 | --- | --- | --- |
-| `--lagrange-checkout PATH --host-id NAME` | Source commit `234f478e034b738328c63900e74b6bea3ee63bb8` | `dc4266c664002e69ad5ca0b67dd0b7f094c8d8e7` |
-| No source option | Locked `lagrange-server@0.4.0`, package gitHead `07206ba1c8bb396f4eb097a753915bb34580d824` | `caf72f26d6a28a6901aea876a49d22311e29cf21` |
+| `--lagrange-checkout PATH --host-id NAME` | Source commit `657b7e396aabf75501e6f2156638514d85f24f6c` (version `0.4.2`) | `dc4266c664002e69ad5ca0b67dd0b7f094c8d8e7` |
+| No source option | Locked `lagrange-server@0.4.2`, package gitHead `657b7e396aabf75501e6f2156638514d85f24f6c` | `caf72f26d6a28a6901aea876a49d22311e29cf21` |
 
 Source selection never resolves the installed package. A missing or invalid
 selection fails; it does not switch to the other choice or to mock storage.
-Both Lagrange manifests say `0.4.0`, so the receipt's tagged selection and full
-revision distinguish them.
+Both selections now share version `0.4.2` and the exact released revision.
+Their tagged source/package kind, public entry and Images pairing remain
+distinct. Each trial compares its lane with that lane's earlier failure;
+the differing topology and Images pins prevent a packaging-only comparison.
+
+The interactive default package launcher is unproven and still lacks explicit
+host wiring (`mh6`): it strips ambient `NODE_HOST_ID`, and `--host-id` is admitted only
+with source selection. The package runner described below receives its host
+input through a different existing process path. Its trial does not accept or
+repair the interactive package path.
 
 Source admission requires the repository root, exact HEAD, a clean index and
 working tree, no added runtime source files, the tracked lockfile, and the
@@ -153,25 +162,34 @@ for proof limits and the historical failure.
 
 ## Published-package proof
 
-The [Published package acceptance workflow](../../.github/workflows/native-cluster.yml)
-is explicitly manual (`workflow_dispatch`). It retains the original locked
-package, Images `caf72f2` checkout, one-runtime harness and real failure result:
+The [Published package release trial workflow](../../.github/workflows/native-cluster.yml)
+runs on pull requests and `workflow_dispatch` in this diagnostic branch. It
+installs locked `lagrange-server@0.4.2`, retains Images `caf72f2` and the original
+single-runtime harness, and reports failures as failures. Its actual hostname
+is supplied through the supported `NODE_HOST_ID` environment input:
 
 ```sh
 npm ci --prefix examples/native-cluster
+export NODE_HOST_ID="$(hostname)"
 xvfb-run -a node test/native-cluster/run.js \
   /absolute/path/to/compiled/native_cluster-test \
   /absolute/path/to/clean/lagrange-images-at-caf72f2
 ```
 
-This proof remains blocked at the recorded package startup defect. Bead `llh`
-remains open. Source-development success cannot satisfy it, and this manual
-workflow is not an automatic release interlock. The package needs its own
-reviewed repair, publication and installed-startup acceptance.
+No executed `0.4.2` package result is claimed yet. Bead `llh` remains open,
+and source-development success cannot satisfy it. A generic original-allocation
+observation refusal would establish a continuing startup block; missing-lock
+causality is an observed result only if retained execution evidence identifies
+the missing package-local lockfile, such as `ENOENT` details naming that
+package's `package-lock.json`. The separate static package/source audit is a
+prediction, not that execution evidence. A green package run would cover this
+single-runtime/Images `caf72f2` contract only. The diagnostic PR must not merge
+with failing live or ordinary verification gates.
 
 For an existing authorized endpoint, use the Linux executable's documented
 `view` command. The standalone development service accepts `OE_CLUSTER_CONFIG`
 with a private `credentialFile`, the pinned public Images `imagesRuntime` URL,
 unused `dataDir`, distinct `restPort`/`adminPort`/`transportPort`, and a label
-`nonce`. Its default selection remains the published package. It provisions a
+`nonce`, plus the explicit actual `NODE_HOST_ID` required by the released
+runtime. Its default selection remains the published package. It provisions a
 new graph; it is not an attachment or migration command for an existing image.

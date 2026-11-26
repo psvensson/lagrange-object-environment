@@ -1,29 +1,34 @@
 # Native cluster acceptance
 
-**Current status:** the explicit source-development path is implemented and
-awaits exact-head live acceptance. No successful source cluster navigation,
-authorization or unchanged-history result is claimed yet. The historical
-published-package lane remains blocked before image creation; Bead `llh`
-remains open. Controlled-service and mechanical process proofs do not substitute
+**Current status:** Lagrange `0.4.2` is selected for an isolated diagnostic
+trial under Bead `1wu`, using the existing installed-package runner and the
+existing source cohort. Neither trial has a new live result. Historical package
+startup (`llh`) and source serving-readiness (`8vv`) failures remain open.
+No successful cluster navigation, authorization or unchanged-history result
+is claimed. Controlled-service and mechanical process proofs do not substitute
 for either live result.
 
 ## Two explicit acceptance contracts
 
 | Lane | Trigger | Exact runtime identity | Images |
 | --- | --- | --- | --- |
-| `Native source development / native-source-development` | Pull requests and pushes to `main` | Source `234f478e034b738328c63900e74b6bea3ee63bb8` | `dc4266c664002e69ad5ca0b67dd0b7f094c8d8e7` |
-| `Published package acceptance (manual) / published-native-cluster` | Explicit `workflow_dispatch` | Locked `lagrange-server@0.4.0`, gitHead `07206ba1c8bb396f4eb097a753915bb34580d824` | `caf72f26d6a28a6901aea876a49d22311e29cf21` |
+| `Native source development / native-source-development` | Pull requests and pushes to `main` | Source `657b7e396aabf75501e6f2156638514d85f24f6c` (version `0.4.2`) | `dc4266c664002e69ad5ca0b67dd0b7f094c8d8e7` |
+| `Published package release trial / published-native-cluster` | Pull requests and `workflow_dispatch` in this diagnostic branch | Locked `lagrange-server@0.4.2`, gitHead `657b7e396aabf75501e6f2156638514d85f24f6c` | `caf72f26d6a28a6901aea876a49d22311e29cf21` |
 
-This is a deliberate development-acceptance contract. The manual package proof
-retains its failure and does not act as an automatic release interlock. Source
-success neither repairs the installed package nor proves its acceptance.
+Each trial preserves its lane's existing runner, Images revision and timing
+bounds to compare with that lane's earlier failure. The package proof uses one
+runtime; the source proof uses three processes on one host. Their topology and
+Images differences prevent a packaging-only A/B interpretation. Source success
+neither repairs the installed package nor proves its acceptance. The diagnostic
+PR adds the package PR trigger without claiming a change to the accepted main
+or parent PR contract; failing gates prevent merge.
+
 The ordinary artifact-only Linux job remains separate; its ignored real-cluster
-test is not evidence that the live journey ran.
-
-The current native portable artifact and automatic JS/source-development
-consumers agree on Images `dc4266c`. The manual historical package lane keeps
-its own `caf72f2` identity. Runtime admission records distinguish the two even
-though both Lagrange manifests have package version `0.4.0`.
+test is not evidence that the live journey ran. The current native portable
+artifact and automatic JS/source consumers retain Images `dc4266c`; the package
+trial retains Images `caf72f2`. Both Lagrange selections now share version
+`0.4.2` and the same released revision. Their tagged source/package kind,
+resolved public entry and Images pairing distinguish the execution contracts.
 
 ## Source admission and topology
 
@@ -35,12 +40,13 @@ ignored source additions, the tracked lock and the declared public entry.
 Installed root dependencies are permitted. Source mode does not resolve the
 published package; failures do not select an alternative backend.
 
-The new lane uses source `234f478e` because exact cold GCP formation evidence
-exists for it in the upstream
+This trial selects the exact `v0.4.2` release commit `657b7e3` to test whether
+its source resolves the previously observed seed readiness refusal. The earlier
+source `234f478e034b738328c63900e74b6bea3ee63bb8` was chosen using cold GCP
+formation evidence in the upstream
 [operation-integrity record](https://github.com/psvensson/lagrange/blob/09e4e64ea12e073eb369c48bd3e017615648f26c/solve/epics/operation-integrity-and-reliable-formation.md).
-That evidence is upstream context, not an Object Environment acceptance result;
-the recorded retained-restart failure is not covered by this cold,
-fresh-directory proof.
+That historical upstream evidence does not establish this release's OE result.
+Retained restart remains outside this cold, fresh-directory proof.
 
 The local declaration is one actual host, three processes and configured
 replication count three. Every node uses the same explicit host identity.
@@ -62,7 +68,7 @@ Workers start sequentially. The cohort requires exactly the expected three
 active node IDs and retains all worker liveness checks. It then reads only the
 seed's public `/readyz`, because that node's application handle installs and
 serves the graph. The
-[pinned public probe contract](https://github.com/psvensson/lagrange/blob/234f478e034b738328c63900e74b6bea3ee63bb8/docs/bootstrap-readiness-probes.md)
+[pinned public probe contract](https://github.com/psvensson/lagrange/blob/657b7e396aabf75501e6f2156638514d85f24f6c/docs/bootstrap-readiness-probes.md)
 owns readiness. OE does not infer it from membership, leases or private
 publication rows.
 
@@ -152,8 +158,9 @@ implementation yet.
 
 [PR #111](https://github.com/psvensson/lagrange-object-environment/pull/111)
 head `03109abdc2171a74144dda17e20b4b3cec207598`, source tree
-`2e18e340c54b3a3be7085e14e6ede505e6cec4d7`, was tested with the two exact
-source identities above. [Ordinary CI 45210538312](https://github.com/psvensson/lagrange-object-environment/actions/runs/45210538312)
+`2e18e340c54b3a3be7085e14e6ede505e6cec4d7`, was tested with Lagrange
+`234f478e034b738328c63900e74b6bea3ee63bb8` and Images
+`dc4266c664002e69ad5ca0b67dd0b7f094c8d8e7`. [Ordinary CI 45210538312](https://github.com/psvensson/lagrange-object-environment/actions/runs/45210538312)
 passed 636 Node tests, 18 browser tests, and the full configured native suite.
 
 [Source run 45210538192](https://github.com/psvensson/lagrange-object-environment/actions/runs/45210538192)
@@ -171,7 +178,27 @@ called. The timeout alone does not classify the cause as a Lagrange serving
 defect. No deadline, replication setting, or acceptance requirement was relaxed
 in response.
 
-## Preserved published-package method
+### Observed source readiness refusal: 2026-11-23
+
+The later [source run 45213889970](https://github.com/psvensson/lagrange-object-environment/actions/runs/45213889970)
+tested PR #111 head `b9e56ac157dceb5b1e15e05de3444e6555cf6931`, tree
+`56e2b91e808d52c8be74bae6feadc0ac932c5180`, with Lagrange
+`234f478e034b738328c63900e74b6bea3ee63bb8` and Images
+`dc4266c664002e69ad5ca0b67dd0b7f094c8d8e7`. All worker starts completed
+by 19.237 seconds. The final membership observation, round 551 at 159999 ms,
+contained exactly the three expected active IDs. The last completed seed probe,
+round 550 at 159971 ms, was `ready: false`, which the transport accepts only
+with HTTP 503. The round 551 probe exhausted the original startup deadline.
+Stopping began at 160.450 seconds; cleanup and export finished by 160.870
+seconds. Image installation, snapshots and native launch were not reached.
+
+Artifact `14836684652`, ZIP SHA-256
+`a7d0e3c090d6611ad092d2a709dbd29396da1fc8423107046befb4c7e78c68f3`,
+preserves that failed observation with no export failures. This establishes the
+public readiness refusal recorded in `8vv`, without establishing its underlying
+Lagrange cause. The `0.4.2` source trial retains the same topology and bounds.
+
+## Published-package release trial
 
 `test/native-cluster/run.js` retains the original separately owned single
 service/runtime and native-process journey. Its parent reserves three listener
@@ -184,12 +211,42 @@ The original service setup remains bounded to 160 seconds and the proof to
 500 seconds. The intended proof uses the real CLI and the same production
 `Viewer` action test, independent Images oracle and unchanged-history check.
 Controlled transport tests separately cover unreachable endpoints and closing
-during a held read. The package workflow still reports a real failure until the
-published dependency is repaired.
+during a held read. The release trial installs the committed `0.4.2` dependency
+lock with `npm ci`, records read-only admission through the existing runtime
+selection owner and supplies `NODE_HOST_ID="$(hostname)"` to the original
+runner. Its service child inherits this supported host input. No failure is
+converted to a passing or skipped live gate.
+
+This host environment correction applies only to the package acceptance runner.
+The interactive default package launcher still supplies host identity only in
+source mode and strips ambient `NODE_HOST_ID`; its package path is unproven
+and has a known host-configuration gap (`mh6`). A result from this trial does not
+repair or accept that interactive path.
+
+A static inspection of the
+[published `0.4.2` tarball](https://registry.npmjs.org/lagrange-server/-/lagrange-server-0.4.2.tgz)
+found no package-local `package-lock.json`. The released
+[ordinary ESM build-provenance path](https://github.com/psvensson/lagrange/blob/657b7e396aabf75501e6f2156638514d85f24f6c/src/diagnostics/runtime-build-provenance.js)
+calls runtime-content measurement; the audit predicts another startup refusal.
+This is not a new executed failure. Raft binding verification also precedes
+content measurement, and the existing runner projects stack and cause rather
+than every provenance detail. Therefore a generic observed
+`original-allocation-observation-unavailable` establishes continued package
+startup blockage only. Attribute the executed failure to the missing lock only
+if retained execution evidence identifies the missing package-local lockfile,
+such as `ENOENT` details naming that package's `package-lock.json`. Otherwise
+keep the static audit and observed refusal separate.
+
+A package admission or installation failure is a pre-runtime blocker. A later
+runtime, graph or native failure must retain its actual stage. A complete green
+package run establishes only the original single-runtime/Images `caf72f2`
+contract. Neither trial has produced a new live result yet.
 
 ## First semantic failure: published package, 2026-11-07
 
-On 2026-11-07, the corrected setup failed at `runtime-start` with
+On 2026-11-07, the corrected setup used `lagrange-server@0.4.0`, package
+gitHead `07206ba1c8bb396f4eb097a753915bb34580d824`, with Images
+`caf72f26d6a28a6901aea876a49d22311e29cf21`. It failed at `runtime-start` with
 `ORIGINAL_ALLOCATION_HOLD / original-allocation-observation-unavailable`, before
 `image-create`, `graph-install`, `binding-install`, or any viewer launch.
 Lagrange's `initializeOriginalSeedAttempt` requires measured build provenance.
@@ -201,7 +258,9 @@ Evidence from the local run is `/tmp/oe-native-n3-real-02.log`, with bootstrap
 record `/tmp/oe-native-cluster-Il3VY0/bootstrap.json`. A separate read-only
 diagnostic of that owner returned the exact missing-file reason in
 `/tmp/oe-native-n3-provenance-diagnostic.log`. It is diagnosis, not a successful
-cluster run. The package integrity is pinned in the deployment lockfile. No
+cluster run. The preserved evidence manifest records the historical package
+and Images revisions and log hashes; the current deployment lock selects the
+release trial. No
 credential/config file should be published with these logs.
 
 The [preserved first-failure logs](../evidence/native-cluster-2026-11-07/manifest.json)
@@ -216,8 +275,9 @@ The historical investigation identified lower-repository candidate
 applied to this consumer. The package observed by that investigation was 0.4.0.
 
 Bead `llh` still requires an independently reviewed and published Lagrange
-repair with installed-package startup proof. Then update the explicit package
-pin under review and rerun this manual acceptance with the same bounds.
+repair with installed-package startup proof. The current `0.4.2` pin is a
+reviewed diagnostic trial of that obligation, with the original bounds;
+no result is claimed before execution.
 Later package-lane image creation/navigation stages remain unproven. Do not
 synthesize a consumer lockfile inside `node_modules`, relax measured-build
 admission, attribute a source result to the package, increase deadlines or

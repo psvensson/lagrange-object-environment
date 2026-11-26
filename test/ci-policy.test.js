@@ -76,19 +76,37 @@ test('ci policy: source native acceptance always runs on PR/main with exact sour
     'all local processes use the actual runner host identity');
 });
 
-test('ci policy: published acceptance is explicitly manual and retains the original locked identity and real failure behavior', () => {
+test('ci policy: the published release trial runs on PR/manual with the installed identity and real failure behavior', () => {
   const workflow = readFileSync(join(REPO_ROOT, '.github/workflows/native-cluster.yml'), 'utf8').split('\n');
-  assert(workflow.includes('name: Published package acceptance (manual)'));
-  assert(workflow.includes('  workflow_dispatch:'));
-  assert(!workflow.includes('  push:') && !workflow.includes('  pull_request:'),
-    'manual package acceptance must not be described as an automatic release interlock');
+  assert(workflow.includes('name: Published package release trial'));
+  const triggers = windowOf(workflow, line => line === 'on:', /^\S/, 'published trial triggers');
+  assert.deepEqual(triggers.filter(line => line.trim()).map(line => line.trim()).sort(),
+    ['pull_request:', 'workflow_dispatch:'], 'the diagnostic trial runs on PR and manual dispatch only');
   const job = windowOf(workflow, (line) => line === '  published-native-cluster:', /^  \S/, 'published native job');
   exactlyOneTimeout(job, 4, 'published native job', 30);
   const proof = windowOf(workflow, (line) => line.includes('- name: Native executable and GTK actions'), /^      - /, 'real native proof');
   exactlyOneTimeout(proof, 8, 'real native proof', 10);
-  assert(proof.some((line) => line.includes('node test/native-cluster/run.js')));
-  assert(!workflow.some((line) => isCode(line) && /continue-on-error|^\s+if:/.test(line)), 'live gate cannot silently skip or tolerate failure');
-  assert(workflow.some((line) => line.includes('run: npm ci')));
+  const runIndex = proof.findIndex(line => line.includes('node test/native-cluster/run.js'));
+  const hostIndex = proof.findIndex(line => line.trim() === 'export NODE_HOST_ID="$(hostname)"');
+  assert(runIndex >= 0, 'the package trial retains its existing acceptance runner');
+  assert(hostIndex >= 0 && hostIndex < runIndex, 'the installed runtime receives the actual runner host identity');
+  assert(!workflow.some((line) => isCode(line) && /continue-on-error|^\s+if:|^\s+paths(?:-ignore)?:/.test(line)),
+    'live gate cannot silently skip or tolerate failure');
+  const install = windowOf(workflow, line => line.includes('- name: Install locked published Lagrange deployment'),
+    /^      - /, 'locked published deployment');
+  assert(install.includes('        working-directory: lagrange-object-environment/examples/native-cluster'));
+  assert(install.some(line => line.trim() === 'run: npm ci --no-audit --no-fund'));
+  const admission = windowOf(workflow, line => line.includes('- name: Record admitted installed package identity'),
+    /^      - /, 'installed package identity');
+  assert(admission.includes('        working-directory: lagrange-object-environment/examples/native-cluster'));
+  assert(admission.some(line => line.includes('node --input-type=module -e')));
+  assert.match(admission.join('\n'), /import\s*\{\s*admitRuntimeSelection\s*\}\s*from\s*['"]\.\/runtime-selection\.js['"]/);
+  assert.match(admission.join('\n'), /console\.log\(JSON\.stringify\(\{\s*event:\s*['"]published-runtime-admitted['"],\s*selection:\s*await admitRuntimeSelection\(\)\s*\}\)\)/);
+  const installIndex = workflow.findIndex(line => line.includes('- name: Install locked published Lagrange deployment'));
+  const admissionIndex = workflow.findIndex(line => line.includes('- name: Record admitted installed package identity'));
+  const proofIndex = workflow.findIndex(line => line.includes('- name: Native executable and GTK actions'));
+  assert(installIndex < admissionIndex && admissionIndex < proofIndex,
+    'identity admission reads the installed package before the live trial');
   assert(workflow.some((line) => line.includes('--test native_cluster --no-run')));
   assert(!workflow.some(line => isCode(line) && /run-source\.js|--lagrange-checkout/.test(line)),
     'the published proof must not silently execute a source checkout');
@@ -100,8 +118,10 @@ test('ci policy: published acceptance is explicitly manual and retains the origi
   const dependency = lock.packages['node_modules/lagrange-server'];
   assert.equal(dependency.version, PUBLISHED_PACKAGE.version);
   assert.equal(dependency.version, lock.packages[''].dependencies['lagrange-server']);
-  assert.match(dependency.resolved, /^https:\/\/registry.npmjs.org\/lagrange-server\/-\/lagrange-server-/);
-  assert.match(dependency.integrity, /^sha512-/);
+  assert.equal(dependency.resolved,
+    `https://registry.npmjs.org/lagrange-server/-/lagrange-server-${PUBLISHED_PACKAGE.version}.tgz`);
+  assert.equal(dependency.integrity,
+    'sha512-qstNVQXV6BwaUrJ37mFTXtWJsSZH2dFrIjso5n8rt06f/PZybmJaWLxpCV++cG69ozUgIvNPewIUD/4vNuxtYg==');
 });
 
 const isCode = (line) => !line.trimStart().startsWith('#');

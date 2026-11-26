@@ -27,12 +27,14 @@ bootstrap, authentication and actual cluster acceptance are separate from the
 native transport/window proofs.
 
 The [local source-development launcher](examples/native-cluster/README.md)
-explicitly selects Lagrange `234f478e` with Images `dc4266c` and starts three
-processes on one declared physical host. Its implementation awaits exact-head
-live acceptance; no successful source cluster result is claimed yet. The
-automatic PR/main source gate and the separately invoked published-package
-proof have distinct identities. The historical `lagrange-server@0.4.0` startup
-failure remains open in `llh`; see [the acceptance contract](docs/architecture/native-cluster-acceptance.md).
+selects released source `657b7e3` (version `0.4.2`) with Images `dc4266c` for
+a trial of three processes on one declared physical host. The separate
+installed-package trial selects `lagrange-server@0.4.2` with Images `caf72f2`
+and the original single-runtime runner. Neither trial has a live result yet.
+They compare each lane with its own earlier failure; their different topology
+and Images pins do not isolate packaging as the only variable. The historical
+package startup failure (`llh`) and source readiness refusal (`8vv`) remain open;
+see [the acceptance contract](docs/architecture/native-cluster-acceptance.md).
 
 ## System boundary
 
@@ -124,8 +126,8 @@ The [authorized read-service host](hosts/image-read-service/README.md) provides
 authenticated Project and object reads through an operator-supplied deployment.
 The service contract is tested. The native source journey now has an explicit
 automatic development gate, with exact-head live acceptance still pending;
-published-package acceptance remains a separate manual proof and an open
-dependency. See [the native acceptance record](docs/architecture/native-cluster-acceptance.md)
+the separate published-package release trial runs on PRs and manual dispatch
+in this diagnostic branch, with acceptance still unproven. See [the native acceptance record](docs/architecture/native-cluster-acceptance.md)
 for the two identity pairs, bounded proof and preserved first failure.
 
 1. [Architecture](docs/architecture.md)

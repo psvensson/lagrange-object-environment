@@ -16,7 +16,8 @@ test('help starts no runtime and creates no data even with nonexistent dependenc
   const result = await run(process.execPath, [CLI, '--help', '--images-checkout', '/absent',
     '--native-binary', '/absent', '--data-parent', root], {cwd: root, timeout: 3000});
   assert.match(result.stdout, /Usage: npm run demo:native/);
-  assert.match(result.stdout, /startup defect still blocks/);
+  assert.match(result.stdout, /Release 0\.4\.2 is selected for diagnostic acceptance; live success is unproven\./);
+  assert.match(result.stdout, /The interactive package path still lacks the required host configuration\./);
   assert.match(result.stdout, /--lagrange-checkout PATH --host-id NAME/);
   assert.deepEqual(await readdir(root), []);
 });

@@ -16,7 +16,7 @@ const IDS = [
   'b0000000-0000-4000-8000-000000000000',
   'c0000000-0000-4000-8000-000000000000',
 ];
-const PACKAGE = {name: 'lagrange-server', version: '0.4.0', gitHead: LAGRANGE_REVISION,
+const PACKAGE = {name: 'lagrange-server', version: PUBLISHED_PACKAGE.version, gitHead: LAGRANGE_REVISION,
   type: 'module', main: 'src/public-api.js', exports: {'.': './src/public-api.js'}};
 const SOURCE_SELECTION = {...SOURCE_DEVELOPMENT, specifier: 'file:///source/src/public-api.js'};
 

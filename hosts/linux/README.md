@@ -44,7 +44,7 @@ SSO remain outside this viewer. See
 For a fresh local development graph, use the
 [source-development launcher](../../examples/native-cluster/README.md) with
 explicit `--lagrange-checkout` and `--host-id`. It selects Lagrange
-`234f478e034b738328c63900e74b6bea3ee63bb8` and Images
+`657b7e396aabf75501e6f2156638514d85f24f6c` (released version `0.4.2`) and Images
 `dc4266c664002e69ad5ca0b67dd0b7f094c8d8e7`, starts three separate processes on
 one actual host, observes the seed's public readiness and attempts graph
 installation once. Configured replication count three does not establish an
@@ -56,10 +56,14 @@ denial, revocation, independent unchanged history and complete cleanup within
 the retained 160-second startup and 500-second acceptance bounds. The viewer's
 controlled-service proofs do not establish that live result.
 
-The separately invoked manual published-package proof retains locked
-`lagrange-server@0.4.0` and Images `caf72f2`; its build-provenance defect still
-blocks image creation and `llh` remains open. Source success cannot satisfy
-package acceptance. See [the live acceptance contract and historical failure](../../docs/architecture/native-cluster-acceptance.md).
+The separate published-package release trial selects locked
+`lagrange-server@0.4.2` and Images `caf72f2` through the original single-runtime
+runner. It runs on PRs and manual dispatch in this diagnostic branch; no new
+live result is claimed. The workflow supplies the actual `NODE_HOST_ID` for
+that runner. The interactive default package launcher still lacks this host
+wiring and strips the ambient value, so this trial does not make that path
+runnable or accepted. Source success cannot satisfy package acceptance, and
+`llh` remains open. See [the live acceptance contract and historical failure](../../docs/architecture/native-cluster-acceptance.md).
 
 The default graphics mode runs the exact checked-in GLB renderer Component core
 binary (`test/browser/components/glb/glb.component.wasm`) under Wasmtime with

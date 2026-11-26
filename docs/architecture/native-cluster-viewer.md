@@ -55,10 +55,15 @@ native action journey, actual authorization/revocation and independent unchanged
 records/history. Its automatic source-development CI gate is separate from the
 original published-package obligation under `8dh` and `llh`.
 
-The original package proof retains its pinned package and historical Images
-identity in the explicitly invoked manual workflow. That package remains blocked
-before image creation; source success cannot discharge its acceptance. The
-source implementation still awaits exact-head live evidence. See
+The diagnostic release trial selects Lagrange `0.4.2` at
+`657b7e396aabf75501e6f2156638514d85f24f6c` for both execution modes. The
+source cohort retains Images `dc4266c`; the installed-package trial retains
+Images `caf72f2` and the original single-runtime runner. Its workflow runs on
+PRs and manual dispatch in the diagnostic branch. Neither has a new live
+result; each is a comparison with its own earlier failure, and source success
+cannot discharge package acceptance. The workflow's host environment input
+serves only that package runner: the interactive package launcher still lacks
+explicit host wiring and strips ambient `NODE_HOST_ID`. See
 [the acceptance record](native-cluster-acceptance.md) for both identity pairs,
 ownership, bounds and current proof status. No mock or fixture result counts as
 either live journey.
