@@ -7,21 +7,21 @@ import {dirname, join} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 
 const execute = promisify(execFile);
-const VERSION = '0.4.0';
+const VERSION = '0.4.2';
 const PACKAGE_NAME = 'lagrange-server';
 const PUBLIC_ENTRY = 'src/public-api.js';
 const SOURCE_INPUTS = ['src', 'package.json', 'package-lock.json', 'wit', 'vendor/raft-rs-wasm'];
 
 export const PUBLISHED_PACKAGE = Object.freeze({
   kind: 'published-package', version: VERSION,
-  revision: '07206ba1c8bb396f4eb097a753915bb34580d824',
+  revision: '657b7e396aabf75501e6f2156638514d85f24f6c',
   imagesRevision: 'caf72f26d6a28a6901aea876a49d22311e29cf21',
   package: PACKAGE_NAME,
 });
 
 export const SOURCE_DEVELOPMENT = Object.freeze({
   kind: 'source-development', version: VERSION,
-  revision: '234f478e034b738328c63900e74b6bea3ee63bb8',
+  revision: '657b7e396aabf75501e6f2156638514d85f24f6c',
   imagesRevision: 'dc4266c664002e69ad5ca0b67dd0b7f094c8d8e7',
   repository: 'psvensson/lagrange',
 });

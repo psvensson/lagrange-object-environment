@@ -2,6 +2,6 @@
   "name": "environment-native-cluster-development",
   "private": true,
   "type": "module",
-  "dependencies": {"lagrange-server": "0.4.0"},
+  "dependencies": {"lagrange-server": "0.4.2"},
   "engines": {"node": ">=22.12.0"}
 }

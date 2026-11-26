@@ -25,7 +25,8 @@ Linux subreaper support. Explicit --lagrange-checkout selects the pinned source
 revision on one actual host; otherwise the locked published package is used.
 Each run gets a new private directory; existing data is never replaced.
 Closing the window or pressing Ctrl-C stops the owned process groups.
-The current published 0.4.0 startup defect still blocks package acceptance.
+Release 0.4.2 is selected for diagnostic acceptance; live success is unproven.
+The interactive package path still lacks the required host configuration.
 `;
 
 async function reservePorts() {

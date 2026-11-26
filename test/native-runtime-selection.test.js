@@ -10,7 +10,7 @@ import {admitRuntimeSelection, validateRuntimeSelection, PUBLISHED_PACKAGE,
   SOURCE_DEVELOPMENT} from '../examples/native-cluster/runtime-selection.js';
 
 const execute = promisify(execFile);
-const MANIFEST = {name: 'lagrange-server', version: '0.4.0', type: 'module',
+const MANIFEST = {name: 'lagrange-server', version: SOURCE_DEVELOPMENT.version, type: 'module',
   main: 'src/public-api.js', exports: {'.': './src/public-api.js'}};
 const ENTRY = 'throw new Error("Admission must not import this public entry");\n';
 
@@ -113,9 +113,12 @@ test('published admission preserves its own identity and cannot fall back to sou
   const selected = await admitRuntimeSelection({}, dependencies);
   assert.deepEqual(selected, {...PUBLISHED_PACKAGE,
     specifier: pathToFileURL(join(f.root, 'src/public-api.js')).href});
+  assert.equal(selected.version, SOURCE_DEVELOPMENT.version);
+  assert.equal(selected.revision, SOURCE_DEVELOPMENT.revision);
   assert.notEqual(selected.kind, SOURCE_DEVELOPMENT.kind);
-  assert.notEqual(selected.revision, SOURCE_DEVELOPMENT.revision);
   assert.notEqual(selected.imagesRevision, SOURCE_DEVELOPMENT.imagesRevision);
+  assert.throws(() => validateRuntimeSelection({...selected, kind: SOURCE_DEVELOPMENT.kind}),
+    /does not match an admitted identity/);
   for (const field of ['name', 'version', 'gitHead']) {
     await writeFile(packageFile, JSON.stringify({...MANIFEST, gitHead: PUBLISHED_PACKAGE.revision, [field]: 'wrong'}));
     await assert.rejects(admitRuntimeSelection({}, dependencies), /locked.*Lagrange package/);
@@ -130,13 +133,15 @@ test('published admission preserves its own identity and cannot fall back to sou
 
 test('serialized runtime descriptors cannot substitute identity, mode or a private/remote entry', () => {
   const valid = {...SOURCE_DEVELOPMENT, specifier: 'file:///source/src/public-api.js'};
+  const wrongRevision = '0'.repeat(40);
+  assert.notEqual(wrongRevision, SOURCE_DEVELOPMENT.revision);
   const accessor = {...valid};
   let getterCalls = 0;
   Object.defineProperty(accessor, 'specifier', {
     get() { getterCalls++; throw new Error('Getter must not be invoked'); }, enumerable: true});
   for (const invalid of [null, [], Object.create(valid), accessor, {...valid, [Symbol('extra')]: true},
     {...valid, kind: PUBLISHED_PACKAGE.kind},
-    {...valid, revision: PUBLISHED_PACKAGE.revision}, {...valid, imagesRevision: PUBLISHED_PACKAGE.imagesRevision},
+    {...valid, revision: wrongRevision}, {...valid, imagesRevision: PUBLISHED_PACKAGE.imagesRevision},
     {...valid, package: 'lagrange-server'}, {...valid, specifier: 'file:///source/src/index.js'},
     {...valid, specifier: 'https://example.invalid/src/public-api.js'},
     {...valid, specifier: 'file:///source/src/public-api.js?fallback=true'}]) {
