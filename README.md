@@ -27,10 +27,11 @@ bootstrap, authentication and actual cluster acceptance are separate from the
 native transport/window proofs.
 
 The [local source-development launcher](examples/native-cluster/README.md)
-explicitly selects Lagrange `234f478e` with Images `dc4266c` and starts three
-processes on one declared physical host. Its implementation awaits exact-head
-live acceptance; no successful source cluster result is claimed yet. The
-automatic PR/main source gate and the separately invoked published-package
+explicitly selects Lagrange main snapshot `ab347e9` (manifest version `0.4.2`,
+resolved on 2026-11-28) with Images `dc4266c` and starts three processes on one
+declared physical host. This source selection awaits exact-head live acceptance;
+no successful source cluster result is claimed yet. The automatic PR/main
+source gate and the separately invoked published-package
 proof have distinct identities. The historical `lagrange-server@0.4.0` startup
 failure remains open in `llh`; see [the acceptance contract](docs/architecture/native-cluster-acceptance.md).
 

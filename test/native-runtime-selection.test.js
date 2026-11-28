@@ -10,7 +10,7 @@ import {admitRuntimeSelection, validateRuntimeSelection, PUBLISHED_PACKAGE,
   SOURCE_DEVELOPMENT} from '../examples/native-cluster/runtime-selection.js';
 
 const execute = promisify(execFile);
-const MANIFEST = {name: 'lagrange-server', version: '0.4.0', type: 'module',
+const MANIFEST = {name: 'lagrange-server', version: SOURCE_DEVELOPMENT.version, type: 'module',
   main: 'src/public-api.js', exports: {'.': './src/public-api.js'}};
 const ENTRY = 'throw new Error("Admission must not import this public entry");\n';
 
@@ -63,6 +63,13 @@ test('wrong actual revision and a nested directory cannot acquire source admissi
   }
 });
 
+test('source admission rejects the published package version at the correct source revision', async (t) => {
+  const f = await sourceFixture(t, {manifest: {...MANIFEST, version: PUBLISHED_PACKAGE.version}});
+  assert.notEqual(PUBLISHED_PACKAGE.version, SOURCE_DEVELOPMENT.version);
+  await assert.rejects(admitRuntimeSelection(f.options, {executeGit: f.executeGit}),
+    /must expose src\/public-api.js/);
+});
+
 test('both unstaged and staged source changes refuse even when the reported revision matches', async (t) => {
   for (const staged of [false, true]) {
     const f = await sourceFixture(t);
@@ -107,17 +114,20 @@ test('untracked or missing lock, wrong public export and a linked entry refuse i
 test('published admission preserves its own identity and cannot fall back to source after package failure', async (t) => {
   const f = await sourceFixture(t);
   const packageFile = join(f.root, 'package.json');
-  await writeFile(packageFile, JSON.stringify({...MANIFEST, gitHead: PUBLISHED_PACKAGE.revision}));
+  await writeFile(packageFile, JSON.stringify({...MANIFEST, version: PUBLISHED_PACKAGE.version,
+    gitHead: PUBLISHED_PACKAGE.revision}));
   let gitCalls = 0;
   const dependencies = {packageFile, executeGit() { gitCalls++; throw new Error('Source must not be inspected'); }};
   const selected = await admitRuntimeSelection({}, dependencies);
   assert.deepEqual(selected, {...PUBLISHED_PACKAGE,
     specifier: pathToFileURL(join(f.root, 'src/public-api.js')).href});
   assert.notEqual(selected.kind, SOURCE_DEVELOPMENT.kind);
+  assert.notEqual(selected.version, SOURCE_DEVELOPMENT.version);
   assert.notEqual(selected.revision, SOURCE_DEVELOPMENT.revision);
   assert.notEqual(selected.imagesRevision, SOURCE_DEVELOPMENT.imagesRevision);
   for (const field of ['name', 'version', 'gitHead']) {
-    await writeFile(packageFile, JSON.stringify({...MANIFEST, gitHead: PUBLISHED_PACKAGE.revision, [field]: 'wrong'}));
+    await writeFile(packageFile, JSON.stringify({...MANIFEST, version: PUBLISHED_PACKAGE.version,
+      gitHead: PUBLISHED_PACKAGE.revision, [field]: 'wrong'}));
     await assert.rejects(admitRuntimeSelection({}, dependencies), /locked.*Lagrange package/);
   }
   await rm(packageFile);
@@ -136,6 +146,7 @@ test('serialized runtime descriptors cannot substitute identity, mode or a priva
     get() { getterCalls++; throw new Error('Getter must not be invoked'); }, enumerable: true});
   for (const invalid of [null, [], Object.create(valid), accessor, {...valid, [Symbol('extra')]: true},
     {...valid, kind: PUBLISHED_PACKAGE.kind},
+    {...valid, version: PUBLISHED_PACKAGE.version},
     {...valid, revision: PUBLISHED_PACKAGE.revision}, {...valid, imagesRevision: PUBLISHED_PACKAGE.imagesRevision},
     {...valid, package: 'lagrange-server'}, {...valid, specifier: 'file:///source/src/index.js'},
     {...valid, specifier: 'https://example.invalid/src/public-api.js'},

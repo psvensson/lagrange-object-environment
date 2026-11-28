@@ -44,14 +44,15 @@ SSO remain outside this viewer. See
 For a fresh local development graph, use the
 [source-development launcher](../../examples/native-cluster/README.md) with
 explicit `--lagrange-checkout` and `--host-id`. It selects Lagrange
-`234f478e034b738328c63900e74b6bea3ee63bb8` and Images
+`ab347e9625a64ed24b7700b8f958bd54d8e3db06` (main as resolved on 2026-11-28,
+manifest version `0.4.2`) and Images
 `dc4266c664002e69ad5ca0b67dd0b7f094c8d8e7`, starts three separate processes on
 one actual host, observes the seed's public readiness and attempts graph
 installation once. Configured replication count three does not establish an
 achieved three-host voter or resilience result.
 
-This source path is implemented and awaits exact-head live acceptance. Its
-automatic PR/main gate requires the actual mapped CLI window, GTK navigation,
+This exact source selection awaits live acceptance. Its automatic PR/main gate
+requires the actual mapped CLI window, GTK navigation,
 denial, revocation, independent unchanged history and complete cleanup within
 the retained 160-second startup and 500-second acceptance bounds. The viewer's
 controlled-service proofs do not establish that live result.
