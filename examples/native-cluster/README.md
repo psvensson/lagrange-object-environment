@@ -1,7 +1,8 @@
 # Isolated native viewer deployment
 
-**Current status:** the source-development path is implemented and awaits
-exact-head live acceptance. No successful source cluster run is claimed yet.
+**Current status:** the source-development trial selects Lagrange main as
+resolved on 2026-11-28 and awaits exact-head live acceptance. No successful
+source cluster run is claimed yet.
 The separately retained published-package proof remains blocked before image
 creation by the historical Lagrange startup defect.
 
@@ -17,13 +18,15 @@ The launcher admits one explicit identity pair, defined by
 
 | Choice | Lagrange identity | Images checkout |
 | --- | --- | --- |
-| `--lagrange-checkout PATH --host-id NAME` | Source commit `234f478e034b738328c63900e74b6bea3ee63bb8` | `dc4266c664002e69ad5ca0b67dd0b7f094c8d8e7` |
+| `--lagrange-checkout PATH --host-id NAME` | Source commit `ab347e9625a64ed24b7700b8f958bd54d8e3db06`, manifest version `0.4.2` | `dc4266c664002e69ad5ca0b67dd0b7f094c8d8e7` |
 | No source option | Locked `lagrange-server@0.4.0`, package gitHead `07206ba1c8bb396f4eb097a753915bb34580d824` | `caf72f26d6a28a6901aea876a49d22311e29cf21` |
 
 Source selection never resolves the installed package. A missing or invalid
 selection fails; it does not switch to the other choice or to mock storage.
-Both Lagrange manifests say `0.4.0`, so the receipt's tagged selection and full
-revision distinguish them.
+Manifest admission checks the selected identity's version: source `0.4.2` or
+published package `0.4.0`. The receipt's tagged selection and full revision also
+distinguish this main snapshot from the previously tested `0.4.2` release.
+This source trial retains the published-package pin and its separate proof.
 
 Source admission requires the repository root, exact HEAD, a clean index and
 working tree, no added runtime source files, the tracked lockfile, and the

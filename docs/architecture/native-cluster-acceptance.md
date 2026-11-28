@@ -1,8 +1,9 @@
 # Native cluster acceptance
 
-**Current status:** the explicit source-development path is implemented and
-awaits exact-head live acceptance. No successful source cluster navigation,
-authorization or unchanged-history result is claimed yet. The historical
+**Current status:** the source-development trial selects main snapshot
+`ab347e9`, resolved on 2026-11-28, and awaits exact-head live acceptance.
+No successful source cluster navigation, authorization or unchanged-history
+result is claimed yet. The historical
 published-package lane remains blocked before image creation; Bead `llh`
 remains open. Controlled-service and mechanical process proofs do not substitute
 for either live result.
@@ -11,7 +12,7 @@ for either live result.
 
 | Lane | Trigger | Exact runtime identity | Images |
 | --- | --- | --- | --- |
-| `Native source development / native-source-development` | Pull requests and pushes to `main` | Source `234f478e034b738328c63900e74b6bea3ee63bb8` | `dc4266c664002e69ad5ca0b67dd0b7f094c8d8e7` |
+| `Native source development / native-source-development` | Pull requests and pushes to `main` | Source `ab347e9625a64ed24b7700b8f958bd54d8e3db06`, manifest version `0.4.2` | `dc4266c664002e69ad5ca0b67dd0b7f094c8d8e7` |
 | `Published package acceptance (manual) / published-native-cluster` | Explicit `workflow_dispatch` | Locked `lagrange-server@0.4.0`, gitHead `07206ba1c8bb396f4eb097a753915bb34580d824` | `caf72f26d6a28a6901aea876a49d22311e29cf21` |
 
 This is a deliberate development-acceptance contract. The manual package proof
@@ -22,8 +23,9 @@ test is not evidence that the live journey ran.
 
 The current native portable artifact and automatic JS/source-development
 consumers agree on Images `dc4266c`. The manual historical package lane keeps
-its own `caf72f2` identity. Runtime admission records distinguish the two even
-though both Lagrange manifests have package version `0.4.0`.
+its own `caf72f2` identity. Manifest admission checks each selected version
+independently: source `0.4.2` and published package `0.4.0`. Tagged runtime
+selection, exact revision and Images pairing remain required in both lanes.
 
 ## Source admission and topology
 
@@ -35,12 +37,13 @@ ignored source additions, the tracked lock and the declared public entry.
 Installed root dependencies are permitted. Source mode does not resolve the
 published package; failures do not select an alternative backend.
 
-The new lane uses source `234f478e` because exact cold GCP formation evidence
-exists for it in the upstream
-[operation-integrity record](https://github.com/psvensson/lagrange/blob/09e4e64ea12e073eb369c48bd3e017615648f26c/solve/epics/operation-integrity-and-reliable-formation.md).
-That evidence is upstream context, not an Object Environment acceptance result;
-the recorded retained-restart failure is not covered by this cold,
-fresh-directory proof.
+The current trial fixes the main revision resolved on 2026-11-28 to the exact
+source identity above. Its manifest still says `0.4.2`, so the version alone
+does not distinguish it from the previously tested release `657b7e3`. The
+public embedding, host/formation configuration and readiness contract remain
+compatible with the existing harness. Upstream changes do not establish a live
+Object Environment result; this fresh-directory proof still requires its own
+exact-source execution and does not cover retained restart.
 
 The local declaration is one actual host, three processes and configured
 replication count three. Every node uses the same explicit host identity.
@@ -62,7 +65,7 @@ Workers start sequentially. The cohort requires exactly the expected three
 active node IDs and retains all worker liveness checks. It then reads only the
 seed's public `/readyz`, because that node's application handle installs and
 serves the graph. The
-[pinned public probe contract](https://github.com/psvensson/lagrange/blob/234f478e034b738328c63900e74b6bea3ee63bb8/docs/bootstrap-readiness-probes.md)
+[pinned public probe contract](https://github.com/psvensson/lagrange/blob/ab347e9625a64ed24b7700b8f958bd54d8e3db06/docs/bootstrap-readiness-probes.md)
 owns readiness. OE does not infer it from membership, leases or private
 publication rows.
 
@@ -145,16 +148,24 @@ does not change the startup decision or add a polling history to the phase list.
 Completion requires the exact-head automatic source job, ordinary required
 Node/browser/native checks and independent actual-diff review. Passing
 mechanical tests or reaching a native fixture window does not establish a
-working source cluster. No source acceptance receipt has been recorded for this
-implementation yet.
+working source cluster. No successful source acceptance receipt has been
+recorded for this implementation yet.
 
 ### First source attempt: 2026-11-23
 
 [PR #111](https://github.com/psvensson/lagrange-object-environment/pull/111)
 head `03109abdc2171a74144dda17e20b4b3cec207598`, source tree
-`2e18e340c54b3a3be7085e14e6ede505e6cec4d7`, was tested with the two exact
-source identities above. [Ordinary CI 45210538312](https://github.com/psvensson/lagrange-object-environment/actions/runs/45210538312)
+`2e18e340c54b3a3be7085e14e6ede505e6cec4d7`, was tested with Lagrange source
+`234f478e034b738328c63900e74b6bea3ee63bb8` and Images
+`dc4266c664002e69ad5ca0b67dd0b7f094c8d8e7`.
+[Ordinary CI 45210538312](https://github.com/psvensson/lagrange-object-environment/actions/runs/45210538312)
 passed 636 Node tests, 18 browser tests, and the full configured native suite.
+
+That original source selection was informed by cold GCP formation evidence in
+the upstream
+[operation-integrity record](https://github.com/psvensson/lagrange/blob/09e4e64ea12e073eb369c48bd3e017615648f26c/solve/epics/operation-integrity-and-reliable-formation.md).
+It was upstream context, not an Object Environment acceptance result; its
+recorded retained-restart failure was outside this fresh-directory proof.
 
 [Source run 45210538192](https://github.com/psvensson/lagrange-object-environment/actions/runs/45210538192)
 completed all three worker start commands by 19.101 seconds, then remained in
@@ -170,6 +181,23 @@ it cannot establish whether exact membership ever completed or `/readyz` was
 called. The timeout alone does not classify the cause as a Lagrange serving
 defect. No deadline, replication setting, or acceptance requirement was relaxed
 in response.
+
+### Released-source comparison: 2026-11-26
+
+[PR #112](https://github.com/psvensson/lagrange-object-environment/pull/112)
+head `94640bff6167bb310331321661ce2be49bda4798` tested released source
+`657b7e396aabf75501e6f2156638514d85f24f6c`, manifest version `0.4.2`, with
+Images `dc4266c664002e69ad5ca0b67dd0b7f094c8d8e7` through the same source
+harness. [Source run 45773416437](https://github.com/psvensson/lagrange-object-environment/actions/runs/45773416437)
+observed the three expected active members and made 577 readiness attempts.
+The last seed result was `ready: false` at 159897 ms; the original 160-second
+startup deadline ended the trial before graph installation or native launch.
+The retained receipt and artifact digest are recorded in that PR. This failed
+release trial does not determine the current `ab347e9` trial's outcome.
+
+PR #112 also records its separate installed `0.4.2` package failure at
+`runtime-start`. This source-only trial retains the historical `0.4.0` package
+selection in the table above; it does not repeat or relabel the package trial.
 
 ## Preserved published-package method
 

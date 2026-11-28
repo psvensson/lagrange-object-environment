@@ -269,10 +269,11 @@ for (const changes of [{cliStopStatus: {code: 1, signal: null}},
   });
 }
 
-test('source and package provenance cannot be interchanged even at version 0.4.0', {timeout: 5000}, async (t) => {
+test('coherent published-package provenance cannot satisfy source acceptance', {timeout: 5000}, async (t) => {
   const packageSelection = {...PUBLISHED_PACKAGE, specifier: 'file:///installed/lagrange-server/src/public-api.js'};
   const f = await fixture(t, {provenance: {...provenance, runtimeSelection: packageSelection,
-    lagrangeRevision: packageSelection.revision, expectedImagesRevision: packageSelection.imagesRevision}});
+    lagrangeVersion: packageSelection.version, lagrangeRevision: packageSelection.revision,
+    expectedImagesRevision: packageSelection.imagesRevision}});
   await assert.rejects(f.start(), /provenance/);
   assert.equal((await f.owner.closed).code, 1); assert.equal(f.state.cliStarts, 0);
 });
